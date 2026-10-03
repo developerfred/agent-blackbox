@@ -33,10 +33,85 @@ const TOKEN = /[A-Za-z0-9_\-+\/=.:]{8,}/g;
 // KEY=value lines in .env-style content
 const ENV_SECRET_LINE = /^\s*(?:export\s+)?([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASS|PRIVATE|MNEMONIC|SEED|CREDENTIAL|AUTH)[A-Z0-9_]*)\s*[=:]\s*["']?([^\s"'#]{8,})/gim;
 
-const NET_TOOL = /(?:^|[\s;&|(`$])(curl|wget|nc|ncat|netcat|socat|telnet|ftp|sftp|scp|rsync|ssh|http|https|xh|aria2c|nslookup|dig)(?=\s|$)/;
-const NET_CODE = /\b(python3?|node|ruby|perl|deno|bun|php)\b[^|;]*(requests\.|urllib|http\.client|fetch\(|net\/http|socket|axios|XMLHttpRequest|Net::HTTP|https?\.request)/;
+const NET_TOOL = /(?:^|[\s;&|(`$])(curl|curl\.exe|wget|wget2|nc|ncat|netcat|socat|telnet|ftp|tftp|sftp|scp|rsync|ssh|http|https|xh|aria2c|nslookup|dig|host|lftp|websocat|grpcurl)(?=\s|$)/;
+// Network code inside a command: interpreters with inline networking, Node
+// built-ins, PowerShell web cmdlets, raw TLS.
+const NET_CODE = new RegExp([
+  String.raw`\b(?:python3?|node|ruby|perl|deno|bun|php)\b[^|;]*(?:requests\.|urllib|http\.client|httpx|aiohttp|fetch\(|net\/http|socket|axios|XMLHttpRequest|Net::HTTP|https?\.(?:request|get)|LWP|IO::Socket|file_get_contents\(\s*['"]https?:)`,
+  String.raw`require\(\s*['"](?:node:)?(?:https?|http2|net|tls|dgram)['"]\s*\)`,
+  String.raw`\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer)\b`, String.raw`Net\.WebClient`, String.raw`\bopenssl\s+s_client\b`,
+].join('|'), 'i');
 const DEV_TCP = /\/dev\/(tcp|udp)\//;
-const GIT_PUSH = /\bgit\s+push\b/;
+// Commands that publish data to a service. They count as egress even toward
+// allowlisted hosts (a secret pasted into a public gist is still a leak): the
+// allowlist is for downloads, not uploads.
+const PUBLISH = [
+  [/\bgit\s+push\b/, 'git push'],
+  [/\bgh\s+gist\s+(?:create|new|edit)\b/, 'gh gist (publishes content)'],
+  [/\bgh\s+(?:issue|pr|discussion)\s+(?:create|new|comment|edit|review)\b/, 'gh posts to an issue or pull request'],
+  [/\bgh\s+release\s+(?:create|upload|edit)\b/, 'gh release upload'],
+  [/\bgh\s+api\b.*\s(?:-f|-F|--field|--raw-field|--input|-X\s*(?:POST|PUT|PATCH|DELETE)|--method\s+(?:POST|PUT|PATCH|DELETE))\b/i, 'gh api write request'],
+  [/\b(?:npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+push\b/, 'publishes a package or image'],
+  [/\baws\s+s3\s+(?:cp|sync|mv)\b|\bgsutil\s+(?:cp|rsync|mv)\b|\brclone\s+(?:copy|sync|move|copyto)\b|\baz\s+storage\s+blob\s+upload/, 'cloud storage upload'],
+  [/(?:^|[\s;&|(])(?:sendmail|mailx?|mutt|swaks|msmtp)(?=\s|$)/, 'sends email'],
+];
+// Commands that reach a host named in their arguments (downloads that can
+// still carry data out in the URL): git remotes, package installs from URLs,
+// browsers opened on a URL.
+const FETCH_CMD = /\bgit\s+(?:clone|fetch|pull|ls-remote|submodule|remote\s+(?:add|set-url))\b|\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add)\b|\bpip3?\s+(?:install|download)\b|\buv\s+(?:pip\s+install|add)\b|\bcargo\s+install\b|\bgo\s+(?:get|install)\b|\bgem\s+install\b|\bcomposer\s+require\b|(?:^|[\s;&|(])(?:open|xdg-open|start|explorer)(?=\s)|\bgh\s+api\b/;
+// Code the agent can run without a network tool in sight.
+const HEREDOC_CODE = /\b(?:python3?|node|ruby|perl|php|deno|bun|bash|sh|zsh)\s+(?:-\s+|-s\s+)?(?:[^\s|;&<>]+\s+)*<<-?\s*['"]?\w+/;
+const INLINE_CODE = /\b(?:python3?|node|ruby|perl|php|deno|bun|pwsh|powershell)\s+(?:-[\w-]+\s+)*(?:-c|-e|--eval|-r|-Command|eval)\b|\b(?:bash|sh|zsh|dash|ksh)\s+(?:-\w+\s+)*-c\b|(?:^|[\s;&|(])eval(?=\s)|\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b|\|\s*(?:python3?|node|perl|ruby)\b|\bsource\s+<\(|<\(\s*curl/;
+const SCRIPT_RUNNER = /\b(?:npm|pnpm|yarn|bun)\s+(?:run|test|start|exec|x)\b|\bnpx\b|\bbunx\b|(?:^|[\s;&|(])make(?=\s|$)|\bpytest\b|\bcargo\s+(?:run|test)\b|\bgo\s+(?:run|test)\b|(?:^|[\s;&|(])just(?=\s|$)|\bgradlew?\b|\bmvn\b|\btox\b|\bnox\b|\buv\s+run\b|\bpoetry\s+run\b/;
+const INTERP_FILE = /(?:^|[;&|(]\s*|&&\s*|\|\|\s*|\s)(?:bash|sh|zsh|dash|ksh|fish|source|(?<=^|[;&|(]\s*)\.|python3?|node|deno(?:\s+run)?|bun(?:\s+run)?|ruby|perl|php|tsx|ts-node|osascript|pwsh|powershell)\s+(?:-[\w-]+\s+)*([^\s;&|<>]+)/g;
+const DIRECT_EXEC = /(?:^|[;&|(]\s*)((?:\.{1,2}|~)?\/[^\s;&|<>]+)/g;
+const NET_SOURCE = /\b(?:fetch\(|XMLHttpRequest|axios|requests\.|urllib|http\.client|httpx|aiohttp|socket\.|net\/http|Net::HTTP|https?\.request|require\(\s*['"](?:node:)?(?:https?|net|dgram|tls)['"]|from\s+['"]node:(?:https?|net|dgram|tls)['"]|curl\s|wget\s|Invoke-WebRequest|WebSocket\(|\/dev\/tcp\/)/;
+
+// Source code that can reach the network or the shell indirectly.
+const DYNAMIC_SOURCE = /\b(?:child_process|execSync|spawnSync|exec\(|spawn\(|subprocess|os\.system|os\.popen|Runtime\.getRuntime|eval\(|new Function\(|ProcessBuilder|system\(|`[^`]*\$\()/;
+
+// A copy of a shell command with the usual obfuscations undone, so c''url,
+// "curl", \curl, cu$'r'l, $'\x63url' and curl${IFS}x all read as curl.
+function normalizeCmd(cmd) {
+  let s = String(cmd || '');
+  s = s.replace(/\\\n/g, '');
+  s = s.replace(/\$'((?:[^'\\]|\\.)*)'/g, (m, body) => body
+    .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\([0-7]{1,3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/\\(.)/g, '$1'));
+  s = s.replace(/\$\{IFS\}|\$IFS\b/g, ' ');
+  s = s.replace(/["']/g, '');
+  s = s.replace(/\\(?=[A-Za-z0-9._\/-])/g, '');
+  s = s.replace(/\$\{?[A-Za-z_][A-Za-z0-9_]*:?-?\}?(?=[A-Za-z])/g, ''); // c${x}url → curl (empty vars)
+  return s;
+}
+
+function stripHeredocs(cmd) {
+  return String(cmd || '').replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, (m) => m.split('\n')[0]);
+}
+
+// The command words only: heredoc bodies and quoted strings removed, so code
+// or text inside them is not read as commands, files or redirections.
+function shellSkeleton(cmd) {
+  let s = String(cmd || '');
+  s = s.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, (m) => m.split('\n')[0]);
+  s = s.replace(/'[^'\n]*'|"(?:[^"\\\n]|\\.)*"/g, '""');
+  return s;
+}
+
+// Glob tokens in a command (e.g. ~/.bl*box, .b?ackbox/*) as regexes.
+function globsIn(cmd) {
+  const out = [];
+  for (const tok of String(cmd).split(/[\s;&|()<>]+/)) {
+    if (!/[*?[]/.test(tok)) continue;
+    for (const seg of tok.split('/')) {
+      if (!/[*?[]/.test(seg) || seg.replace(/[*?]/g, '').length < 2) continue;
+      try { out.push(new RegExp('^' + seg.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$')); } catch { /* skip */ }
+    }
+  }
+  return out;
+}
 // Commands whose output is credentials: environment dumps and CLI token getters.
 // Debug output fed back to the model was the main credential leak channel in
 // "How Your Credentials Are Leaked by LLM Agent Skills" (arXiv:2604.03070).
@@ -60,6 +135,17 @@ function hostsIn(text) {
   const scp = /(?:^|\s)[\w.-]+@([\w.-]+):/g;
   while ((m = scp.exec(text))) hosts.push(m[1].toLowerCase());
   return hosts;
+}
+
+// Files written or downloaded by a shell command (redirects, tee, curl -o).
+function writtenBy(cmd) {
+  const out = [];
+  const n = normalizeCmd(shellSkeleton(cmd));
+  for (const re of [/(?:^|[^<>&\d])>{1,2}\s*([^\s;&|<>]+)/g, /\btee\s+(?:-a\s+)?([^\s;&|<>]+)/g, /\b(?:curl|wget)\b[^;&|]*?\s-(?:o|O|-output|-output-document)[\s=]+([^\s;&|<>]+)/g, /\b(?:cp|mv|install)\s+(?:-\w+\s+)*[^\s;&|]+\s+([^\s;&|<>]+)/g, /\bchmod\s+\+?[0-7]*x?\s+([^\s;&|<>]+)/g]) {
+    let m;
+    while ((m = re.exec(n))) if (!/^\/dev\/|^&/.test(m[1])) out.push(m[1]);
+  }
+  return out;
 }
 
 const allowed = (host, allow) => allow.some((a) => host === a || host.endsWith('.' + a));
@@ -92,8 +178,10 @@ function inputText(toolInput) {
 }
 
 class Policy {
-  constructor(cfg, state, salt) {
+  // protect: extra paths (the real data folder) the agent may never touch
+  constructor(cfg, state, salt, { protect = [] } = {}) {
     this.cfg = cfg;
+    this.protect = protect.filter(Boolean);
     this.state = state; // { sessions: { id: { private, untrusted, secrets: [] } } }
     this.salt = salt;
   }
@@ -101,6 +189,8 @@ class Policy {
   session(id) {
     const s = (this.state.sessions[id] ||= { private: null, untrusted: null, secrets: [] });
     s.secrets ||= [];
+    s.written ||= [];   // files the agent wrote or downloaded this session
+    s.netFiles ||= [];  // ...of which contain network code
     return s;
   }
 
@@ -194,15 +284,27 @@ class Policy {
     const allow = this.cfg.allowHosts;
     const sessIntent = (sess && sess.intentHosts) || [];
     if (tool === 'Bash' || tool === 'PowerShell') {
-      const cmd = (input && input.command) || '';
-      const net = NET_TOOL.test(cmd) || NET_CODE.test(cmd) || DEV_TCP.test(cmd);
-      if (GIT_PUSH.test(cmd)) return { yes: true, why: 'git push' };
-      if (!net) return { yes: false };
-      const hosts = hostsIn(cmd);
+      const full = (input && input.command) || '';
+      // Heredoc text written to a file is data, not a command, unless the
+      // heredoc is fed to an interpreter (bash <<EOF … EOF runs it).
+      const raw = HEREDOC_CODE.test(full) ? full : stripHeredocs(full);
+      const cmd = normalizeCmd(raw);
+      const both = (re) => re.test(raw) || re.test(cmd);
+      const hosts = [...new Set([...hostsIn(raw), ...hostsIn(cmd)])];
       const external = hosts.filter((h) => !allowed(h, allow));
-      if (hosts.length && !external.length) return { yes: false, why: 'allowlisted hosts only' };
       const intended = external.length > 0 && external.every((h) => allowed(h, sessIntent));
-      return { yes: true, intended, why: external.length ? `network call to ${external.join(', ')}` : 'network call to an unparsed destination' };
+      for (const [re, why] of PUBLISH) if (both(re)) return { yes: true, intended, why };
+      const net = both(NET_TOOL) || both(NET_CODE) || both(DEV_TCP);
+      // a known downloader with a URL in it, or an unresolvable command word next to a URL ($C https://…)
+      const fetchy = hosts.length && (both(FETCH_CMD) || /(?:^|[;&|(]\s*)(?:\$\{?\w+\}?|\$\(|`)/.test(raw.trim()));
+      if (net || fetchy) {
+        if (hosts.length && !external.length) return { yes: false, why: 'allowlisted hosts only' };
+        return { yes: true, intended, why: external.length ? `network call to ${external.join(', ')}` : 'network call to an unparsed destination' };
+      }
+      // No network tool in sight, but the command runs code that could do anything.
+      const run = this.runsCode(full, cmd, sess);
+      if (run) return { yes: true, opaque: !run.net, why: run.why };
+      return { yes: false };
     }
     if (tool === 'WebFetch') {
       let u;
@@ -221,6 +323,45 @@ class Policy {
     return { yes: false };
   }
 
+  // Does this command run code whose behavior the policy cannot see? Scripts
+  // the agent wrote or downloaded this session, inline interpreter code, and
+  // (once the agent has written files) test runners and package scripts.
+  // Writing a script first must not be a way around the network rules.
+  runsCode(raw, cmd, sess) {
+    const written = (sess && sess.written) || [];
+    const netFiles = (sess && sess.netFiles) || [];
+    const base = (f) => f.replace(/^~\//, '').split('/').filter(Boolean).pop() || f;
+    const match = (arg, list) => list.find((w) => w === arg || base(w) === base(arg) || w.endsWith('/' + arg.replace(/^\.\//, '')));
+    const targets = [];
+    const sk = normalizeCmd(shellSkeleton(raw));
+    for (const re of [INTERP_FILE, DIRECT_EXEC]) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(sk))) if (!/^-|^""$/.test(m[1])) targets.push(m[1]);
+    }
+    for (const t of targets) {
+      const hit = match(t, written);
+      if (hit) return { net: !!match(t, netFiles), why: match(t, netFiles) ? `runs ${t}, which the agent wrote this session with network code` : `runs ${t}, which the agent wrote or downloaded this session` };
+    }
+    if (INLINE_CODE.test(sk) || INLINE_CODE.test(normalizeCmd(sk))) return { net: false, why: 'runs inline or piped code' };
+    if (HEREDOC_CODE.test(raw)) return { net: false, why: 'runs a script passed inline (heredoc)' };
+    // git runs hooks the agent may have planted in .git/hooks
+    if (written.some((w) => /(^|\/)\.git\/hooks\/|(^|\/)\.husky\//.test(w)) && /\bgit\s+(?:commit|merge|rebase|checkout|switch|pull|push|am)\b/.test(cmd)) return { net: false, why: 'git runs a hook the agent wrote this session' };
+    // Test runners and package scripts run whatever the agent edited; they
+    // count once it wrote code that does networking or runs commands itself.
+    if (netFiles.length && (SCRIPT_RUNNER.test(raw) || SCRIPT_RUNNER.test(cmd))) return { net: false, why: `runs project scripts after the agent wrote ${base(netFiles[netFiles.length - 1])}, which has network or shell code` };
+    return null;
+  }
+
+  // Is this target the evidence store? Normalized, with globs expanded.
+  touchesEvidence(text) {
+    const n = normalizeCmd(text);
+    const names = ['.blackbox', ...this.protect.map((p) => p.split('/').filter(Boolean).pop())];
+    if (/\.blackbox(\/|\b)/.test(text) || /\.blackbox(\/|\b)/.test(n)) return true;
+    if (this.protect.some((p) => text.includes(p) || n.includes(p))) return true;
+    return globsIn(n).some((re) => names.some((name) => re.test(name)));
+  }
+
   // PreToolUse: decide. Returns null (no opinion) or { decision, rule, reason }.
   preToolUse(ev) {
     const tool = ev.tool_name;
@@ -229,11 +370,11 @@ class Policy {
     const sess = this.session(ev.session_id);
 
     // 1. Self-protection: the agent must not read or alter its own evidence.
-    if (/\.blackbox(\/|\b)/.test(text)) {
+    if (this.touchesEvidence(text)) {
       sess.denied = { rule: 'self-protection', at: new Date().toISOString() };
       return { decision: 'deny', rule: 'self-protection', reason: 'Access to the agent-blackbox evidence store (~/.blackbox) is blocked for the agent.' };
     }
-    if (/(^|\/)\.claude\/settings(\.local)?\.json/.test(text) && /^(Edit|Write|MultiEdit|Bash|PowerShell|NotebookEdit)$/.test(tool)) {
+    if ((/(^|\/)\.claude\/settings(\.local)?\.json/.test(text) || /(^|\/)\.claude\/settings(\.local)?\.json/.test(normalizeCmd(text)) || /managed-settings\.json|\.claude\/plugins\//.test(normalizeCmd(text))) && /^(Edit|Write|MultiEdit|Bash|PowerShell|NotebookEdit)$/.test(tool)) {
       return { decision: 'ask', rule: 'hook-tamper', reason: 'The agent wants to change Claude Code settings, where the agent-blackbox hooks live.' };
     }
 
@@ -250,10 +391,16 @@ class Policy {
 
     // 2. A secret value seen earlier in this session is about to leave.
     //    Denied even toward a host the user named: secrets are never sent by the agent.
+    if (secretOut && out.opaque) {
+      return { decision: 'ask', rule: 'secret-to-code', reason: `A secret this session read earlier (fingerprint ${secretOut}) is passed to code the policy cannot inspect (${out.why}).`, secret: secretOut };
+    }
     if (secretOut && (out.yes || tool === 'WebSearch' || tool === 'WebFetch' || this.mcpServer(tool))) {
       return deny('secret-egress', `A secret this session read earlier (fingerprint ${secretOut}) appears in an outbound ${tool} call (${out.why || tool}).`, { secret: secretOut });
     }
     // 3. One command that both reads a sensitive file and sends data out.
+    if (out.yes && readsSensitive && out.opaque) {
+      return { decision: 'ask', rule: 'sensitive-to-code', reason: `This command reads a sensitive file and runs code the policy cannot inspect (${out.why}).` };
+    }
     if (out.yes && readsSensitive) {
       return deny('sensitive-egress', `This command reads a sensitive file and sends data out (${out.why}).`);
     }
@@ -264,15 +411,15 @@ class Policy {
     if (out.yes && sess.private && sess.untrusted) {
       const mode = this.cfg.mode;
       const reason = `Lethal trifecta: this session read private data (${sess.private.why}) and untrusted content (${sess.untrusted.why}), and now wants to send data out (${out.why}).`;
-      if (mode === 'monitor') return { decision: 'alert', rule: 'lethal-trifecta', reason };
-      if (mode === 'deny') return deny('lethal-trifecta', reason);
+      if (mode === 'monitor' || (out.opaque && this.cfg.opaqueCode === 'alert')) return { decision: 'alert', rule: 'lethal-trifecta', reason };
+      if (mode === 'deny' && !out.opaque) return deny('lethal-trifecta', reason);
       return { decision: 'ask', rule: 'lethal-trifecta', reason };
     }
     // 5. After a denial, any outbound call needs the human.
     if (out.yes && sess.denied && this.cfg.mode !== 'monitor') {
       return { decision: 'ask', rule: 'post-denial', reason: `An earlier call in this session was blocked (${sess.denied.rule}); this one sends data out (${out.why}).` };
     }
-    if (out.yes) return { decision: 'note', rule: 'egress', reason: out.why };
+    if (out.yes) return { decision: 'note', rule: out.opaque ? 'runs-code' : 'egress', reason: out.why };
     return null;
   }
 
@@ -312,6 +459,15 @@ class Policy {
       sess.private = { why: priv, at: new Date().toISOString(), tool_use_id: ev.tool_use_id };
       taints.push({ flag: 'private', why: priv });
     }
+    // remember what the agent wrote, so running it later is not a blind spot
+    const wrote = [];
+    if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) wrote.push(input.file_path || input.notebook_path);
+    if (tool === 'Bash' || tool === 'PowerShell') wrote.push(...writtenBy(input.command || ''));
+    const body = [input.content, input.new_string, input.new_source, ...((input.edits || []).map((e) => e.new_string)), tool === 'Bash' ? input.command : null].filter((x) => typeof x === 'string').join('\n');
+    for (const f of wrote.filter(Boolean)) {
+      if (!sess.written.includes(f)) sess.written = [...sess.written, f].slice(-500);
+      if ((NET_SOURCE.test(body) || DYNAMIC_SOURCE.test(body) || /\b(?:curl|wget)\b[^;&|]*\s-(?:o|O)\b/.test(input.command || '')) && !sess.netFiles.includes(f)) sess.netFiles = [...sess.netFiles, f].slice(-500);
+    }
     if (secrets.length) {
       const set = new Set(sess.secrets);
       for (const s of secrets) set.add(this.mac(s));
@@ -336,4 +492,4 @@ function redact(text) {
   return out;
 }
 
-module.exports = { Policy, inputText, textOf, stringsOf, hostsIn, redact, AGENT_DENY_MESSAGE };
+module.exports = { Policy, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };

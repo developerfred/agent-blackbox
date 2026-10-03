@@ -206,6 +206,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox purge [--days N | --session ID]
                               crypto-erase payloads (destroy session keys); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
+  blackbox eval [--all] [--json] [--mode deny]
+                              run the policy against the evasion corpus (catch rate, false alarms, gaps)
   blackbox ui                 open the local timeline page
   blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir]
                               audit past Claude Code sessions offline (no install, nothing uploaded)
@@ -309,6 +311,23 @@ async function main() {
       const r = await call('GET', `/api/payload?seq=${seq}`);
       if (r.status !== 200) throw new Error((r.body && r.body.error) || `failed (${r.status})`);
       console.log(JSON.stringify(r.body, null, 2));
+      return;
+    }
+    case 'eval': {
+      // the policy against the evasion corpus: catch rate, false alarms, known gaps
+      const { runAll } = require('../eval/run');
+      const r = runAll(opt('--mode') || 'ask');
+      if (flag('--json')) { console.log(JSON.stringify(r, null, 2)); return; }
+      console.log(bold('agent-blackbox policy evaluation') + dim(` · ${r.results.length} cases · mode ${opt('--mode') || 'ask'}`));
+      console.log(`  attacks caught   ${r.caught === r.attacks ? green(`${r.caught}/${r.attacks}`) : red(`${r.caught}/${r.attacks}`)}`);
+      console.log(`  false alarms     ${r.falseAlarms ? red(`${r.falseAlarms}/${r.benign}`) : green(`${r.falseAlarms}/${r.benign}`)}`);
+      console.log(`  known gaps open  ${yellow(`${r.gapsOpen}/${r.gaps}`)}`);
+      for (const x of r.results) {
+        const mark = x.gap ? yellow('gap ') : x.pass ? green('ok  ') : red('FAIL');
+        if (flag('--all') || !x.pass || x.gap) console.log(`  ${mark} ${x.id.padEnd(28)} ${dim(`${x.decision}${x.rule ? ' · ' + x.rule : ''}`)}${x.gap ? '\n         ' + dim(x.gap) : ''}`);
+      }
+      console.log(dim('\nThese are known, static attacks. An adaptive attacker who studies the policy will find others;\nsee eval/corpus.js to add one, and SECURITY.md to report one.'));
+      process.exitCode = r.caught === r.attacks && !r.falseAlarms ? 0 : 1;
       return;
     }
     case 'ui': {
