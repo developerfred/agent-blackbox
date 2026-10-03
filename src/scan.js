@@ -122,7 +122,9 @@ function humanPrompt(content) {
   return t || null;
 }
 
-function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null } = {}) {
+function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null, mcpAudits = null } = {}) {
+  const { parseToolName, configFor } = require('./mcp');
+  const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
   const policy = new Policy(cfg, { sessions: {} }, crypto.randomBytes(32));
   const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
 
@@ -185,6 +187,14 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           const tool_input = b.input && typeof b.input === 'object' ? b.input : {};
           t.toolCalls++; s.tools++; proj.toolCalls++;
           toolCounts.set(b.name, (toolCounts.get(b.name) || 0) + 1);
+          const mp = parseToolName(b.name);
+          if (mp) {
+            const r = mcpUse.get(mp.server) || { plugin: mp.plugin, calls: 0, sessions: new Set(), tools: new Map(), outbound: 0, errors: 0, first: null, last: null };
+            r.calls++; r.sessions.add(session_id); bump(r.tools, mp.tool);
+            if (mp.outbound) r.outbound++;
+            if (e.timestamp) { if (!r.first || e.timestamp < r.first) r.first = e.timestamp; if (!r.last || e.timestamp > r.last) r.last = e.timestamp; }
+            mcpUse.set(mp.server, r);
+          }
           if (b.name === 'Skill') useSkill(tool_input.skill || tool_input.name || tool_input.command || '', 'model', session_id);
           const cat = categoryOf(b.name);
           bump(catCounts, cat);
@@ -238,7 +248,11 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           if (!call) continue;
           pending.delete(b.tool_use_id);
           // A failed or refused call never delivered real content.
-          if (b.is_error) continue;
+          if (b.is_error) {
+            const mp = parseToolName(call.name);
+            if (mp && mcpUse.has(mp.server)) mcpUse.get(mp.server).errors++;
+            continue;
+          }
           let r = null;
           try {
             r = policy.postToolUse({ session_id: call.session_id, tool_name: call.name, tool_input: call.input, tool_response: toolResponse(call.name, textOfResult(b.content)), tool_use_id: b.tool_use_id });
@@ -283,6 +297,21 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
         risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
         rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
     }),
+    mcp: (() => {
+      const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls).map(([server, r]) => {
+        const cfgs = mcpAudits ? configFor(mcpAudits, server) : [];
+        return {
+          server, plugin: r.plugin, calls: r.calls, sessions: r.sessions.size, outboundCalls: r.outbound, errors: r.errors,
+          firstUsed: r.first, lastUsed: r.last,
+          tools: top(r.tools, 50).map(([name, count]) => ({ name, calls: count, outbound: parseToolName(`mcp__x__${name}`).outbound })),
+          configured: cfgs.map((c) => ({ client: c.client, scope: c.scope, transport: c.transport, risk: c.risk, rules: c.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) })),
+        };
+      });
+      const usedNames = new Set(used.map((u) => u.server.toLowerCase().replace(/[^a-z0-9]+/g, '_')));
+      const unused = (mcpAudits || []).filter((a) => !usedNames.has(a.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')))
+        .map((a) => ({ server: a.name, client: a.client, scope: a.scope, transport: a.transport, risk: a.risk, rules: a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) }));
+      return { used, unused };
+    })(),
     projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
       sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size,
       categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
@@ -349,6 +378,17 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
       out.push(`    ${String(n(k.calls)).padStart(7)}  ${k.name.slice(0, 32).padEnd(32)} ${dim(`model ${k.byModel} · you ${k.byUser}`.padEnd(18))} ${risk}${k.rules && k.rules.length ? dim(' · ' + k.rules.join(', ')) : ''}`);
     }
     out.push(dim(`    audit every installed skill: blackbox skills`));
+  }
+  if (S.mcp && S.mcp.used.length) {
+    out.push('');
+    out.push(bold('  MCP servers') + dim('   (↗ = tool that sends or changes data)'));
+    for (const m of S.mcp.used.slice(0, 8)) {
+      const where = m.configured.length ? dim(m.configured.map((c) => `${c.client} ${c.scope}`).join(', ')) : dim('connector/managed (not in a local config)');
+      const risk = m.configured.some((c) => c.risk === 'high') ? red(' high risk') : m.configured.some((c) => c.risk === 'medium') ? yellow(' medium risk') : '';
+      out.push(`    ${String(n(m.calls)).padStart(7)}  ${m.server.slice(0, 30).padEnd(30)} ${m.outboundCalls ? yellow(`${m.outboundCalls} ↗`) : dim('read-only')}${m.errors ? red(` · ${m.errors} failed`) : ''}${risk}  ${where}`);
+      out.push(dim(`             ${m.tools.slice(0, 4).map((t) => `${t.name}${t.outbound ? '↗' : ''} ${t.calls}`).join(' · ')}`));
+    }
+    out.push(dim('    full inventory and config audit: blackbox mcp'));
   }
   if ((S.shellPrograms || []).length) {
     out.push('');

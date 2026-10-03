@@ -73,6 +73,22 @@ class Daemon {
       const { auditAll } = require('./skills');
       this.skillAudits = auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') });
     });
+    this.safe(() => {
+      const { auditServers } = require('./mcp');
+      this.mcpAudits = auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') });
+    });
+  }
+
+  // Ask before a tool of an MCP server whose local definition has high-risk
+  // findings (clear-text secrets, plain HTTP, privileged Docker, changed since pinned…).
+  mcpGate(toolName) {
+    const { parseToolName, configFor } = require('./mcp');
+    const mp = parseToolName(toolName);
+    if (!mp) return null;
+    const bad = configFor(this.mcpAudits || [], mp.server).filter((a) => a.risk === 'high');
+    if (!bad.length) return null;
+    const rules = [...new Set(bad.flatMap((a) => a.findings.filter((f) => f.severity === 'high').map((f) => f.rule)))].join(', ');
+    return { decision: 'ask', rule: 'risky-mcp', reason: `The MCP server "${mp.server}" has high-risk findings in its local configuration: ${rules}. Review with: blackbox mcp` };
   }
 
   skillGate(name) {
@@ -145,6 +161,7 @@ class Daemon {
       decision = this.policy.preToolUse(ev);
       if (!decision || decision.decision === 'note') {
         if (ev.tool_name === 'Skill') decision = this.skillGate((ev.tool_input || {}).skill) || decision;
+        else if (/^mcp__/.test(ev.tool_name || '')) decision = this.mcpGate(ev.tool_name) || decision;
       }
     }
     else if (event === 'PostToolUse') post = this.policy.postToolUse(ev);

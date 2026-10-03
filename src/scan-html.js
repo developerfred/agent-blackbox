@@ -158,6 +158,27 @@ function skillsTable(S) {
     <td class="reason">${esc((r.rules || []).join(', '))}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
+function mcpTable(S) {
+  const used = (S.mcp && S.mcp.used) || [];
+  const unused = (S.mcp && S.mcp.unused) || [];
+  if (!used.length && !unused.length) return '<p class="muted">No MCP servers used or configured.</p>';
+  const max = Math.max(1, ...used.map((m) => m.calls));
+  const riskTag = (r) => (r === 'high' ? '<span class="rule rule-bad">high risk</span>' : r === 'medium' ? '<span class="rule rule-warn">medium risk</span>' : r ? '<span class="tag tag-ok">clean</span>' : '');
+  const rows = used.map((m) => {
+    const worst = (m.configured || []).sort((a, b) => ({ high: 3, medium: 2, low: 1, none: 0 }[b.risk] - { high: 3, medium: 2, low: 1, none: 0 }[a.risk]))[0];
+    const where = (m.configured || []).length ? m.configured.map((c) => `${c.client} ${c.scope}`).join(', ') : 'connector / managed';
+    const tools = m.tools.slice(0, 5).map((t) => `${esc(t.name)}${t.outbound ? ' ↗' : ''} <span class="muted">${esc(n(t.calls))}</span>`).join(' · ');
+    return `<tr><td class="name">${esc(m.server)}${m.plugin ? ` <span class="muted">· plugin ${esc(m.plugin)}</span>` : ''}<div class="muted" style="font-size:11.5px">${esc(where)}</div></td>
+      <td class="barcell"><span class="ibar" style="width:${((m.calls / max) * 100).toFixed(1)}%"></span></td>
+      <td class="num">${esc(n(m.calls))}</td><td class="num">${m.outboundCalls ? `<span class="rule rule-warn">${esc(n(m.outboundCalls))} ↗</span>` : '<span class="muted">read-only</span>'}</td>
+      <td class="num">${m.errors ? `<span class="rule rule-bad">${esc(n(m.errors))}</span>` : '<span class="muted">0</span>'}</td>
+      <td>${worst ? riskTag(worst.risk) : '<span class="tag">not local</span>'}${worst && worst.rules.length ? `<div class="reason" style="font-size:11.5px">${esc(worst.rules.join(', '))}</div>` : ''}</td>
+      <td class="reason" style="font-size:12px">${tools}</td></tr>`;
+  }).join('');
+  const unusedRows = unused.map((u) => `<tr><td class="name">${esc(u.server)}<div class="muted" style="font-size:11.5px">${esc(u.client)} ${esc(u.scope)}</div></td><td></td><td class="num muted">0</td><td></td><td></td><td>${riskTag(u.risk)}${u.rules.length ? `<div class="reason" style="font-size:11.5px">${esc(u.rules.join(', '))}</div>` : ''}</td><td class="muted">configured, not used: candidate to remove</td></tr>`).join('');
+  return `<div class="tscroll"><table><thead><tr><th>Server</th><th></th><th class="num">Calls</th><th class="num">Sent / changed</th><th class="num">Failed</th><th>Config audit</th><th>Tools</th></tr></thead><tbody>${rows}${unusedRows}</tbody></table></div>`;
+}
+
 function renderHtml(S) {
   const range = S.range && S.range.first ? `${String(S.range.first).slice(0, 10)} → ${String(S.range.last).slice(0, 10)}` : `last ${S.days} days`;
   const catIndex = Object.fromEntries(CATEGORIES.map((c, i) => [c.id, i]));
@@ -222,6 +243,7 @@ footer{color:var(--ink-3);font-size:12px;margin-top:24px;text-align:center}
 <section><h2>Shell programs</h2><p class="sub">First program of each command segment.</p>${ranked((S.shellPrograms || []).map((p) => ({ name: p.name, count: p.count })))}</section>
 </div>
 <section><h2>Skills</h2><p class="sub">Skills the agent loaded (model) or you invoked with a slash command (you), with the result of the local audit (<code>blackbox skills</code>).</p>${skillsTable(S)}</section>
+<section><h2>MCP servers</h2><p class="sub">Servers the agent called, the tools it used (↗ sends or changes data), and where each server is configured, with the local config audit (<code>blackbox mcp</code>).</p>${mcpTable(S)}</section>
 <section><h2>Network destinations</h2><p class="sub">Hosts in WebFetch URLs and shell commands. "External" hosts are neither allowlisted nor named by you in a prompt.</p>${ranked((S.hosts || []).map((h) => ({ name: h.host, count: h.calls, tag: h.kind, tagClass: hostKind[h.kind] || 'warn' })))}</section>
 <section><h2>Flagged events</h2><p class="sub">What the firewall would have stopped or asked about.</p>${flagged ? `<div class="tscroll"><table><thead><tr><th>Date</th><th>Project</th><th>Rule</th><th>Reason</th></tr></thead><tbody>${flagged}</tbody></table></div>` : '<p class="muted">Nothing flagged.</p>'}</section>
 <footer>agent-blackbox · scanned locally, nothing uploaded</footer>
