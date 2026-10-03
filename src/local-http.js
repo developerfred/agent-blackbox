@@ -4,7 +4,9 @@
 // already loaded, so the hook and the CLI speak HTTP/1.1 over it directly.
 const net = require('net');
 
+/** @param {Buffer} buf */
 function decodeChunked(buf) {
+  /** @type {Buffer[]} */
   const out = [];
   for (let i = 0; i < buf.length;) {
     const eol = buf.indexOf('\r\n', i);
@@ -30,6 +32,7 @@ function request({ port, method = 'GET', path, token = '', body = null, timeout 
       `${method} ${path} HTTP/1.1`, `host: 127.0.0.1:${port}`, 'connection: close', 'content-type: application/json',
       `x-blackbox-token: ${token}`, ...(payload ? [`content-length: ${payload.length}`] : []), '', '',
     ].join('\r\n');
+    /** @type {Buffer[]} */
     const chunks = [];
     const sock = net.connect({ host: '127.0.0.1', port }, () => sock.write(payload ? Buffer.concat([Buffer.from(head), payload]) : head));
     sock.setTimeout(timeout, () => sock.destroy(new Error('timeout')));

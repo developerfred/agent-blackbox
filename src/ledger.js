@@ -10,15 +10,19 @@ const crypto = require('crypto');
 
 const GENESIS = '0'.repeat(64);
 
+/** Canonical JSON: sorted keys, no undefined, so a record always hashes the same.
+ * @param {unknown} v @returns {string} */
 function canon(v) {
   if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v);
   if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
-  return '{' + Object.keys(v).filter((k) => v[k] !== undefined).sort()
-    .map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+  const o = /** @type {Record<string, unknown>} */ (v);
+  return '{' + Object.keys(o).filter((k) => o[k] !== undefined).sort()
+    .map((k) => JSON.stringify(k) + ':' + canon(o[k])).join(',') + '}';
 }
 
 const { sha256, parseLine } = require('./util');
 
+/** @param {import('./types').Paths} P */
 function loadOrCreateKeys(P) {
   if (!fs.existsSync(P.privKey)) {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
@@ -32,6 +36,7 @@ function loadOrCreateKeys(P) {
   return { priv, pub, pubPem, keyId };
 }
 
+/** @param {string} file @returns {string | null} */
 function readLastLine(file) {
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
@@ -46,6 +51,11 @@ function readLastLine(file) {
 }
 
 class Ledger {
+  /** @type {number} */ seq = 0;
+  /** @type {string} */ head = GENESIS;
+  /** @type {import('./types').LedgerRecord | null} */ last = null;
+  /** bytes written so far @type {number} */ size = 0;
+
   // vault (optional): a Vault; when set, payload blobs are sealed with the key
   // of their session and stored under blobs/<kid>/<sha>.
   /** @param {import('./types').Paths} P @param {{ vault?: import('./vault').Vault | null }} [opts] */
@@ -98,6 +108,7 @@ class Ledger {
   }
 
   // Move a file into the blob store (used for raw API bodies).
+  /** @param {string} src */
   adoptFile(src) {
     const buf = fs.readFileSync(src);
     const digest = sha256(buf);
@@ -107,6 +118,11 @@ class Ledger {
     return { sha: digest, size: buf.length };
   }
 
+  /**
+   * @param {string} kind
+   * @param {Record<string, unknown>} fields
+   * @returns {import('./types').LedgerRecord}
+   */
   append(kind, fields) {
     const rec = { v: 1, seq: this.seq + 1, ts: new Date().toISOString(), kind, ...fields, prev: this.head };
     const hash = sha256(canon(rec));
@@ -123,6 +139,7 @@ class Ledger {
 }
 
 const BLOB_FIELDS = ['payload', 'request_blob', 'response_blob'];
+/** @param {string} dir @param {string} sha @param {string} [kid] */
 const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(dir, sha));
 
 // Walk the whole chain. Integrity proves nothing recorded was changed,
@@ -156,6 +173,7 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line) continue;
+    /** @param {string} problem */
     const fail = (problem) => { out.ok = false; out.errors.push({ line: i + 1, problem }); };
     const rec = parseLine(line);
     if (!rec) { fail('not valid JSON'); continue; }
