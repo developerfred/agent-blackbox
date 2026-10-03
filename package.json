@@ -1,0 +1,39 @@
+{
+  "name": "agent-blackbox",
+  "version": "0.2.0",
+  "description": "A tamper-evident flight recorder and lethal-trifecta firewall for AI coding agents (Claude Code first).",
+  "license": "Apache-2.0",
+  "author": "Frederick Silva (codingsh)",
+  "bin": {
+    "blackbox": "bin/blackbox.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "ai-agents",
+    "claude-code",
+    "security",
+    "audit",
+    "prompt-injection",
+    "opentelemetry",
+    "tamper-evident"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/developerfred/agent-blackbox.git"
+  },
+  "homepage": "https://github.com/developerfred/agent-blackbox#readme",
+  "bugs": {
+    "url": "https://github.com/developerfred/agent-blackbox/issues"
+  }
+}
