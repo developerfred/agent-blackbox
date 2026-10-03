@@ -7,7 +7,7 @@ const { CASES } = require('./corpus');
 
 function runCase(c, mode = 'ask') {
   const state = { sessions: {} };
-  const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [] });
+  const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
   const session_id = `eval-${c.id}`;
   for (const ev of c.before || []) {
     if (ev.prompt) policy.userPrompt({ session_id, prompt: ev.prompt });

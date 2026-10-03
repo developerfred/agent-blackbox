@@ -18,6 +18,16 @@ const clip = (s, n = 160) => {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
 
+// Contents of a script the agent is about to run, if it is a small regular
+// file. Run as the recorder's own user, this may not see the human's folders;
+// then the script is trusted as before.
+function readScript(file, cwd) {
+  const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, require('os').homedir()));
+  const st = fs.statSync(p);
+  if (!st.isFile() || st.size > 200_000) return null;
+  return fs.readFileSync(p, 'utf8');
+}
+
 function summarize(ev) {
   const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
   switch (ev.hook_event_name) {
@@ -60,7 +70,7 @@ class Daemon {
     this.vault = this.cfg.encrypt === false ? null : new Vault({ keysDir: P.keys });
     this.ledger = new Ledger(P, { vault: this.vault });
     this.loadState();
-    this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home] });
+    this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home], readFile: readScript });
     this.indexLedger();
     this.drainSpool();
     this.bodyTimer = setInterval(() => this.safe(() => this.pollBodies()), 2000);
