@@ -59,7 +59,7 @@ class Daemon {
     this.vault = this.cfg.encrypt === false ? null : new Vault({ keysDir: P.keys });
     this.ledger = new Ledger(P, { vault: this.vault });
     this.loadState();
-    this.policy = new Policy(this.cfg, this.state, this.state.salt);
+    this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home] });
     this.indexLedger();
     this.drainSpool();
     this.bodyTimer = setInterval(() => this.safe(() => this.pollBodies()), 2000);

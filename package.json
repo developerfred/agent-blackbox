@@ -10,6 +10,7 @@
   "files": [
     "bin",
     "src",
+    "eval",
     "hooks",
     ".claude-plugin",
     "README.md",

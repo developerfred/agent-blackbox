@@ -31,6 +31,10 @@ const DEFAULT_CONFIG = {
   mode: 'ask',
   // encrypt payloads at rest with one key per session (purge = crypto-erasure)
   encrypt: true,
+  // running code the policy cannot inspect (scripts the agent wrote, inline or
+  // heredoc code, test runners after risky edits) while the lethal trifecta is
+  // active: 'ask' (default) or 'alert' (record and tell the human, do not prompt)
+  opaqueCode: 'ask',
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // hosts considered safe destinations for outbound traffic (suffix match)
