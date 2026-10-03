@@ -21,6 +21,7 @@ function summarize(ev) {
   const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
   switch (ev.hook_event_name) {
     case 'UserPromptSubmit': return clip(ev.prompt);
+    case 'UserPromptExpansion': return clip(`/${ev.command_name || ''} ${ev.command_args || ''}`);
     case 'PreToolUse': case 'PermissionRequest': case 'PermissionDenied':
       return clip(`${ev.tool_name} ${target}`);
     case 'PostToolUse': return clip(`${ev.tool_name} ${target} → ${textOf(ev.tool_response).length} bytes`);
@@ -60,6 +61,26 @@ class Daemon {
     this.drainSpool();
     this.bodyTimer = setInterval(() => this.safe(() => this.pollBodies()), 2000);
     this.bodyTimer.unref();
+    // Audit installed skills now and every 10 minutes, so a risky or modified
+    // skill can be gated the moment the agent tries to load it.
+    this.refreshSkills();
+    this.skillTimer = setInterval(() => this.refreshSkills(), 10 * 60 * 1000);
+    this.skillTimer.unref();
+  }
+
+  refreshSkills() {
+    this.safe(() => {
+      const { auditAll } = require('./skills');
+      this.skillAudits = auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') });
+    });
+  }
+
+  skillGate(name) {
+    const { riskFor } = require('./skills');
+    const a = riskFor(this.skillAudits || [], name);
+    if (!a || a.risk !== 'high') return null;
+    const rules = [...new Set(a.findings.filter((f) => f.severity === 'high').map((f) => f.rule))].join(', ');
+    return { decision: 'ask', rule: 'risky-skill', reason: `The skill "${name}" (${a.source}) has high-risk findings in the local audit: ${rules}. Review with: blackbox skills` };
   }
 
   safe(fn) { try { return fn(); } catch (e) { this.log('error', e.stack || String(e)); } }
@@ -120,7 +141,12 @@ class Daemon {
     let decision = null;
     let post = null;
     let intent = [];
-    if (event === 'PreToolUse') decision = this.policy.preToolUse(ev);
+    if (event === 'PreToolUse') {
+      decision = this.policy.preToolUse(ev);
+      if (!decision || decision.decision === 'note') {
+        if (ev.tool_name === 'Skill') decision = this.skillGate((ev.tool_input || {}).skill) || decision;
+      }
+    }
     else if (event === 'PostToolUse') post = this.policy.postToolUse(ev);
     else if (event === 'UserPromptSubmit') intent = this.policy.userPrompt(ev);
 
@@ -176,6 +202,14 @@ class Daemon {
         this.append('taint', { session_id: sid, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name, flag: t.flag, why: redact(this.policy.scrubText(t.why, null)) });
       }
       if (post.taints.length || post.secretsSeen) this.saveState();
+    }
+    if (event === 'UserPromptExpansion' && !meta.spooled) {
+      // the human typed the slash command, so warn rather than block
+      const g = this.skillGate(ev.command_name);
+      if (g) {
+        this.append('decision', { session_id: sid, prompt_id: ev.prompt_id, decision: 'warn', rule: g.rule, reason: redact(g.reason) });
+        stdout = { systemMessage: `[agent-blackbox] ${redact(g.reason)}` };
+      }
     }
     if (event === 'SessionStart' && !meta.spooled) {
       stdout = { systemMessage: `agent-blackbox is recording this session (mode: ${this.cfg.mode}, ledger #${this.ledger.seq}).` };

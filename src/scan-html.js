@@ -143,6 +143,21 @@ function ranked(rows, { dot } = {}) {
     <td class="num">${esc(n(r.count))}</td></tr>`).join('')}</tbody></table>`;
 }
 
+function skillsTable(S) {
+  const rows = S.skills || [];
+  if (!rows.length) return '<p class="muted">No skills used in this period.</p>';
+  const max = Math.max(1, ...rows.map((r) => r.calls));
+  const riskTag = (r) => (r.risk == null ? '<span class="tag">not installed here</span>'
+    : r.risk === 'high' ? '<span class="rule rule-bad">high risk</span>' : r.risk === 'medium' ? '<span class="rule rule-warn">medium risk</span>'
+      : '<span class="tag tag-ok">clean</span>');
+  return `<div class="tscroll"><table><thead><tr><th>Skill</th><th></th><th class="num">Calls</th><th class="num">Model / you</th><th>Audit</th><th>Findings</th></tr></thead><tbody>${rows.map((r) => `<tr>
+    <td class="name">${esc(r.name)}${r.source ? ` <span class="muted">· ${esc(r.source)}</span>` : ''}</td>
+    <td class="barcell"><span class="ibar" style="width:${((r.calls / max) * 100).toFixed(1)}%"></span></td>
+    <td class="num">${esc(n(r.calls))}</td><td class="num">${esc(r.byModel)} / ${esc(r.byUser)}</td>
+    <td>${riskTag(r)}${r.pin === 'changed' ? ' <span class="rule rule-bad">changed since pin</span>' : ''}</td>
+    <td class="reason">${esc((r.rules || []).join(', '))}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
 function renderHtml(S) {
   const range = S.range && S.range.first ? `${String(S.range.first).slice(0, 10)} → ${String(S.range.last).slice(0, 10)}` : `last ${S.days} days`;
   const catIndex = Object.fromEntries(CATEGORIES.map((c, i) => [c.id, i]));
@@ -206,6 +221,7 @@ footer{color:var(--ink-3);font-size:12px;margin-top:24px;text-align:center}
 <section><h2>Top tools</h2><p class="sub">Colored by category.</p>${ranked((S.topTools || []).map((t) => ({ name: t.name, count: t.count, cat: t.category })), { dot: (r) => catVar(catIndex[r.cat] ?? 6) })}</section>
 <section><h2>Shell programs</h2><p class="sub">First program of each command segment.</p>${ranked((S.shellPrograms || []).map((p) => ({ name: p.name, count: p.count })))}</section>
 </div>
+<section><h2>Skills</h2><p class="sub">Skills the agent loaded (model) or you invoked with a slash command (you), with the result of the local audit (<code>blackbox skills</code>).</p>${skillsTable(S)}</section>
 <section><h2>Network destinations</h2><p class="sub">Hosts in WebFetch URLs and shell commands. "External" hosts are neither allowlisted nor named by you in a prompt.</p>${ranked((S.hosts || []).map((h) => ({ name: h.host, count: h.calls, tag: h.kind, tagClass: hostKind[h.kind] || 'warn' })))}</section>
 <section><h2>Flagged events</h2><p class="sub">What the firewall would have stopped or asked about.</p>${flagged ? `<div class="tscroll"><table><thead><tr><th>Date</th><th>Project</th><th>Rule</th><th>Reason</th></tr></thead><tbody>${flagged}</tbody></table></div>` : '<p class="muted">Nothing flagged.</p>'}</section>
 <footer>agent-blackbox · scanned locally, nothing uploaded</footer>

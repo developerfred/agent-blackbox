@@ -6,7 +6,7 @@ const path = require('path');
 const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('./paths');
 
 const HOOK_EVENTS = [
-  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
   'PermissionDenied', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure',
   'PreCompact', 'Notification', 'SessionEnd',
 ];
