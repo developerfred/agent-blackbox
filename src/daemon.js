@@ -6,7 +6,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const crypto = require('crypto');
-const { P, ensureDirs, readToken, loadConfig } = require('./paths');
+const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
@@ -51,6 +51,7 @@ class Daemon {
   constructor() {
     this.cfg = loadConfig();
     this.token = readToken();
+    this.adminToken = readAdminToken();
     this.sessions = new Map(); // id -> { id, first, last, cwd, events: [], flags: {}, alerts }
   }
 
@@ -476,13 +477,22 @@ class Daemon {
       }
       // A custom header forces a CORS preflight, so web pages cannot forge or
       // read events; other local processes and users get 401 without the token.
+      // Two scopes. The ingest token (the one hooks use, readable by the agent's
+      // OS user) can only add events; reading, verifying and erasing need the
+      // admin token. With the recorder as a dedicated user, the agent can write
+      // evidence but not read or erase it.
       const tok = String(req.headers['x-blackbox-token'] || '');
-      if (!this.token || tok.length !== this.token.length || !crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(this.token))) {
-        return send(401, { error: 'token' });
-      }
+      const same = (a) => !!a && tok.length === a.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(a));
+      const admin = same(this.adminToken);
+      if (!admin && !same(this.token)) return send(401, { error: 'token' });
+      const INGEST = new Set(['POST /hook', 'POST /v1/logs', 'POST /spool', 'GET /health']);
+      if (!admin && !INGEST.has(`${req.method} ${url.pathname}`)) return send(403, { error: 'this token can only add events' });
 
       if (req.method === 'GET') {
-        if (url.pathname === '/health') return send(200, { ok: true, seq: this.ledger.seq, head: this.ledger.head, mode: this.cfg.mode, pid: process.pid, encrypted: !!this.vault, integrity: this.state.integrity || null });
+        if (url.pathname === '/health') {
+          const base = { ok: true, seq: this.ledger.seq, mode: this.cfg.mode, uid: typeof process.getuid === 'function' ? process.getuid() : null, encrypted: !!this.vault };
+          return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: P.home, integrity: this.state.integrity || null } : base);
+        }
         if (url.pathname === '/api/sessions') {
           const list = [...this.sessions.values()].map(({ records, ...s }) => s).sort((a, b) => (a.last < b.last ? 1 : -1));
           return send(200, { head: { seq: this.ledger.seq, hash: this.ledger.head }, sessions: list });
@@ -512,6 +522,12 @@ class Daemon {
           const body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
           if (url.pathname === '/hook') return send(200, { stdout: this.safe(() => this.handleHook(body)) || null });
           if (url.pathname === '/v1/logs') { this.safe(() => this.handleOtlp(body)); return send(200, {}); }
+          if (url.pathname === '/spool') {
+            // events a hook queued while the recorder was down (dedicated-user mode)
+            let n = 0;
+            for (const e of (body.events || []).slice(0, 10000)) { this.safe(() => this.handleHook(e.payload || {}, { spooled: true, received_at: e.received_at })); n++; }
+            return send(200, { accepted: n });
+          }
           if (url.pathname === '/purge') return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));
           return send(404, { error: 'not found' });
         } catch (e) {
