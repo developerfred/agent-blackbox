@@ -189,7 +189,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox purge [--days N]   erase stored payloads (older than N days, or all); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
   blackbox ui                 open the local timeline page
-  blackbox scan [--days N] [--json] [--details] [--card out.svg] [--path dir]
+  blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir]
                               audit past Claude Code sessions offline (no install, nothing uploaded)
 
 data: ${P.home}`;
@@ -295,13 +295,24 @@ async function main() {
       const days = Number(opt('--days') || 30);
       if (!(days > 0)) throw new Error('--days must be a positive number');
       const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days });
+      // never write into Claude Code's own data directory
+      const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+      const safeOut = (file) => {
+        const out = path.resolve(file);
+        if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write under ${claudeDir}`);
+        return out;
+      };
       const card = opt('--card');
-      if (card) {
-        // never write into Claude Code's own data directory
-        const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-        const out = path.resolve(card);
-        if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write the card under ${claudeDir}`);
-        fs.writeFileSync(out, renderCard(summary));
+      if (card) fs.writeFileSync(safeOut(card), renderCard(summary));
+      let html = null;
+      if (flag('--html')) {
+        const v = opt('--html');
+        html = safeOut(v && !v.startsWith('-') ? v : 'blackbox-report.html');
+        fs.writeFileSync(html, require('../src/scan-html').renderHtml(summary));
+        if (!flag('--no-open')) {
+          const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+          try { spawn(opener, [html], { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch { /* print only */ }
+        }
       }
       if (flag('--json')) {
         const { flagged, ...numbers } = summary;
@@ -309,6 +320,8 @@ async function main() {
       } else {
         console.log(renderReport(summary, { color: tty, details: flag('--details') }));
         if (card) console.log(dim(`  card written to ${card} (aggregate numbers only)`));
+        if (html) console.log(dim(`  report written to ${html} (local only; it names projects and hosts)`));
+        else console.log(dim(`  visual report: blackbox scan --html`));
       }
       return;
     }
