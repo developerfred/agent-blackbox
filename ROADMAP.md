@@ -20,12 +20,12 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] Encrypt payloads at rest, with per-session keys for real crypto-erasure (`purge --session`, `show`)
 - [x] Claude Code plugin packaging (hooks bundled in a plugin, marketplace in this repo)
 - [x] Running code counts as possible egress; publishing commands; obfuscation-resistant matching (external review)
-- [x] Evasion corpus as regression tests and `blackbox eval` (41/41 caught, 0/10 false alarms, 3 known gaps)
+- [x] Evasion corpus as regression tests and `blackbox eval` (62/62 caught, 0/20 false alarms, 0 known gaps open)
 - [x] Hook integrity checks in the daemon; `blackbox managed-settings` for admin-owned hooks
 - [x] Token scopes: the hooks' token can add events but not read or erase them
-- [ ] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
-- [ ] Crypto and Web3: seed phrases, private keys, wallet files, signing and broadcasting transactions
-- [ ] Close the known gaps: repository files as untrusted input, data in allowlisted URLs, pre-existing scripts
+- [x] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
+- [x] Crypto and Web3: seed phrases, private keys, wallet files, signing and broadcasting transactions
+- [x] Close the known gaps: repository files as untrusted input, data in allowlisted URLs, pre-existing scripts
 
 **Gate:** 3 outside developers use it for a week with fewer than 1 false alarm per day.
 
@@ -72,12 +72,12 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 Runs alongside the phases. The rule: no runtime dependencies, and nothing gets slower without a benchmark saying so.
 
-- [ ] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change
+- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). Next: turn on `noImplicitAny` (about 470 untyped parameters, mostly in skills, scan, policy and daemon)
 - [ ] Move to TypeScript module by module (policy, ledger, vault first), compiled to plain JS for npm and the plugin, so users still need only Node
 - [ ] Shared types for the canonical event (hooks, Cursor, Codex, OpenTelemetry GenAI) and for the rules file
-- [ ] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second
-- [ ] Daemon: incremental index instead of re-reading the ledger; payload lookup by record number without a full scan
-- [ ] Hook client: a persistent local socket (Unix socket / named pipe) instead of a new HTTP connection per event
+- [x] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second (`npm run bench`; the CI job prints the numbers and does not fail on them, shared runners are too noisy)
+- [x] Daemon: payload lookup by record number without a full scan (byte-offset index; p95 25 ms to 1.3 ms in an 8k-record ledger). Still open: incremental index at startup instead of reading the whole ledger
+- [x] Hook client: a minimal HTTP client over `net` instead of `http` (about 10 ms less per hook process). A persistent socket does not help here: every hook is a new process
 - [ ] `scan`: stream transcripts and process projects in parallel (worker threads)
 - [ ] Optional single binary (Node SEA or Bun) for the Homebrew formula
 

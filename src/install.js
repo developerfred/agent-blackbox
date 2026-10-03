@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('./paths');
+const { claudeDir } = require('./util');
 
 const HOOK_EVENTS = [
   'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
@@ -11,7 +12,7 @@ const HOOK_EVENTS = [
   'PreCompact', 'Notification', 'SessionEnd',
 ];
 
-const settingsPath = () => path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'settings.json');
+const settingsPath = () => path.join(claudeDir(), 'settings.json');
 // Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
 // disappear on upgrade; its stable symlinks live in …/opt/<name>/. Hooks must
 // point at the stable path or they break on the next `brew upgrade`.
@@ -71,6 +72,7 @@ function stripOurHooks(settings) {
 }
 
 // hooks: false installs only the telemetry settings (for the plugin, which brings its own hooks)
+/** @param {{ mode?: import('./types').Mode, raw?: boolean, force?: boolean, hooks?: boolean, log?: (msg: string) => void }} [opts] */
 function install({ mode, raw = false, force = false, hooks = true, log = console.log } = {}) {
   ensureDirs();
   const file = settingsPath();

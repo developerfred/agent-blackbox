@@ -5,13 +5,13 @@
 // cannot stop a determined edit; it makes one visible. Managed settings
 // (`blackbox managed-settings`) are the way to make the hooks admin-owned.
 const fs = require('fs');
+const { claudeDir } = require('./util');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
 const PLUGIN_ID = 'agent-blackbox@agent-blackbox';
 
-function claudeDir() { return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'); }
 
 function managedSettingsPath() {
   if (process.platform === 'darwin') return '/Library/Application Support/ClaudeCode/managed-settings.json';
@@ -19,9 +19,10 @@ function managedSettingsPath() {
   return '/etc/claude-code/managed-settings.json';
 }
 
+/** @returns {{ exists: boolean, data: any, error?: string | null }} */
 function readJson(file) {
   try { return { exists: true, data: JSON.parse(fs.readFileSync(file, 'utf8') || '{}') }; } catch (e) {
-    return { exists: fs.existsSync(file), data: null, error: e.code === 'ENOENT' ? null : 'unreadable or invalid JSON' };
+    return { exists: fs.existsSync(file), data: null, error: /** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT' ? null : 'unreadable or invalid JSON' };
   }
 }
 
@@ -37,7 +38,10 @@ function eventsWithOurHook(settings) {
 
 // expected: list of hook events; installed: 'settings' | 'plugin' | null (auto)
 // installedVia forces the expected install kind; wasVia is the kind seen last time.
-function checkHooks({ expected, installedVia = null, wasVia = null, dir = claudeDir(), managedPath = managedSettingsPath() } = {}) {
+/**
+ * @param {{ expected: string[], installedVia?: string | null, wasVia?: string | null, dir?: string, managedPath?: string }} opts
+ */
+function checkHooks({ expected, installedVia = null, wasVia = null, dir = claudeDir(), managedPath = managedSettingsPath() }) {
   const user = readJson(path.join(dir, 'settings.json'));
   const local = readJson(path.join(dir, 'settings.local.json'));
   const managed = readJson(managedPath);

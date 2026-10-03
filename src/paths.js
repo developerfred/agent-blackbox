@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const HOME = process.env.BLACKBOX_HOME || path.join(os.homedir(), '.blackbox');
 const PORT = Number(process.env.BLACKBOX_PORT || 7071);
 
+/** @type {import('./types').Paths} */
 const P = {
   home: HOME,
   port: PORT,
@@ -29,6 +30,7 @@ const P = {
   anchors: path.join(HOME, 'anchors.jsonl'),
 };
 
+/** @type {import('./types').Config} */
 const DEFAULT_CONFIG = {
   // ask = make Claude Code prompt the human; deny = block; monitor = log only
   mode: 'ask',
@@ -38,6 +40,9 @@ const DEFAULT_CONFIG = {
   // heredoc code, test runners after risky edits) while the lethal trifecta is
   // active: 'ask' (default) or 'alert' (record and tell the human, do not prompt)
   opaqueCode: 'ask',
+  // signing or broadcasting a transaction (cast send, forge script --broadcast,
+  // solana transfer, key material on a command line): 'ask' (default), 'alert' or 'off'
+  web3: 'ask',
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // hosts considered safe destinations for outbound traffic (suffix match)
@@ -67,17 +72,35 @@ function readToken() {
 // With the recorder running as a dedicated user, only the ingest token is
 // in the human's folder and this returns ''; reads then go through sudo.
 function readAdminToken() {
-  try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { return ''; }
+  try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { /* not ours to read */ }
+  return '';
 }
 
+// With the recorder as a dedicated user, the admin token is read through sudo,
+// which asks the human for a password the agent cannot type. Only the CLI
+// calls this, and only for commands that read, verify or erase.
+/** @type {string | null} */
+let sudoToken = null;
+function readAdminTokenViaSudo() {
+  if (sudoToken !== null) return sudoToken;
+  const cfg = loadConfig();
+  if (!cfg.remoteDaemon || !cfg.recorderHome || !cfg.recorderUser) return (sudoToken = '');
+  try {
+    const out = require('child_process').execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
+    return (sudoToken = out.toString('utf8').trim());
+  } catch { return (sudoToken = ''); }
+}
+
+/** @returns {import('./types').Config} */
 function loadConfig() {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(P.config, 'utf8')); } catch { /* defaults */ }
   return { ...DEFAULT_CONFIG, ...user };
 }
 
+/** @param {import('./types').Config} cfg */
 function saveConfig(cfg) {
   fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
 
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, loadConfig, saveConfig };
+module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig };
