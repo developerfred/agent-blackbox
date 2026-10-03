@@ -125,6 +125,50 @@ const CREDENTIAL_CMD = new RegExp([
   String.raw`\bop\s+(?:read|item\s+get)\b`, String.raw`\bvault\s+(?:kv\s+get|read)\b`, String.raw`\bheroku\s+auth:token\b`,
   String.raw`\bnpm\s+token\b`, String.raw`\bdocker\s+inspect\b`,
 ].join('|'));
+// Text in a file the agent reads that tries to steer the agent: an instruction
+// override, or a request addressed to an AI to send secrets or data somewhere.
+// Plain agent guidance ("run npm test before committing") does not match, so
+// reading a CLAUDE.md or CONTRIBUTING.md does not taint the session.
+const OVERRIDE = /\b(?:ignore|disregard|forget|override)\b[^.\n]{0,40}\b(?:previous|prior|above|earlier|all|any|your)\b[^.\n]{0,30}\b(?:instructions?|rules|prompts?|guidelines|directions)\b/i;
+const EXFIL_ASK = /\b(?:send|post|upload|exfiltrate|forward|transmit|leak|reveal|curl|wget|email|submit|include|print|paste|append)\b[^\n]{0,120}?(?:\.env\b|\b(?:secrets?|credentials?|tokens?|api[_ -]?keys?|passwords?|private[_ -]keys?|ssh keys?|environment variables?|id_rsa|mnemonic|seed phrase)\b)/gi;
+const AGENT_WORD = /\b(?:ai|llm|assistants?|agents?|claude|copilot|chatgpt|gpt|cursor|codex|model)s?\b/i;
+const NEGATED = /(?:\b(?:do not|don't|dont|never|must not|should not|shouldn't|avoid|without|no)\b|\bnot to\b)[^.\n]{0,40}$/i;
+const INVISIBLE_TAGS = /[\u{E0000}-\u{E007F}]{4,}/u;
+
+// Returns why the text looks like a prompt injection, or null.
+function injectionIn(text) {
+  const t = String(text || '').slice(0, 400_000);
+  if (INVISIBLE_TAGS.test(t)) return 'hidden Unicode tag characters';
+  const o = OVERRIDE.exec(t);
+  if (o && !NEGATED.test(t.slice(Math.max(0, o.index - 50), o.index))) return `instruction override ("${o[0].slice(0, 60)}")`;
+  EXFIL_ASK.lastIndex = 0;
+  let m;
+  while ((m = EXFIL_ASK.exec(t))) {
+    if (NEGATED.test(t.slice(Math.max(0, m.index - 50), m.index))) continue;
+    const around = t.slice(Math.max(0, m.index - 300), m.index + m[0].length + 100);
+    if (AGENT_WORD.test(around)) return `asks an AI to send secrets or data out ("${m[0].slice(0, 60)}")`;
+  }
+  return null;
+}
+// A URL whose path or query holds a long opaque blob (base64, a slug without
+// words, a dump) can carry data out even toward an allowlisted host. Commit
+// ids and checksums are long but not data, and slugs have many hyphens.
+function urlCarriesData(text) {
+  for (const m of String(text).matchAll(/\bhttps?:\/\/[^\s'"`<>]+/gi)) {
+    let u;
+    try { u = new URL(m[0]); } catch { continue; }
+    const parts = [...u.pathname.split('/'), ...[...u.searchParams.values()]];
+    for (const raw of parts) {
+      let p = raw;
+      try { p = decodeURIComponent(raw); } catch { /* keep raw */ }
+      if (p.length < 40 || /^[0-9a-f]{40}$|^[0-9a-f]{64}$|^sha\d+-/i.test(p)) continue;
+      if ((p.match(/-/g) || []).length > 2 || /\s/.test(p)) continue;
+      return `URL to ${u.hostname} carries a long opaque value in its path or query`;
+    }
+  }
+  return null;
+}
+const FILE_READER_CMD = /\b(?:cat|head|tail|less|more|bat|sed|awk|grep|rg|ag|xxd|strings)\b/;
 const MCP_OUTBOUND = /(send|post|create|write|upload|publish|email|mail|message|comment|reply|push|share|invite|request|fetch|http)/i;
 
 function hostsIn(text) {
@@ -179,8 +223,11 @@ function inputText(toolInput) {
 
 class Policy {
   // protect: extra paths (the real data folder) the agent may never touch
-  constructor(cfg, state, salt, { protect = [] } = {}) {
+  constructor(cfg, state, salt, { protect = [], readFile = null } = {}) {
     this.cfg = cfg;
+    // readFile(path, cwd) -> text | null: lets the policy look inside a script
+    // that existed before the session before it is run
+    this.readFile = readFile;
     this.protect = protect.filter(Boolean);
     this.state = state; // { sessions: { id: { private, untrusted, secrets: [] } } }
     this.salt = salt;
@@ -298,7 +345,10 @@ class Policy {
       // a known downloader with a URL in it, or an unresolvable command word next to a URL ($C https://…)
       const fetchy = hosts.length && (both(FETCH_CMD) || /(?:^|[;&|(]\s*)(?:\$\{?\w+\}?|\$\(|`)/.test(raw.trim()));
       if (net || fetchy) {
-        if (hosts.length && !external.length) return { yes: false, why: 'allowlisted hosts only' };
+        if (hosts.length && !external.length) {
+          const carries = urlCarriesData(raw) || urlCarriesData(cmd);
+          return carries ? { yes: true, why: carries } : { yes: false, why: 'allowlisted hosts only' };
+        }
         return { yes: true, intended, why: external.length ? `network call to ${external.join(', ')}` : 'network call to an unparsed destination' };
       }
       // No network tool in sight, but the command runs code that could do anything.
@@ -309,7 +359,10 @@ class Policy {
     if (tool === 'WebFetch') {
       let u;
       try { u = new URL(input.url); } catch { return { yes: false }; }
-      if (allowed(u.hostname, allow)) return { yes: false };
+      if (allowed(u.hostname, allow)) {
+        const carries = urlCarriesData(input.url);
+        return carries ? { yes: true, why: carries } : { yes: false };
+      }
       const longSegment = u.pathname.split('/').some((p) => p.length > 40);
       if (u.search.length > 1 || longSegment) {
         return { yes: true, intended: allowed(u.hostname.toLowerCase(), sessIntent), why: `URL to ${u.hostname} carries data in its path or query` };
@@ -341,6 +394,11 @@ class Policy {
     }
     for (const t of targets) {
       const hit = match(t, written);
+      if (!hit && this.readFile) {
+        let body = null;
+        try { body = this.readFile(t, sess && sess.cwd); } catch { /* unreadable: treated as before */ }
+        if (body && NET_SOURCE.test(body)) return { net: true, why: `runs ${t}, an existing script with network code` };
+      }
       if (hit) return { net: !!match(t, netFiles), why: match(t, netFiles) ? `runs ${t}, which the agent wrote this session with network code` : `runs ${t}, which the agent wrote or downloaded this session` };
     }
     if (INLINE_CODE.test(sk) || INLINE_CODE.test(normalizeCmd(sk))) return { net: false, why: 'runs inline or piped code' };
@@ -368,6 +426,7 @@ class Policy {
     const input = ev.tool_input || {};
     const text = inputText(input);
     const sess = this.session(ev.session_id);
+    if (ev.cwd) sess.cwd = ev.cwd;
 
     // 1. Self-protection: the agent must not read or alter its own evidence.
     if (this.touchesEvidence(text)) {
@@ -441,6 +500,12 @@ class Policy {
     else if ((tool === 'Bash' || tool === 'PowerShell') && (NET_TOOL.test(input.command || '') || NET_CODE.test(input.command || ''))) {
       untrusted = `network output of: ${(input.command || '').slice(0, 80)}`;
     }
+    // files the agent reads can carry planted instructions (a README, an issue
+    // export, a dependency); only text that reads like an attack taints the session
+    if (!untrusted && (tool === 'Read' || tool === 'Grep' || ((tool === 'Bash' || tool === 'PowerShell') && FILE_READER_CMD.test(input.command || '')))) {
+      const why = injectionIn(respText);
+      if (why) untrusted = `${tool} ${(input.file_path || input.path || input.pattern || input.command || '').slice(0, 60)}: ${why}`;
+    }
     if (untrusted && !sess.untrusted) {
       sess.untrusted = { why: untrusted, at: new Date().toISOString(), tool_use_id: ev.tool_use_id };
       taints.push({ flag: 'untrusted', why: untrusted });
@@ -492,4 +557,4 @@ function redact(text) {
   return out;
 }
 
-module.exports = { Policy, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
+module.exports = { Policy, injectionIn, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
