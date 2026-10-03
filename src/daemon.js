@@ -8,6 +8,7 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const { P, ensureDirs, readToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
+const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
 
 const MAX_BODY = 64 * 1024 * 1024;
@@ -54,7 +55,9 @@ class Daemon {
   }
 
   start() {
-    this.ledger = new Ledger(P);
+    // Payloads are encrypted at rest with one key per session unless turned off.
+    this.vault = this.cfg.encrypt === false ? null : new Vault({ keysDir: P.keys });
+    this.ledger = new Ledger(P, { vault: this.vault });
     this.loadState();
     this.policy = new Policy(this.cfg, this.state, this.state.salt);
     this.indexLedger();
@@ -168,7 +171,7 @@ class Daemon {
     else if (event === 'UserPromptSubmit') intent = this.policy.userPrompt(ev);
 
     const clean = this.policy.scrub(ev, sid);
-    const blob = this.ledger.putBlob(clean);
+    const blob = this.ledger.putBlob(clean, scopeOf(sid));
     this.append('hook', {
       event,
       session_id: sid,
@@ -180,6 +183,7 @@ class Daemon {
       summary: summarize(clean),
       payload: blob.sha,
       payload_size: blob.size,
+      key: blob.key,
       spooled: meta.spooled || undefined,
       received_at: meta.received_at,
     });
@@ -241,36 +245,89 @@ class Daemon {
     const text = fs.readFileSync(file, 'utf8');
     let clean;
     try { clean = this.policy.scrub(JSON.parse(text), sessionId); } catch { clean = this.policy.scrubText(text, null); }
-    const b = this.ledger.putBlob(clean);
+    const b = this.ledger.putBlob(clean, scopeOf(sessionId));
     fs.unlinkSync(file);
     return b;
   }
 
-  // Delete payload blobs (crypto-erasure style): the chain keeps every hash and
-  // stays verifiable; `verify` reports the erased content as missing.
-  purge(days) {
+  // Erase payloads. Encrypted sessions are crypto-erased: their data key is
+  // destroyed, so every copy of their payloads (backups included) becomes
+  // unreadable. Unencrypted blobs from older versions are deleted. The chain
+  // keeps every hash and stays verifiable.
+  // days: only sessions whose last record is older than N days; session: one session.
+  purge(days, session = null) {
     const cutoff = days == null ? Infinity : Date.now() - days * 864e5;
-    const old = new Set();
-    const keep = new Set();
+    const lastByKey = new Map(); // kid -> { last, sessions }
+    const plainOld = new Set();
+    const plainKeep = new Set();
     for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
       if (!line) continue;
       let r;
       try { r = JSON.parse(line); } catch { continue; }
-      const target = Date.parse(r.ts) < cutoff ? old : keep;
-      for (const f of ['payload', 'request_blob', 'response_blob']) if (r[f]) target.add(r[f]);
+      const t = Date.parse(r.ts);
+      if (r.key) {
+        const k = lastByKey.get(r.key) || { last: 0, sessions: new Set() };
+        k.last = Math.max(k.last, t);
+        if (r.session_id) k.sessions.add(r.session_id);
+        lastByKey.set(r.key, k);
+        continue;
+      }
+      const match = (session ? r.session_id === session : true) && t < cutoff;
+      for (const f of ['payload', 'request_blob', 'response_blob']) if (r[f]) (match ? plainOld : plainKeep).add(r[f]);
+    }
+    const keys = [];
+    for (const [kid, k] of lastByKey) {
+      if (session ? !k.sessions.has(session) : k.last >= cutoff) continue;
+      if (this.vault && !this.vault.hasKey(kid)) continue; // already erased
+      if (this.vault) this.vault.erase(kid);
+      try { fs.rmSync(path.join(P.blobs, kid), { recursive: true, force: true }); } catch { /* ignore */ }
+      keys.push(kid);
     }
     let erased = 0;
-    for (const sha of old) {
-      if (keep.has(sha)) continue;
+    for (const sha of plainOld) {
+      if (plainKeep.has(sha)) continue;
       try { fs.unlinkSync(path.join(P.blobs, sha)); erased++; } catch { /* already gone */ }
     }
     let bodies = 0;
-    for (const name of fs.existsSync(P.bodies) ? fs.readdirSync(P.bodies) : []) {
-      if (!name.endsWith('.json')) continue;
-      try { fs.unlinkSync(path.join(P.bodies, name)); bodies++; } catch { /* ignore */ }
+    if (!session) {
+      for (const name of fs.existsSync(P.bodies) ? fs.readdirSync(P.bodies) : []) {
+        if (!name.endsWith('.json')) continue;
+        try { fs.unlinkSync(path.join(P.bodies, name)); bodies++; } catch { /* ignore */ }
+      }
     }
-    this.append('purge', { erased_blobs: erased, erased_raw_bodies: bodies, before: days == null ? 'all' : new Date(cutoff).toISOString() });
-    return { erased, bodies };
+    this.append('purge', {
+      erased_keys: keys, erased_blobs: erased, erased_raw_bodies: bodies,
+      purged_session: session || undefined,
+      before: session ? undefined : days == null ? 'all' : new Date(cutoff).toISOString(),
+    });
+    return { keys: keys.length, erased, bodies };
+  }
+
+  // Decrypted payload of one record, for the human reviewing the evidence.
+  payload(seq) {
+    const s = [...this.sessions.values()].flatMap((x) => x.records).find((r) => r.seq === seq);
+    const rec = s || this.findRecord(seq);
+    if (!rec) return { status: 404, body: { error: 'unknown record' } };
+    const out = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
+    for (const f of ['payload', 'request_blob', 'response_blob']) {
+      if (!rec[f]) continue;
+      if (rec.key && this.vault && !this.vault.hasKey(rec.key)) { out[f] = { erased: true, why: 'session key destroyed (crypto-erased)' }; continue; }
+      try {
+        const text = this.ledger.getBlob(rec[f], rec.key).toString('utf8');
+        try { out[f] = JSON.parse(text); } catch { out[f] = text; }
+      } catch (e) {
+        out[f] = { erased: true, why: e.code === 'ERASED' ? 'session key destroyed (crypto-erased)' : e.code === 'ENOENT' ? 'blob deleted' : 'unreadable' };
+      }
+    }
+    return { status: 200, body: out };
+  }
+
+  findRecord(seq) {
+    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
+      if (!line) continue;
+      try { const r = JSON.parse(line); if (r.seq === seq) return r; } catch { /* skip */ }
+    }
+    return null;
   }
 
   drainSpool() {
@@ -299,7 +356,7 @@ class Daemon {
         for (const lr of sl.logRecords || []) {
           const raw = Object.fromEntries((lr.attributes || []).map((a) => [a.key, otlpValue(a.value)]));
           const attrs = this.policy.scrub(raw, raw['session.id']);
-          const blob = this.ledger.putBlob({ resource: res, body: this.policy.scrub(otlpValue(lr.body), raw['session.id']), attributes: attrs, timeUnixNano: lr.timeUnixNano });
+          const blob = this.ledger.putBlob({ resource: res, body: this.policy.scrub(otlpValue(lr.body), raw['session.id']), attributes: attrs, timeUnixNano: lr.timeUnixNano }, scopeOf(attrs['session.id']));
           const name = attrs['event.name'] || otlpValue(lr.body) || 'log';
           this.append('otel', {
             event: name,
@@ -312,6 +369,7 @@ class Daemon {
               attrs.input_tokens != null ? `${attrs.input_tokens}in/${attrs.output_tokens}out` : null, attrs.decision, attrs.source]
               .filter((x) => x != null && x !== '').join(' ')),
             payload: blob.sha,
+            key: blob.key,
           });
           n++;
         }
@@ -349,6 +407,7 @@ class Daemon {
               model: e.model, query_source: e.query_source,
               request_blob: req && req.sha, request_size: req && req.size,
               response_blob: res && res.sha, response_size: res && res.size,
+              key: (req && req.key) || (res && res.key),
               summary: clip(`${e.model || ''} ${e.query_source || ''} req ${req ? req.size : '?'}B · res ${res ? res.size : '?'}B`),
             });
           }
@@ -367,7 +426,7 @@ class Daemon {
       if (now - st.mtimeMs < ORPHAN_AFTER_MS) continue;
       const b = this.adoptScrubbed(f, null);
       const which = name.endsWith('.request.json') ? 'request' : 'response';
-      this.append('api_body', { orphan: true, file: name, [`${which}_blob`]: b.sha, [`${which}_size`]: b.size, summary: `unindexed ${which} body ${b.size}B` });
+      this.append('api_body', { orphan: true, file: name, [`${which}_blob`]: b.sha, [`${which}_size`]: b.size, key: b.key, summary: `unindexed ${which} body ${b.size}B` });
     }
   }
 
@@ -405,7 +464,11 @@ class Daemon {
           return send(s ? 200 : 404, s ? s.records : { error: 'unknown session' });
         }
         if (url.pathname === '/api/verify') {
-          return send(200, verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs }));
+          return send(200, verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault }));
+        }
+        if (url.pathname === '/api/payload') {
+          const r = this.payload(Number(url.searchParams.get('seq')));
+          return send(r.status, r.body);
         }
         return send(404, { error: 'not found' });
       }
@@ -421,7 +484,7 @@ class Daemon {
           const body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
           if (url.pathname === '/hook') return send(200, { stdout: this.safe(() => this.handleHook(body)) || null });
           if (url.pathname === '/v1/logs') { this.safe(() => this.handleOtlp(body)); return send(200, {}); }
-          if (url.pathname === '/purge') return send(200, this.purge(body.days == null ? null : Number(body.days)));
+          if (url.pathname === '/purge') return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));
           return send(404, { error: 'not found' });
         } catch (e) {
           this.log('bad request', url.pathname, e.message);

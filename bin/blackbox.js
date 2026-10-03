@@ -104,13 +104,21 @@ function printTimeline(recs, id, { otel = false } = {}) {
   }
 }
 
+// The local vault, if this machine holds the master key.
+function localVault() {
+  if (!fs.existsSync(path.join(P.keys, 'master.key')) && !process.env.BLACKBOX_MASTER_KEY) return null;
+  try { return new (require('../src/vault').Vault)({ keysDir: P.keys }); } catch { return null; }
+}
+
 function report(r) {
   if (r.ok) {
-    console.log(`${green('✔ chain intact')} · ${r.records} records · ${r.sessions} sessions · head #${r.head.seq} ${r.head.hash.slice(0, 16)}…`);
+    console.log(`${green('✔ chain intact')} · ${r.records} records · ${r.sessions} session${r.sessions === 1 ? '' : 's'} · head #${r.head.seq} ${r.head.hash.slice(0, 16)}…`);
   } else {
     console.log(red(`✘ chain BROKEN (${r.errors.length} problem${r.errors.length > 1 ? 's' : ''})`));
     for (const e of r.errors.slice(0, 10)) console.log(red(`  line ${e.line}: ${e.problem}`));
   }
+  if (r.sealed) console.log(dim(`  ${r.sealed} encrypted payloads not checked (no key here; the chain itself was checked)`));
+  if (r.erasedKeys) console.log(dim(`  ${r.erasedKeys} session key${r.erasedKeys > 1 ? 's' : ''} destroyed by purge: those payloads are unrecoverable by design`));
   for (const w of r.warnings.slice(0, 5)) console.log(yellow(`  warning: ${w}`));
   if (r.warnings.length > 5) console.log(yellow(`  … ${r.warnings.length - 5} more warnings`));
 }
@@ -183,7 +191,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox start | stop | status
   blackbox sessions           list recorded sessions
   blackbox timeline [id|--last] [--otel]
-  blackbox verify [ledger]    check hashes, chain links, signatures, blobs
+  blackbox verify [ledger] [--chain-only]
+                              check hashes, chain links, signatures, and decrypt-and-check payloads
+  blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
@@ -192,7 +202,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
   blackbox mode ask|deny|monitor
-  blackbox purge [--days N]   erase stored payloads (older than N days, or all); the chain stays valid
+  blackbox purge [--days N | --session ID]
+                              crypto-erase payloads (destroy session keys); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
   blackbox ui                 open the local timeline page
   blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir]
@@ -255,9 +266,9 @@ async function main() {
       return;
     }
     case 'verify': {
-      const ledgerPath = args[0] || P.ledger;
+      const ledgerPath = args.find((x) => !x.startsWith('-')) || P.ledger;
       const pubPem = fs.existsSync(P.pubKey) ? fs.readFileSync(P.pubKey, 'utf8') : null;
-      const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs });
+      const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs, vault: flag('--chain-only') ? null : localVault() });
       report(r);
       process.exitCode = r.ok ? 0 : 1;
       return;
@@ -281,10 +292,22 @@ async function main() {
     case 'purge': {
       await start({ quiet: true });
       const days = opt('--days');
-      const r = await call('POST', '/purge', { days: days == null ? null : Number(days) });
+      const session = opt('--session');
+      const r = await call('POST', '/purge', { days: days == null ? null : Number(days), session });
       if (r.status !== 200) throw new Error('purge failed');
-      console.log(`erased ${r.body.erased} payload blobs and ${r.body.bodies} raw bodies${days ? ` older than ${days} days` : ''}`);
-      console.log(dim('The chain still verifies; erased content shows up as "blob missing" warnings.'));
+      const what = session ? ` of session ${session}` : days ? ` older than ${days} days` : '';
+      console.log(`destroyed ${r.body.keys} session key${r.body.keys === 1 ? '' : 's'}, deleted ${r.body.erased} unencrypted blobs and ${r.body.bodies} raw bodies${what}`);
+      console.log(dim('Encrypted payloads of those sessions are now unreadable everywhere, backups included. The chain still verifies.'));
+      return;
+    }
+    case 'show': {
+      // decrypted payload of one record: blackbox show <seq>
+      const seq = Number(args[0]);
+      if (!seq) throw new Error('usage: blackbox show <record number>   (numbers appear in blackbox timeline)');
+      await start({ quiet: true });
+      const r = await call('GET', `/api/payload?seq=${seq}`);
+      if (r.status !== 200) throw new Error((r.body && r.body.error) || `failed (${r.status})`);
+      console.log(JSON.stringify(r.body, null, 2));
       return;
     }
     case 'ui': {
