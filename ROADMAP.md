@@ -13,6 +13,10 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] Credential-printing commands count as private data ([arXiv:2604.03070](https://arxiv.org/abs/2604.03070))
 - [x] `blackbox scan` of past sessions with a shareable card
 - [x] Homebrew formula and npm package metadata
+- [x] Local HTML report: tool categories, per-project composition, shell programs, network destinations
+- [x] `blackbox skills`: audit installed skills across agents, pin them, gate risky ones live
+- [x] `blackbox mcp`: MCP servers used and their tools, config audit across clients, pin, live gate
+- [x] `blackbox share`: X card, story image and video from local numbers only
 - [ ] Encrypt payloads at rest, with per-session keys for real crypto-erasure
 - [ ] Run the recorder as a dedicated OS user, so the agent can write evidence but not read or erase it
 - [ ] Claude Code plugin packaging (hooks bundled in a plugin)
@@ -24,7 +28,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [ ] Launch: demo GIF, Show HN, X, Farcaster, r/ClaudeAI on the same day
 - [ ] Prompt-injection challenge repo with a canary token
 - [ ] Adapters for Codex CLI and Cursor (one canonical event, OpenTelemetry GenAI conventions)
-- [ ] Inspect and pin MCP tool definitions; alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
+- [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
 - [ ] Merkle batching and automatic anchoring of the chain head ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
 - [ ] Declarative rules file (trigger, predicate, action) ([AgentSpec](https://arxiv.org/abs/2503.18666))
 - [ ] Public evaluation of the policy: attacks that get through and false alarms, measured against defense-aware attacks before any claim ([The Attacker Moves Second](https://arxiv.org/abs/2510.09023))

@@ -31,6 +31,15 @@ npx agent-blackbox scan --card me.svg   # a shareable card with numbers only
 
 It replays your past sessions (`~/.claude/projects`) through the policy and tells you how many read secrets, ingested web content, called out, and which calls would have been blocked. Use `--days N`, `--details` or `--json`.
 
+```bash
+npx agent-blackbox scan --html          # local HTML report: tool categories, projects, skills, MCP servers, hosts
+npx agent-blackbox skills               # audit every installed skill (Claude Code, Cursor, Codex, Copilot…)
+npx agent-blackbox mcp                  # which MCP servers were used, which tools, and a config audit
+npx agent-blackbox share                # X card, story image and a 10 s video, numbers only
+```
+
+`skills` and `mcp` look for download-and-run commands, hidden instructions, plaintext secrets, unpinned packages, privileged containers and more. `--pin` records the current state so a later change is flagged; `--fail-on high` makes them usable in CI. With the recorder installed, risky skills and MCP servers also trigger a live confirmation before the agent uses them.
+
 ## Install
 
 ```bash
