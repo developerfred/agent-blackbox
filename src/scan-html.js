@@ -101,7 +101,7 @@ function dayChart(S) {
   // ~4 gridlines at a 1/2/5 x 10^k step; the top tick is the first one >= max
   const raw = max / 4;
   const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
-  const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= raw));
+  const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= raw) ?? 10 * mag);
   const top = Math.ceil(max / step) * step;
   const ticks = [];
   for (let v = 0; v <= top; v += step) ticks.push(v);
@@ -133,7 +133,11 @@ function dayChart(S) {
     ${table(['Date', 'Total', ...CATEGORIES.map((c) => c.label)], dates.map((d, i) => [d, n(totals[i]), ...CATEGORIES.map((c) => n((byDate[d] || {})[c.id]))]))}`;
 }
 
-// Ranked lists: name, inline bar, count. Bars share one neutral ink.
+/**
+ * Ranked lists: name, inline bar, count. Bars share one neutral ink.
+ * @param {{ name: string, count: number, tag?: string, tagClass?: string }[]} rows
+ * @param {{ dot?: (row: any) => string }} [opts]
+ */
 function ranked(rows, { dot } = {}) {
   if (!rows.length) return '<p class="muted">None.</p>';
   const max = Math.max(1, ...rows.map((r) => r.count));

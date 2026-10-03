@@ -15,7 +15,7 @@ const SECRET_VALUE = [/\bAKIA[0-9A-Z]{16}\b/, /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]
   /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bxox[abpr]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/, /\bnpm_[A-Za-z0-9]{36}\b/];
 const SECRET_KEY = /(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE|CREDENTIAL|AUTH)/i;
 
-const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+const { readJson, sha256 } = require('./util');
 const exists = (f) => { try { fs.accessSync(f); return true; } catch { return false; } };
 
 // Tiny TOML reader for Codex's [mcp_servers.<name>] tables.
@@ -155,10 +155,11 @@ function auditServer(s, { home: homeDir = os.homedir() } = {}) {
   const counts = { high: 0, medium: 0, low: 0 };
   for (const x of f) if (x.severity in counts) counts[x.severity]++;
   const risk = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
-  const hash = crypto.createHash('sha256').update(JSON.stringify({ c: s.command, a: s.args, u: s.url, e: Object.keys(s.env).sort(), h: Object.keys(s.headers).sort(), t: s.transport })).digest('hex');
+  const hash = sha256(JSON.stringify({ c: s.command, a: s.args, u: s.url, e: Object.keys(s.env).sort(), h: Object.keys(s.headers).sort(), t: s.transport }));
   return { ...s, env: Object.keys(s.env), headers: Object.keys(s.headers), findings: f, counts, risk, hash };
 }
 
+/** @param {{ home?: string, cwd?: string, pinsFile?: string }} [opts] */
 function auditServers({ home, cwd, pinsFile } = {}) {
   const pins = pinsFile ? (readJson(pinsFile) || {}) : {};
   return discoverServers({ home, cwd }).map((s) => {

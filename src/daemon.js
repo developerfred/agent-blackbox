@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const crypto = require('crypto');
+const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
 const { Vault, scopeOf } = require('./vault');
@@ -57,7 +58,17 @@ function otlpValue(v) {
   return null;
 }
 
+/** Placeholder for fields assigned in start(): only the process that owns the port opens the ledger. */
+const unset = /** @type {any} */ (null);
+
 class Daemon {
+  /** @type {Ledger} */ ledger = unset;
+  /** @type {Policy} */ policy = unset;
+  /** @type {Vault | null} */ vault = null;
+  /** @type {import('./types').DaemonState} */ state = unset;
+  /** @type {Map<number, [number, number]>} seq -> [byte offset, byte length] in the ledger file */ lines = new Map();
+  /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+
   constructor() {
     this.cfg = loadConfig();
     this.token = readToken();
@@ -95,15 +106,15 @@ class Daemon {
       if (this.cfg.hardened) return { problems: [] };
       const { checkHooks } = require('./integrity');
       const { HOOK_EVENTS } = require('./install');
-      const prev = this.state.integrity || {};
-      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: (loadConfig().installed || {}).hooks === true ? 'settings' : null, wasVia: prev.via || null });
-      if (r.fingerprint === prev.fingerprint && r.problems.length === (prev.problems || []).length) return r;
-      this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev.fingerprint || undefined });
+      const prev = this.state.integrity;
+      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
+      if (r.fingerprint === prev?.fingerprint && r.problems.length === (prev?.problems || []).length) return r;
+      this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev?.fingerprint || undefined });
       if (r.problems.length) {
         this.append('decision', { decision: 'alert', rule: 'hook-tamper', reason: r.problems.join('; ') });
         this.pendingWarning = `agent-blackbox protection changed: ${r.problems.join('; ')}. Check with: blackbox status`;
       }
-      this.state.integrity = { fingerprint: r.fingerprint, via: r.via || prev.via || null, problems: r.problems, at: new Date().toISOString() };
+      this.state.integrity = { fingerprint: r.fingerprint, via: r.via || prev?.via || null, problems: r.problems, at: new Date().toISOString() };
       this.saveState();
       return r;
     });
@@ -132,6 +143,7 @@ class Daemon {
     return { decision: 'ask', rule: 'risky-mcp', reason: `The MCP server "${mp.server}" has high-risk findings in its local configuration: ${rules}. Review with: blackbox mcp` };
   }
 
+  /** @returns {import('./types').PolicyDecision | null} */
   skillGate(name) {
     const { riskFor } = require('./skills');
     const a = riskFor(this.skillAudits || [], name);
@@ -144,10 +156,8 @@ class Daemon {
   log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
 
   loadState() {
-    try { this.state = JSON.parse(fs.readFileSync(P.state, 'utf8')); } catch { this.state = {}; }
-    this.state.sessions ||= {};
+    this.state = { sessions: {}, salt: '', bodyIndexOffset: 0, ...readJson(P.state, {}) };
     this.state.salt ||= crypto.randomBytes(32).toString('hex');
-    this.state.bodyIndexOffset ||= 0;
   }
 
   // The in-memory state is what the policy uses; the file only matters after a
@@ -159,7 +169,7 @@ class Daemon {
   }
 
   flushState() {
-    clearTimeout(this.saveTimer);
+    if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const tmp = P.state + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
@@ -168,7 +178,7 @@ class Daemon {
 
   // ---- in-memory index for the timeline UI ----
   indexLedger() {
-    this.lines = new Map(); // seq -> [byte offset, byte length]: payload lookups read one line, not the file
+    this.lines.clear(); // payload lookups read one line, not the file
     if (!fs.existsSync(P.ledger)) return;
     const buf = fs.readFileSync(P.ledger);
     for (let off = 0; off < buf.length;) {
@@ -325,10 +335,7 @@ class Daemon {
     const lastByKey = new Map(); // kid -> { last, sessions }
     const plainOld = new Set();
     const plainKeep = new Set();
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      let r;
-      try { r = JSON.parse(line); } catch { continue; }
+    for (const r of readJsonl(P.ledger)) {
       const t = Date.parse(r.ts);
       if (r.key) {
         const k = lastByKey.get(r.key) || { last: 0, sessions: new Set() };
@@ -401,10 +408,8 @@ class Daemon {
     const work = P.spool + '.draining';
     fs.renameSync(P.spool, work);
     let n = 0;
-    for (const line of fs.readFileSync(work, 'utf8').split('\n')) {
-      if (!line) continue;
+    for (const { payload, received_at } of readJsonl(work)) {
       try {
-        const { payload, received_at } = JSON.parse(line);
         this.handleHook(payload, { spooled: true, received_at });
         n++;
       } catch (e) { this.log('spool line skipped:', e.message); }
@@ -505,8 +510,9 @@ class Daemon {
         res.end(type === 'application/json' ? JSON.stringify(obj) : obj);
       };
       // DNS-rebinding guard: only answer requests addressed to loopback.
-      if (!okHosts.has(req.headers.host)) return send(403, { error: 'bad host' });
-      const url = new URL(req.url, `http://${req.headers.host}`);
+      const host = req.headers.host || '';
+      if (!okHosts.has(host)) return send(403, { error: 'bad host' });
+      const url = new URL(req.url || '/', `http://${host}`);
 
       // The page itself holds no data; everything else needs the token.
       if (req.method === 'GET' && url.pathname === '/') {

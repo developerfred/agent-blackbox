@@ -72,12 +72,12 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 Runs alongside the phases. The rule: no runtime dependencies, and nothing gets slower without a benchmark saying so.
 
-- [ ] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change
+- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). Next: turn on `noImplicitAny` (about 470 untyped parameters, mostly in skills, scan, policy and daemon)
 - [ ] Move to TypeScript module by module (policy, ledger, vault first), compiled to plain JS for npm and the plugin, so users still need only Node
 - [ ] Shared types for the canonical event (hooks, Cursor, Codex, OpenTelemetry GenAI) and for the rules file
-- [ ] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second
-- [ ] Daemon: incremental index instead of re-reading the ledger; payload lookup by record number without a full scan
-- [ ] Hook client: a persistent local socket (Unix socket / named pipe) instead of a new HTTP connection per event
+- [x] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second (`npm run bench`; the CI job prints the numbers and does not fail on them, shared runners are too noisy)
+- [x] Daemon: payload lookup by record number without a full scan (byte-offset index; p95 25 ms to 1.3 ms in an 8k-record ledger). Still open: incremental index at startup instead of reading the whole ledger
+- [x] Hook client: a minimal HTTP client over `net` instead of `http` (about 10 ms less per hook process). A persistent socket does not help here: every hook is a new process
 - [ ] `scan`: stream transcripts and process projects in parallel (worker threads)
 - [ ] Optional single binary (Node SEA or Bun) for the Homebrew formula
 

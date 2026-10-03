@@ -9,7 +9,15 @@
     "strict": true,
     "noImplicitAny": false,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "useUnknownInCatchVariables": false
   },
-  "include": ["src/**/*.js", "bin/**/*.js", "eval/**/*.js", "bench/**/*.js"]
+  "include": [
+    "src/**/*.js",
+    "bin/**/*.js",
+    "eval/**/*.js",
+    "bench/**/*.js"
+  ]
 }

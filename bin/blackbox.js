@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { P, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
+const { readJsonl } = require('../src/util');
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -20,6 +21,7 @@ function call(method, p, body, admin = true) {
 const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** @param {{ quiet?: boolean }} [opts] */
 async function start({ quiet } = {}) {
   ensureDirs();
   const h = await health();
@@ -48,10 +50,7 @@ async function stop() {
   console.log('stopped');
 }
 
-function readLedger() {
-  if (!fs.existsSync(P.ledger)) return [];
-  return fs.readFileSync(P.ledger, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-}
+const readLedger = () => readJsonl(P.ledger);
 
 const remote = () => !!loadConfig().remoteDaemon;
 
@@ -188,6 +187,24 @@ function tamperDemo() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// One scan of past sessions with the skill and MCP audits attached (both optional).
+function scanSummary(opt, badDays = '--days must be a positive number') {
+  const { scan, defaultProjectsDir } = require('../src/scan');
+  const days = Number(opt('--days') || 30);
+  if (!(days > 0)) throw new Error(badDays);
+  const optional = (fn) => { try { return fn(); } catch { return null; } };
+  const audits = optional(() => require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }));
+  const mcpAudits = optional(() => require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }));
+  return { days, summary: scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits }) };
+}
+
+// Reports and kits are never written into Claude Code's own data directory.
+function assertOutsideClaudeDir(out) {
+  const dir = path.resolve(require('../src/util').claudeDir());
+  if (out === dir || out.startsWith(dir + path.sep)) throw new Error(`refusing to write under ${dir}`);
+  return out;
+}
+
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
   blackbox install [--mode ask|deny|monitor] [--raw] [--force] [--telemetry-only]
@@ -238,7 +255,7 @@ async function main() {
       const cfg = loadConfig();
       console.log(h ? `${green('●')} recording · pid ${h.pid || '?'} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       const { checkHooks } = require('../src/integrity');
-      const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: (cfg.installed || {}).hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
+      const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
       console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${P.home}`);
       for (const p of ig.problems) console.log(red(`  ✘ ${p}`));
       return;
@@ -247,7 +264,7 @@ async function main() {
       const mode = opt('--mode');
       if (mode && !['ask', 'deny', 'monitor'].includes(mode)) throw new Error('mode must be ask, deny or monitor');
       console.log(bold('Installing agent-blackbox into Claude Code'));
-      require('../src/install').install({ mode, raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+      require('../src/install').install({ mode: /** @type {import('../src/types').Mode | undefined} */ (mode), raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
       await stop().catch(() => {});
       await start();
       console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
@@ -265,7 +282,7 @@ async function main() {
         console.log('  then restart the service (systemctl restart agent-blackbox, or launchctl kickstart -k system/dev.agent-blackbox.recorder)');
         return;
       }
-      const cfg = loadConfig(); cfg.mode = m; saveConfig(cfg);
+      const cfg = loadConfig(); cfg.mode = /** @type {import('../src/types').Mode} */ (m); saveConfig(cfg);
       if (await health()) { await stop(); await start({ quiet: true }); }
       console.log(`mode set to ${m}`);
       return;
@@ -401,21 +418,10 @@ async function main() {
       return;
     }
     case 'scan': {
-      const { scan, renderReport, renderCard, defaultProjectsDir } = require('../src/scan');
-      const days = Number(opt('--days') || 30);
-      if (!(days > 0)) throw new Error('--days must be a positive number');
-      let audits = null;
-      try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* skills audit is optional */ }
-      let mcpAudits = null;
-      try { mcpAudits = require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }); } catch { /* optional */ }
-      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits });
+      const { renderReport, renderCard } = require('../src/scan');
+      const { summary, days } = scanSummary(opt, '--days must be a positive number');
       // never write into Claude Code's own data directory
-      const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-      const safeOut = (file) => {
-        const out = path.resolve(file);
-        if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write under ${claudeDir}`);
-        return out;
-      };
+      const safeOut = (file) => assertOutsideClaudeDir(path.resolve(file));
       const card = opt('--card');
       if (card) fs.writeFileSync(safeOut(card), renderCard(summary));
       let html = null;
@@ -440,16 +446,8 @@ async function main() {
       return;
     }
     case 'share': {
-      const { scan, defaultProjectsDir } = require('../src/scan');
-      const days = Number(opt('--days') || 30);
-      let audits = null;
-      try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* optional */ }
-      let mcpAudits = null;
-      try { mcpAudits = require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }); } catch { /* optional */ }
-      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits });
-      const out = path.resolve(opt('--out') || 'blackbox-share');
-      const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-      if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write under ${claudeDir}`);
+      const { summary, days } = scanSummary(opt);
+      const out = assertOutsideClaudeDir(path.resolve(opt('--out') || 'blackbox-share'));
       console.log(bold('Making your share kit') + dim(` · last ${days} days · ${summary.toolCalls} tool calls`));
       const { made } = await require('../src/share').makeShareKit(summary, out, { video: !flag('--no-video'), log: (m) => console.log(dim('  ' + m)) });
       for (const f of made) console.log(`  ${green('✔')} ${path.join(out, f)}`);

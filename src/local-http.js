@@ -17,9 +17,12 @@ function decodeChunked(buf) {
   return Buffer.concat(out);
 }
 
-// request({ port, method, path, token, body, timeout }) -> { status, body }
-// body is the parsed JSON (null if empty or not JSON). Rejects on a socket
-// error or timeout.
+/**
+ * One request to the recorder. Resolves with the status and the parsed JSON
+ * body (null if empty or not JSON); rejects on a socket error or timeout.
+ * @param {{ port: number, method?: string, path: string, token?: string, body?: string | object | null, timeout?: number }} opts
+ * @returns {Promise<{ status: number, body: any }>}
+ */
 function request({ port, method = 'GET', path, token = '', body = null, timeout = 5000 }) {
   return new Promise((resolve, reject) => {
     const payload = body == null ? null : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));

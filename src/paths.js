@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const HOME = process.env.BLACKBOX_HOME || path.join(os.homedir(), '.blackbox');
 const PORT = Number(process.env.BLACKBOX_PORT || 7071);
 
+/** @type {import('./types').Paths} */
 const P = {
   home: HOME,
   port: PORT,
@@ -29,6 +30,7 @@ const P = {
   anchors: path.join(HOME, 'anchors.jsonl'),
 };
 
+/** @type {import('./types').Config} */
 const DEFAULT_CONFIG = {
   // ask = make Claude Code prompt the human; deny = block; monitor = log only
   mode: 'ask',
@@ -77,6 +79,7 @@ function readAdminToken() {
 // With the recorder as a dedicated user, the admin token is read through sudo,
 // which asks the human for a password the agent cannot type. Only the CLI
 // calls this, and only for commands that read, verify or erase.
+/** @type {string | null} */
 let sudoToken = null;
 function readAdminTokenViaSudo() {
   if (sudoToken !== null) return sudoToken;
@@ -88,12 +91,14 @@ function readAdminTokenViaSudo() {
   } catch { return (sudoToken = ''); }
 }
 
+/** @returns {import('./types').Config} */
 function loadConfig() {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(P.config, 'utf8')); } catch { /* defaults */ }
   return { ...DEFAULT_CONFIG, ...user };
 }
 
+/** @param {import('./types').Config} cfg */
 function saveConfig(cfg) {
   fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }

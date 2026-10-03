@@ -21,10 +21,12 @@ const { CASES } = require('../eval/corpus');
 
 const args = process.argv.slice(2);
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
+/** @type {Record<string, { p50: number, p95: number, n: number, unit: string, budget: number | null }>} */
 const results = {};
 
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
 const now = () => Number(process.hrtime.bigint()) / 1e6; // ms
+/** @param {string} name @param {number[]} samples @param {string} [unit] @param {number | null} [budget] */
 function record(name, samples, unit = 'ms', budget = null) {
   const r = { p50: pct(samples, 0.5), p95: pct(samples, 0.95), n: samples.length, unit, budget };
   results[name] = r;
