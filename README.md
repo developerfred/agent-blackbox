@@ -42,6 +42,17 @@ npx agent-blackbox share                # X card, story image and a 10 s video, 
 
 ## Install
 
+As a Claude Code plugin (inside Claude Code):
+
+```
+/plugin marketplace add developerfred/agent-blackbox
+/plugin install agent-blackbox@agent-blackbox
+```
+
+The plugin brings the hooks: every prompt, tool call and result is recorded and gated. For the model-level telemetry as well, add `npx agent-blackbox install --telemetry-only`. If you also run `blackbox install`, the plugin steps aside so nothing is recorded twice.
+
+Or with the CLI:
+
 ```bash
 # Homebrew (tap)
 brew install developerfred/tap/agent-blackbox

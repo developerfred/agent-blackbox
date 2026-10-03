@@ -1,0 +1,11 @@
+{
+  "name": "agent-blackbox",
+  "displayName": "agent-blackbox",
+  "version": "0.3.0",
+  "description": "Tamper-evident flight recorder and lethal-trifecta firewall for Claude Code: every tool call recorded in a signed, encrypted ledger; secret exfiltration blocked.",
+  "author": { "name": "Frederick Silva", "url": "https://github.com/developerfred" },
+  "homepage": "https://github.com/developerfred/agent-blackbox#readme",
+  "repository": "https://github.com/developerfred/agent-blackbox",
+  "license": "Apache-2.0",
+  "keywords": ["security", "audit", "prompt-injection", "hooks", "tamper-evident", "web3"]
+}

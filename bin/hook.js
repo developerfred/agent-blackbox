@@ -9,6 +9,20 @@ const http = require('http');
 const { spawn } = require('child_process');
 const { P, readToken, loadConfig } = require('../src/paths');
 
+// Installed both as a plugin and with `blackbox install`? Record once: the
+// settings.json install wins and the plugin's copy of the hook steps aside.
+if (process.argv.includes('--plugin')) {
+  try {
+    const os = require('os');
+    const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+    if (fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').includes('agent-blackbox-hook')) {
+      process.stdin.resume();
+      process.stdin.on('end', () => process.exit(0));
+      return;
+    }
+  } catch { /* no settings: the plugin records */ }
+}
+
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {

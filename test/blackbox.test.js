@@ -304,3 +304,17 @@ test('install and uninstall keep the user\'s own settings', () => {
   s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(s, mine);
 });
+
+test('plugin: manifest, marketplace and hooks match the settings install', () => {
+  const root = path.join(__dirname, '..');
+  const plugin = JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(plugin.name, 'agent-blackbox');
+  assert.equal(plugin.version, pkg.version, 'plugin and npm versions move together');
+  const market = JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin', 'marketplace.json'), 'utf8'));
+  assert.equal(market.plugins[0].source, './');
+  const hooks = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const { HOOK_EVENTS } = require('../src/install');
+  assert.deepEqual(Object.keys(hooks).sort(), [...HOOK_EVENTS].sort());
+  for (const ev of Object.keys(hooks)) assert.match(hooks[ev][0].hooks[0].command, /\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/hook\.js" --plugin$/);
+});
