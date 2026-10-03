@@ -20,18 +20,20 @@ function managedSettingsPath() {
 }
 
 /** @returns {{ exists: boolean, data: any, error?: string | null }} */
-function readJson(file) {
+function readJson(/** @type {string} */ file) {
   try { return { exists: true, data: JSON.parse(fs.readFileSync(file, 'utf8') || '{}') }; } catch (e) {
     return { exists: fs.existsSync(file), data: null, error: /** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT' ? null : 'unreadable or invalid JSON' };
   }
 }
 
+/** @param {any} h */
 const ours = (h) => h && typeof h.command === 'string' && (h.command.includes('agent-blackbox-hook') || /agent-blackbox.*hook\.js/.test(h.command));
 
+/** @param {any} settings @returns {Set<string>} */
 function eventsWithOurHook(settings) {
   const out = new Set();
   for (const [ev, groups] of Object.entries((settings && settings.hooks) || {})) {
-    for (const g of groups || []) if ((g.hooks || []).some(ours)) out.add(ev);
+    for (const g of /** @type {any[]} */ (groups) || []) if ((g.hooks || []).some(ours)) out.add(ev);
   }
   return out;
 }
@@ -79,7 +81,9 @@ function checkHooks({ expected, installedVia = null, wasVia = null, dir = claude
 
 // What to put in the managed settings file so the hooks are owned by an admin
 // account and cannot be edited by the user (or the agent acting as the user).
+/** @param {{ command: string, events: string[] }} opts */
 function managedSettingsSnippet({ command, events }) {
+  /** @type {Record<string, unknown>} */
   const hooks = {};
   for (const ev of events) hooks[ev] = [{ hooks: [{ type: 'command', command, timeout: 10 }] }];
   return { hooks };

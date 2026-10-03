@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noImplicitAny": true },
+  "include": [
+    "src/types.d.ts",
+    "src/util.js",
+    "src/local-http.js",
+    "src/integrity.js",
+    "src/vault.js",
+    "src/ledger.js"
+  ]
+}
