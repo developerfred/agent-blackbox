@@ -5,19 +5,20 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
-const { P, ensureDirs, readToken, readAdminToken, loadConfig, saveConfig } = require('../src/paths');
+const { P, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const red = c(31), green = c(32), yellow = c(33), dim = c(2), bold = c(1), cyan = c(36);
 
-function call(method, p, body) {
+// admin: this call reads, verifies or erases, so it needs the admin token
+function call(method, p, body, admin = true) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const req = http.request({
       host: '127.0.0.1', port: P.port, path: p, method, timeout: 5000,
-      headers: { host: `127.0.0.1:${P.port}`, 'content-type': 'application/json', 'x-blackbox-token': readAdminToken() || readToken() },
+      headers: { host: `127.0.0.1:${P.port}`, 'content-type': 'application/json', 'x-blackbox-token': readAdminToken() || (admin ? readAdminTokenViaSudo() : '') || readToken() },
     }, (res) => {
       const out = [];
       res.on('data', (d) => out.push(d));
@@ -31,12 +32,16 @@ function call(method, p, body) {
   });
 }
 
-const health = () => call('GET', '/health').then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
+const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function start({ quiet } = {}) {
   ensureDirs();
   const h = await health();
+  if (!h && remote()) {
+    console.error(red('the recorder runs as its own user and is not answering; restart the service (systemctl restart agent-blackbox, or launchctl kickstart -k system/dev.agent-blackbox.recorder)'));
+    process.exit(1);
+  }
   if (h) { if (!quiet) console.log(`${green('●')} already running (pid ${h.pid}, ledger #${h.seq}, mode ${h.mode})`); return h; }
   const log = fs.openSync(P.log, 'a');
   spawn(process.execPath, [__filename, 'daemon'], { detached: true, stdio: ['ignore', log, log] }).unref();
@@ -61,6 +66,22 @@ async function stop() {
 function readLedger() {
   if (!fs.existsSync(P.ledger)) return [];
   return fs.readFileSync(P.ledger, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+const remote = () => !!loadConfig().remoteDaemon;
+
+// Records for sessions/timeline/anchor. With the recorder as its own user the
+// ledger file is not ours to read, so ask the daemon (admin token via sudo).
+async function readRecords() {
+  if (!remote()) return readLedger();
+  const s = await call('GET', '/api/sessions');
+  if (s.status !== 200) throw new Error(`the recorder refused (${s.status}); is sudo available for ${loadConfig().recorderUser}?`);
+  const recs = [];
+  for (const x of s.body.sessions) {
+    const e = await call('GET', `/api/events?session=${encodeURIComponent(x.id)}`);
+    if (e.status === 200) recs.push(...e.body);
+  }
+  return recs.sort((a, b) => a.seq - b.seq);
 }
 
 function sessionsOf(recs) {
@@ -129,7 +150,7 @@ async function demo() {
   const sid = `demo-${Date.now().toString(36)}`;
   const key = 'sk-demo-' + 'Q7f3kLm9Xz2Rw8Vt5Np1Hc6Jd4';
   let n = 0;
-  const hook = async (ev) => (await call('POST', '/hook', { session_id: sid, cwd: '/tmp/demo-repo', ...ev })).body.stdout;
+  const hook = async (ev) => (await call('POST', '/hook', { session_id: sid, cwd: '/tmp/demo-repo', ...ev }, false)).body.stdout;
   const tool = async (tool_name, tool_input, tool_response) => {
     const id = `toolu_demo_${++n}`;
     const out = await hook({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: id });
@@ -202,6 +223,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
+  blackbox harden [--out file] [--user NAME] [--undo | --check]
+                              print a reviewable root script that runs the recorder as its own OS user
+                              (agent can write evidence but not read or erase it); --check tells if it does
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N | --session ID]
@@ -227,7 +251,7 @@ async function main() {
     case 'status': {
       const h = await health();
       const cfg = loadConfig();
-      console.log(h ? `${green('●')} recording · pid ${h.pid} · ledger #${h.seq} · mode ${h.mode}` : `${red('●')} not running`);
+      console.log(h ? `${green('●')} recording · pid ${h.pid || '?'} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       const { checkHooks } = require('../src/integrity');
       const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: (cfg.installed || {}).hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
       console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${P.home}`);
@@ -249,13 +273,20 @@ async function main() {
     case 'mode': {
       const m = args[0];
       if (!['ask', 'deny', 'monitor'].includes(m)) throw new Error('usage: blackbox mode ask|deny|monitor');
+      if (remote()) {
+        const c = loadConfig();
+        console.log('The policy lives with the recorder, which runs as its own user, so only an admin can change it:');
+        console.log(`  sudo -u ${c.recorderUser} sh -c 'cd ${JSON.stringify(c.recorderHome)} && sed -i.bak "s/\"mode\": *\"[a-z]*\"/\"mode\": \"${m}\"/" config.json'`);
+        console.log('  then restart the service (systemctl restart agent-blackbox, or launchctl kickstart -k system/dev.agent-blackbox.recorder)');
+        return;
+      }
       const cfg = loadConfig(); cfg.mode = m; saveConfig(cfg);
       if (await health()) { await stop(); await start({ quiet: true }); }
       console.log(`mode set to ${m}`);
       return;
     }
     case 'sessions': {
-      const list = sessionsOf(readLedger());
+      const list = sessionsOf(await readRecords());
       if (!list.length) { console.log('no sessions recorded yet'); return; }
       for (const s of list.slice(0, Number(opt('-n') || 20))) {
         const flags = [...s.flags].map((f) => yellow(f)).join(',');
@@ -265,7 +296,7 @@ async function main() {
       return;
     }
     case 'timeline': {
-      const recs = readLedger();
+      const recs = await readRecords();
       let id = args.find((a) => !a.startsWith('-'));
       if (!id || flag('--last')) id = (sessionsOf(recs)[0] || {}).id;
       if (!id) { console.log('no sessions recorded yet'); return; }
@@ -273,6 +304,13 @@ async function main() {
       return;
     }
     case 'verify': {
+      if (remote() && !args.find((x) => !x.startsWith('-'))) {
+        const r = await call('GET', '/api/verify');
+        if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
+        report({ ...r.body, sessions: r.body.sessions, warnings: r.body.warnings || [] });
+        process.exitCode = r.body.ok ? 0 : 1;
+        return;
+      }
       const ledgerPath = args.find((x) => !x.startsWith('-')) || P.ledger;
       const pubPem = fs.existsSync(P.pubKey) ? fs.readFileSync(P.pubKey, 'utf8') : null;
       const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs, vault: flag('--chain-only') ? null : localVault() });
@@ -281,10 +319,17 @@ async function main() {
       return;
     }
     case 'anchor': {
-      const recs = readLedger();
-      const last = recs[recs.length - 1];
-      if (!last) { console.log('ledger is empty'); return; }
-      const a = { anchored_at: new Date().toISOString(), seq: last.seq, hash: last.hash, sig: last.sig, key_id: (recs[0] || {}).key_id };
+      let a;
+      if (remote()) {
+        const r = await call('GET', '/api/anchor');
+        if (r.status !== 200) { console.log('ledger is empty'); return; }
+        a = { anchored_at: new Date().toISOString(), ...r.body };
+      } else {
+        const recs = readLedger();
+        const last = recs[recs.length - 1];
+        if (!last) { console.log('ledger is empty'); return; }
+        a = { anchored_at: new Date().toISOString(), seq: last.seq, hash: last.hash, sig: last.sig, key_id: (recs[0] || {}).key_id };
+      }
       fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
       console.log(JSON.stringify(a, null, 2));
       console.log(dim('\nPublish this somewhere the agent cannot edit (a git commit, a gist, a transparency log).'));
@@ -315,6 +360,23 @@ async function main() {
       const r = await call('GET', `/api/payload?seq=${seq}`);
       if (r.status !== 200) throw new Error((r.body && r.body.error) || `failed (${r.status})`);
       console.log(JSON.stringify(r.body, null, 2));
+      return;
+    }
+    case 'harden': {
+      const h = require('../src/harden');
+      if (flag('--check')) {
+        const r = h.checkHardened(await health(), { cfg: loadConfig() });
+        for (const l of r.lines) console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : dim(l));
+        process.exitCode = r.ok ? 0 : 1;
+        return;
+      }
+      const o = { user: opt('--user'), data: opt('--data'), code: opt('--code'), port: P.port };
+      const text = flag('--undo') ? h.undoScript(o) : h.hardenScript(o);
+      const out = opt('--out');
+      if (out) {
+        fs.writeFileSync(out, text, { mode: 0o700 });
+        console.error(`written to ${out}. Read it, then run: sudo sh ${out}`);
+      } else process.stdout.write(text);
       return;
     }
     case 'managed-settings': {
