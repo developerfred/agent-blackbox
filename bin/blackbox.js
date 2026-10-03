@@ -3,7 +3,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const http = require('http');
 const { spawn } = require('child_process');
 const { P, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
@@ -14,22 +13,8 @@ const red = c(31), green = c(32), yellow = c(33), dim = c(2), bold = c(1), cyan 
 
 // admin: this call reads, verifies or erases, so it needs the admin token
 function call(method, p, body, admin = true) {
-  return new Promise((resolve, reject) => {
-    const data = body ? JSON.stringify(body) : null;
-    const req = http.request({
-      host: '127.0.0.1', port: P.port, path: p, method, timeout: 5000,
-      headers: { host: `127.0.0.1:${P.port}`, 'content-type': 'application/json', 'x-blackbox-token': readAdminToken() || (admin ? readAdminTokenViaSudo() : '') || readToken() },
-    }, (res) => {
-      const out = [];
-      res.on('data', (d) => out.push(d));
-      res.on('end', () => {
-        try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(out).toString('utf8') || 'null') }); } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
-    req.end(data);
-  });
+  const token = readAdminToken() || (admin ? readAdminTokenViaSudo() : '') || readToken();
+  return require('../src/local-http').request({ port: P.port, method, path: p, token, body });
 }
 
 const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
