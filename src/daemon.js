@@ -69,6 +69,29 @@ class Daemon {
     this.refreshSkills();
     this.skillTimer = setInterval(() => this.refreshSkills(), 10 * 60 * 1000);
     this.skillTimer.unref();
+    this.checkIntegrity();
+    this.integrityTimer = setInterval(() => this.checkIntegrity(), 60 * 1000);
+    this.integrityTimer.unref();
+  }
+
+  // Are our hooks still in place? Any change is written to the ledger; a
+  // removal or disableAllHooks is also shown to the human on the next event.
+  checkIntegrity() {
+    return this.safe(() => {
+      const { checkHooks } = require('./integrity');
+      const { HOOK_EVENTS } = require('./install');
+      const prev = this.state.integrity || {};
+      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: (loadConfig().installed || {}).hooks === true ? 'settings' : null, wasVia: prev.via || null });
+      if (r.fingerprint === prev.fingerprint && r.problems.length === (prev.problems || []).length) return r;
+      this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev.fingerprint || undefined });
+      if (r.problems.length) {
+        this.append('decision', { decision: 'alert', rule: 'hook-tamper', reason: r.problems.join('; ') });
+        this.pendingWarning = `agent-blackbox protection changed: ${r.problems.join('; ')}. Check with: blackbox status`;
+      }
+      this.state.integrity = { fingerprint: r.fingerprint, via: r.via || prev.via || null, problems: r.problems, at: new Date().toISOString() };
+      this.saveState();
+      return r;
+    });
   }
 
   refreshSkills() {
@@ -233,9 +256,14 @@ class Daemon {
       }
     }
     if (event === 'SessionStart' && !meta.spooled) {
+      this.checkIntegrity();
       stdout = { systemMessage: `agent-blackbox is recording this session (mode: ${this.cfg.mode}, ledger #${this.ledger.seq}).` };
     } else if (event === 'SessionEnd') {
       this.saveState();
+    }
+    if (this.pendingWarning && !meta.spooled) {
+      stdout = { ...(stdout || {}), systemMessage: `[agent-blackbox] ${this.pendingWarning}${stdout && stdout.systemMessage ? '\n' + stdout.systemMessage : ''}` };
+      this.pendingWarning = null;
     }
     return stdout;
   }
@@ -454,7 +482,7 @@ class Daemon {
       }
 
       if (req.method === 'GET') {
-        if (url.pathname === '/health') return send(200, { ok: true, seq: this.ledger.seq, head: this.ledger.head, mode: this.cfg.mode, pid: process.pid });
+        if (url.pathname === '/health') return send(200, { ok: true, seq: this.ledger.seq, head: this.ledger.head, mode: this.cfg.mode, pid: process.pid, encrypted: !!this.vault, integrity: this.state.integrity || null });
         if (url.pathname === '/api/sessions') {
           const list = [...this.sessions.values()].map(({ records, ...s }) => s).sort((a, b) => (a.last < b.last ? 1 : -1));
           return send(200, { head: { seq: this.ledger.seq, hash: this.ledger.head }, sessions: list });

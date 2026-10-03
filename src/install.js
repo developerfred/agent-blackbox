@@ -115,6 +115,7 @@ function install({ mode, raw = false, force = false, hooks = true, log = console
     settings.env[k] = v;
   }
   cfg.installed.at = new Date().toISOString();
+  cfg.installed.hooks = hooks;
   cfg.installed.settings = file;
   saveConfig(cfg);
 
