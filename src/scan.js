@@ -16,7 +16,7 @@ const DAY = 86400000;
 const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'lethal-trifecta']);
 const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
 // Rules worth listing per session in --details (plain egress is too common).
-const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper']);
+const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper', 'web3-transaction']);
 
 // Tool categories, in a fixed order: the order is also the color order in the
 // HTML report, so a category keeps its color everywhere.

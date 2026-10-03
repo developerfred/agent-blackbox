@@ -12,6 +12,10 @@ const SENSITIVE_PATH = [
   /\.git-credentials\b/, /\.docker\/config\.json/, /\.kube\/config/,
   /\.gnupg\//, /\.(pem|p12|pfx|key)\b/, /credentials?\.json/i,
   /keystores?\//i, /\bmnemonic\b/i, /seed[_-]?phrase/i,
+  // wallets: Foundry/Geth keystores, Solana and Sui keypairs, Bitcoin wallets, Hardhat secrets
+  /\.foundry\/keystores/, /(^|\/)UTC--\d{4}-\d\d-\d\dT/, /\.config\/solana\//,
+  /\.sui\/sui_config\//, /\.aptos\/config/, /\.(?:ethereum|bitcoin)\/(?:keystore|wallets?|wallet\.dat)/, /(^|\/)wallet\.dat\b/,
+  /\.(?:keystore|wallet)\b/, /(^|\/)\.secret\b/, /\bwallet[_-]?(?:backup|keys?)\b/i, /\bseed\.(?:txt|json)\b/i,
   /\.blackbox\//, /Library\/Keychains/,
 ];
 
@@ -26,7 +30,25 @@ const SECRET_PATTERNS = [
   /\bxox[abpr]-[A-Za-z0-9-]{10,}/g,
   /\bAIza[0-9A-Za-z_\-]{35}\b/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+  /\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\b/g,                 // Bitcoin WIF private key
+  /\[(?:\s*\d{1,3}\s*,){63}\s*\d{1,3}\s*\]/g,           // Solana keypair file (64 bytes as a JSON array)
 ];
+
+// Secrets only recognizable by what they are labelled as: a 64-hex value is a
+// transaction hash unless it is called a private key, and a mnemonic is a run
+// of ordinary words. group 1 is the value.
+const CONTEXT_SECRETS = [
+  { re: /\b(?:private[ _-]?key|priv[ _-]?key|secret[ _-]?key|signing[ _-]?key|deployer[ _-]?key)\b["'\]]?\s*[:=]?\s*["']?((?:0x)?[0-9a-fA-F]{64})\b/gi, phrase: false },
+  { re: /\b(?:mnemonic|seed[ _-]?phrase|recovery[ _-]?phrase|secret recovery phrase)\b["']?\s*[:=]?\s*["']?((?:[a-z]{3,8}[ \t]+){11,23}[a-z]{3,8})\b/gi, phrase: true },
+];
+const PHRASE_LENGTHS = [24, 21, 18, 15, 12];
+const normPhrase = (p) => {
+  const w = p.toLowerCase().split(/\s+/).filter(Boolean);
+  const n = PHRASE_LENGTHS.find((l) => l <= w.length);
+  return n ? w.slice(0, n).join(' ') : null;
+};
+// A web3 keystore file (encrypted private key): its presence means wallet material
+const KEYSTORE_JSON = /"kdf"\s*:\s*"(?:scrypt|pbkdf2)"|"ciphertext"\s*:\s*"[0-9a-f]{64,}"/i;
 const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 const PRIVATE_KEY_FULL = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
 const TOKEN = /[A-Za-z0-9_\-+\/=.:]{8,}/g;
@@ -124,6 +146,9 @@ const CREDENTIAL_CMD = new RegExp([
   String.raw`\bkubectl\s+get\s+secrets?\b`, String.raw`\bsecurity\s+find-(?:generic|internet)-password\b`,
   String.raw`\bop\s+(?:read|item\s+get)\b`, String.raw`\bvault\s+(?:kv\s+get|read)\b`, String.raw`\bheroku\s+auth:token\b`,
   String.raw`\bnpm\s+token\b`, String.raw`\bdocker\s+inspect\b`,
+  String.raw`\bcast\s+wallet\s+(?:new|vanity|private-key|decrypt-keystore|import)\b`, String.raw`\bsolana-keygen\s+(?:new|recover)\b`,
+  String.raw`\bgeth\s+account\s+(?:new|import)\b`, String.raw`\bbitcoin-cli\s+(?:dumpprivkey|dumpwallet|walletpassphrase)\b`,
+  String.raw`\bsui\s+keytool\s+(?:export|generate|import)\b`, String.raw`\bcat\s+[^\n;&|]*(?:\.foundry\/keystores|\.config\/solana)\b`,
 ].join('|'));
 // Text in a file the agent reads that tries to steer the agent: an instruction
 // override, or a request addressed to an AI to send secrets or data somewhere.
@@ -169,6 +194,20 @@ function urlCarriesData(text) {
   return null;
 }
 const FILE_READER_CMD = /\b(?:cat|head|tail|less|more|bat|sed|awk|grep|rg|ag|xxd|strings)\b/;
+// Commands that sign or broadcast a transaction, or move keys. A broadcast
+// cannot be undone, so these ask even outside the lethal trifecta (cfg.web3).
+const WEB3 = [
+  [/\bcast\s+(?:send|publish|mktx|rpc\s+eth_send\w*)\b/, 'cast signs or broadcasts a transaction'],
+  [/\bcast\s+wallet\s+sign\b/, 'cast signs a message with a wallet key'],
+  [/\bforge\s+script\b[^;&|]*--broadcast\b|\bforge\s+create\b|\bforge\s+verify-contract\b/, 'forge broadcasts a deployment'],
+  [/\bhardhat\s+(?:run|deploy|ignition\s+deploy|verify)\b[^;&|]*--network\s+(?!hardhat\b|localhost\b|local\b|anvil\b)\S+/i, 'hardhat deploys to a live network'],
+  [/\bsolana\s+(?:transfer|program\s+(?:deploy|write-buffer|close|set-upgrade-authority)|deploy|airdrop|stake-account|withdraw-stake|delegate-stake|close-vote-account)\b|\bspl-token\s+(?:transfer|burn|close|approve|authorize|mint)\b|\banchor\s+(?:deploy|migrate|upgrade)\b/, 'solana sends a transaction or deploys a program'],
+  [/\bsui\s+client\s+(?:transfer|transfer-sui|pay|pay-sui|call|publish|upgrade)\b|\baptos\s+(?:move\s+(?:publish|run)|account\s+transfer)\b|\bnear\s+(?:send|call|deploy|contract\s+deploy)\b|\bstarkli\s+(?:invoke|deploy|declare)\b|\bbitcoin-cli\s+(?:sendtoaddress|sendmany|sendrawtransaction|send|walletpassphrase|dumpprivkey)\b|\blncli\s+(?:sendpayment|sendcoins|payinvoice)\b|\bdfx\s+(?:canister\s+call|ledger\s+transfer)\b/, 'a chain CLI sends a transaction or opens a wallet'],
+  [/\b(?:eth_(?:sendRawTransaction|sendTransaction|sign|signTransaction|signTypedData\w*)|personal_(?:sign|sendTransaction|unlockAccount)|sendrawtransaction|sendTransaction|signTransaction)\b/, 'JSON-RPC signs or sends a transaction'],
+  [/--(?:private-key|mnemonic|mnemonic-passphrase|keystore-password)\b|\bPRIVATE_KEY=["']?(?:0x)?[0-9a-fA-F]{64}/, 'key material on the command line'],
+];
+const WEB3_MCP_SERVER = /(?:wallet|web3|ethereum|evm|solana|crypto|chain|defi|safe|metamask|phantom|uniswap|bitcoin)/i;
+const WEB3_MCP_TOOL = /(?:sign|send|broadcast|transfer|swap|approve|deploy|withdraw|bridge|stake|mint|burn)/i;
 const MCP_OUTBOUND = /(send|post|create|write|upload|publish|email|mail|message|comment|reply|push|share|invite|request|fetch|http)/i;
 
 function hostsIn(text) {
@@ -249,7 +288,30 @@ class Policy {
     const found = new Set();
     for (const re of SECRET_PATTERNS) for (const m of text.matchAll(re)) found.add(m[0]);
     for (const m of text.matchAll(ENV_SECRET_LINE)) found.add(m[2]);
+    for (const { re, phrase } of CONTEXT_SECRETS) {
+      for (const m of text.matchAll(re)) {
+        const v = phrase ? normPhrase(m[1]) : m[1];
+        if (v) found.add(v);
+      }
+    }
     return [...found];
+  }
+
+  // Runs of ordinary words that contain a known mnemonic, as [start, end, phrase].
+  phraseHits(sess, text) {
+    if (!sess || !(sess.phraseLens || []).length || !text) return [];
+    const known = new Set(sess.secrets);
+    const hits = [];
+    for (const run of text.matchAll(/[A-Za-z]{3,8}(?:[ \t]+[A-Za-z]{3,8}){11,}/g)) {
+      const words = [...run[0].matchAll(/[A-Za-z]+/g)];
+      for (const n of sess.phraseLens) {
+        for (let i = 0; i + n <= words.length; i++) {
+          const phrase = words.slice(i, i + n).map((w) => w[0].toLowerCase()).join(' ');
+          if (known.has(this.mac(phrase))) hits.push([run.index + words[i].index, run.index + words[i + n - 1].index + words[i + n - 1][0].length, phrase]);
+        }
+      }
+    }
+    return hits;
   }
 
   // Short public id for a secret: lets the ledger say "secret a91f… was read
@@ -260,6 +322,8 @@ class Policy {
   containsKnownSecret(sess, text) {
     if (!sess.secrets.length || !text) return null;
     const known = new Set(sess.secrets);
+    const ph = this.phraseHits(sess, text)[0];
+    if (ph) return this.fingerprint(ph[2]);
     for (const m of text.matchAll(TOKEN)) {
       const tok = m[0];
       if (known.has(this.mac(tok))) return this.fingerprint(tok);
@@ -275,6 +339,16 @@ class Policy {
   scrubText(text, sess) {
     let out = text.replace(PRIVATE_KEY_FULL, (m) => `[private-key:${this.fingerprint(m)}]`);
     for (const re of SECRET_PATTERNS) out = out.replace(re, (m) => `[secret:${this.fingerprint(m)}]`);
+    for (const { re, phrase } of CONTEXT_SECRETS) {
+      out = out.replace(re, (m, v) => {
+        const val = phrase ? normPhrase(v) : v;
+        return val ? m.replace(v, `[secret:${this.fingerprint(val)}]`) : m;
+      });
+    }
+    if (sess && (sess.phraseLens || []).length) {
+      const hits = this.phraseHits(sess, out);
+      for (const [a, b, ph] of hits.sort((x, y) => y[0] - x[0])) out = out.slice(0, a) + `[secret:${this.fingerprint(ph)}]` + out.slice(b);
+    }
     out = out.replace(ENV_SECRET_LINE, (m, k, v) => (v.startsWith('[secret:') || v.startsWith('[private-key:') ? m : m.replace(v, `[secret:${this.fingerprint(v)}]`)));
     if (sess && sess.secrets && sess.secrets.length) {
       const known = new Set(sess.secrets);
@@ -340,6 +414,7 @@ class Policy {
       const hosts = [...new Set([...hostsIn(raw), ...hostsIn(cmd)])];
       const external = hosts.filter((h) => !allowed(h, allow));
       const intended = external.length > 0 && external.every((h) => allowed(h, sessIntent));
+      for (const [re, why] of WEB3) if (both(re)) return { yes: true, intended, why, web3: true };
       for (const [re, why] of PUBLISH) if (both(re)) return { yes: true, intended, why };
       const net = both(NET_TOOL) || both(NET_CODE) || both(DEV_TCP);
       // a known downloader with a URL in it, or an unresolvable command word next to a URL ($C https://…)
@@ -370,6 +445,9 @@ class Policy {
       return { yes: false };
     }
     const server = this.mcpServer(tool);
+    if (server && WEB3_MCP_SERVER.test(server) && WEB3_MCP_TOOL.test(tool.slice(tool.lastIndexOf('__') + 2))) {
+      return { yes: true, why: `MCP tool ${tool} signs or sends a transaction`, web3: true };
+    }
     if (server && MCP_OUTBOUND.test(tool.slice(tool.lastIndexOf('__') + 2))) {
       return { yes: true, why: `MCP tool ${tool} sends data out` };
     }
@@ -474,6 +552,11 @@ class Policy {
       if (mode === 'deny' && !out.opaque) return deny('lethal-trifecta', reason);
       return { decision: 'ask', rule: 'lethal-trifecta', reason };
     }
+    // 4b. Signing or broadcasting a transaction moves value and cannot be undone.
+    if (out.web3 && this.cfg.web3 !== 'off') {
+      const reason = `${out.why}. Transactions cannot be undone.`;
+      return { decision: this.cfg.mode === 'monitor' || this.cfg.web3 === 'alert' ? 'alert' : 'ask', rule: 'web3-transaction', reason };
+    }
     // 5. After a denial, any outbound call needs the human.
     if (out.yes && sess.denied && this.cfg.mode !== 'monitor') {
       return { decision: 'ask', rule: 'post-denial', reason: `An earlier call in this session was blocked (${sess.denied.rule}); this one sends data out (${out.why}).` };
@@ -518,7 +601,7 @@ class Policy {
     const credCmd = (tool === 'Bash' || tool === 'PowerShell') && CREDENTIAL_CMD.test(input.command || '');
     if (pathHit) priv = `${tool} ${(input.file_path || input.command || input.path || '').slice(0, 80)}`;
     else if (credCmd) priv = `credential output of: ${(input.command || '').slice(0, 80)}`;
-    else if (secrets.length || PRIVATE_KEY_BLOCK.test(respText)) priv = `secret-looking value in ${tool} output`;
+    else if (secrets.length || PRIVATE_KEY_BLOCK.test(respText) || KEYSTORE_JSON.test(respText)) priv = `secret-looking value in ${tool} output`;
     else if (server && this.cfg.privateMcpServers.includes(server)) priv = `MCP ${tool}`;
     if (priv && !sess.private) {
       sess.private = { why: priv, at: new Date().toISOString(), tool_use_id: ev.tool_use_id };
@@ -537,6 +620,9 @@ class Policy {
       const set = new Set(sess.secrets);
       for (const s of secrets) set.add(this.mac(s));
       sess.secrets = [...set].slice(-500);
+      const lens = new Set(sess.phraseLens || []);
+      for (const s of secrets) if (s.includes(' ')) lens.add(s.split(' ').length);
+      sess.phraseLens = [...lens];
     }
     return { taints, secretsSeen: secrets.length };
   }
@@ -551,6 +637,7 @@ const AGENT_DENY_MESSAGE = 'Blocked by the local security policy. Do not retry o
 function redact(text) {
   let out = String(text == null ? '' : text);
   for (const re of SECRET_PATTERNS) out = out.replace(re, (m) => m.slice(0, 6) + '…[redacted]');
+  for (const { re } of CONTEXT_SECRETS) out = out.replace(re, (m, v) => m.replace(v, '[redacted]'));
   out = out.replace(ENV_SECRET_LINE, (m, k, v) => m.replace(v, '[redacted]'));
   out = out.replace(/\b([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["'`]?)([^\s"'`#]{6,})/g, '$1[redacted]');
   out = out.replace(/((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
