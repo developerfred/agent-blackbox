@@ -38,6 +38,9 @@ const DEFAULT_CONFIG = {
   // heredoc code, test runners after risky edits) while the lethal trifecta is
   // active: 'ask' (default) or 'alert' (record and tell the human, do not prompt)
   opaqueCode: 'ask',
+  // signing or broadcasting a transaction (cast send, forge script --broadcast,
+  // solana transfer, key material on a command line): 'ask' (default), 'alert' or 'off'
+  web3: 'ask',
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // hosts considered safe destinations for outbound traffic (suffix match)

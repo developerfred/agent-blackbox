@@ -20,12 +20,12 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] Encrypt payloads at rest, with per-session keys for real crypto-erasure (`purge --session`, `show`)
 - [x] Claude Code plugin packaging (hooks bundled in a plugin, marketplace in this repo)
 - [x] Running code counts as possible egress; publishing commands; obfuscation-resistant matching (external review)
-- [x] Evasion corpus as regression tests and `blackbox eval` (41/41 caught, 0/10 false alarms, 3 known gaps)
+- [x] Evasion corpus as regression tests and `blackbox eval` (62/62 caught, 0/20 false alarms, 0 known gaps open)
 - [x] Hook integrity checks in the daemon; `blackbox managed-settings` for admin-owned hooks
 - [x] Token scopes: the hooks' token can add events but not read or erase them
-- [ ] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
-- [ ] Crypto and Web3: seed phrases, private keys, wallet files, signing and broadcasting transactions
-- [ ] Close the known gaps: repository files as untrusted input, data in allowlisted URLs, pre-existing scripts
+- [x] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
+- [x] Crypto and Web3: seed phrases, private keys, wallet files, signing and broadcasting transactions
+- [x] Close the known gaps: repository files as untrusted input, data in allowlisted URLs, pre-existing scripts
 
 **Gate:** 3 outside developers use it for a week with fewer than 1 false alarm per day.
 
