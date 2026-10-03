@@ -1,12 +1,19 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noImplicitAny": true },
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
   "include": [
     "src/types.d.ts",
     "src/util.js",
     "src/local-http.js",
     "src/integrity.js",
     "src/vault.js",
-    "src/ledger.js"
+    "src/ledger.js",
+    "src/term.js",
+    "src/harden.js",
+    "src/mcp-report.js",
+    "src/skills-report.js",
+    "bin/hook.js"
   ]
 }

@@ -19,6 +19,7 @@ function runCase(c, mode = 'ask') {
   return { id: c.id, expect: c.expect, gap: c.gap || null, decision: d ? d.decision : 'none', rule: d ? d.rule : null, blocked, pass: (c.expect === 'block') === blocked };
 }
 
+/** @param {import('../src/types').Mode} [mode] */
 function runAll(mode) {
   const results = CASES.map((c) => runCase(c, mode));
   const attacks = results.filter((r) => r.expect === 'block' && !r.gap);

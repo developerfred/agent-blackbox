@@ -9,12 +9,20 @@ const os = require('os');
 const path = require('path');
 const { defined } = require('./util');
 
+/**
+ * @typedef {{ platform?: string, user?: string, data?: string, code?: string, node?: string, port?: number, human?: string, humanHome?: string, pkgRoot?: string }} HardenOptions
+ * @typedef {Required<HardenOptions>} Resolved
+ */
+
+/** Single-quote a value for sh. @param {string} s */
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+/** @param {string} s */
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const SERVICE = 'agent-blackbox';
 const LABEL = 'dev.agent-blackbox.recorder';
 
+/** @param {string} [platform] */
 function defaults(platform = process.platform) {
   const mac = platform === 'darwin';
   return {
@@ -25,6 +33,7 @@ function defaults(platform = process.platform) {
   };
 }
 
+/** @param {Pick<Resolved, 'platform' | 'user'>} o */
 function userCreation({ platform, user }) {
   if (platform === 'darwin') {
     return `if ! dscl . -read /Users/${user} >/dev/null 2>&1; then
@@ -49,6 +58,7 @@ fi
 GROUP=${user}`;
 }
 
+/** @param {Resolved} o */
 function serviceInstall(o) {
   const exec = `${o.node} ${o.code}/bin/blackbox.js daemon`;
   if (o.platform === 'darwin') {
@@ -102,8 +112,10 @@ systemctl restart ${SERVICE}.service`;
 }
 
 // The script that moves the recorder to its own user.
+/** @param {HardenOptions} [opts] */
 function hardenScript(opts = {}) {
   const d = defaults(opts.platform);
+  /** @type {Resolved} */
   const o = {
     ...d,
     ...defined(opts),
@@ -190,6 +202,7 @@ echo "The ledger from before stays in $HUMAN_HOME and is readable by the agent: 
 `;
 }
 
+/** @param {HardenOptions} [opts] */
 function undoScript(opts = {}) {
   const d = defaults(opts.platform);
   const o = { ...d, ...defined(opts), humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox') };
@@ -219,8 +232,10 @@ echo "service removed. The user ${o.user} and ${o.data} are kept; remove them by
  * @param {{ uid?: number | null, cfg?: Partial<import('./types').Config> }} [opts]
  */
 function checkHardened(health, { uid = typeof process.getuid === 'function' ? process.getuid() : null, cfg = {} } = {}) {
+  /** @type {string[]} */
   const lines = [];
   let ok = true;
+  /** @param {string} m */
   const bad = (m) => { ok = false; lines.push(`✘ ${m}`); };
   if (!health) { bad('the recorder is not running'); return { ok, lines }; }
   if (health.uid == null || uid == null) lines.push('· cannot compare user ids on this platform');
