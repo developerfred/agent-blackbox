@@ -19,7 +19,7 @@ function renderMcp(audits, summary, { color = false, all = false } = {}) {
       const cfgs = audits.filter((a) => a.name.toLowerCase().replace(/[^a-z0-9]+/g, '_') === m.server.toLowerCase().replace(/[^a-z0-9]+/g, '_'));
       const worst = cfgs.sort((a, b) => SEV[b.risk] - SEV[a.risk])[0];
       out.push(`  ${bold(m.server)}${m.plugin ? dim(` (plugin ${m.plugin})`) : ''}  ${worst ? riskTag(worst.risk) : dim('not in a local config: claude.ai connector, managed or removed')}`);
-      out.push(`      ${n(m.calls)} calls · ${n(m.sessions)} sessions · last ${String(m.lastUsed || '').slice(0, 10)}${m.outboundCalls ? ' · ' + yellow(`${n(m.outboundCalls)} sent or changed data`) : ' · ' + dim('read-only')}${m.errors ? ' · ' + red(`${n(m.errors)} failed`) : ''}`);
+      out.push(`      ${n(m.calls)} ${m.calls === 1 ? "call" : "calls"} · ${n(m.sessions)} ${m.sessions === 1 ? "session" : "sessions"} · last ${String(m.lastUsed || '').slice(0, 10)}${m.outboundCalls ? ' · ' + yellow(`${n(m.outboundCalls)} sent or changed data`) : ' · ' + dim('read-only')}${m.errors ? ' · ' + red(`${n(m.errors)} failed`) : ''}`);
       out.push(dim(`      tools: ${m.tools.slice(0, 8).map((t) => `${t.name}${t.outbound ? '↗' : ''} ${t.calls}`).join(' · ')}${m.tools.length > 8 ? ` · +${m.tools.length - 8} more` : ''}`));
       for (const a of cfgs) {
         out.push(dim(`      ${a.client} ${a.scope} · ${defLine(a).slice(0, 110)}`));
