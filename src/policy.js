@@ -87,7 +87,7 @@ function textOf(v, max = 2_000_000) {
 function inputText(toolInput) {
   if (!toolInput) return '';
   const t = toolInput;
-  return [t.command, t.file_path, t.notebook_path, t.path, t.url, t.pattern, t.glob]
+  return [t.command, t.file_path, t.notebook_path, t.path, t.url, t.pattern, t.glob, t.skill]
     .filter((x) => typeof x === 'string').join('\n');
 }
 

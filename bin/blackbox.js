@@ -185,6 +185,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox timeline [id|--last] [--otel]
   blackbox verify [ledger]    check hashes, chain links, signatures, blobs
   blackbox anchor             print the signed chain head to publish elsewhere
+  blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
+                              audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N]   erase stored payloads (older than N days, or all); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
@@ -294,7 +296,9 @@ async function main() {
       const { scan, renderReport, renderCard, defaultProjectsDir } = require('../src/scan');
       const days = Number(opt('--days') || 30);
       if (!(days > 0)) throw new Error('--days must be a positive number');
-      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days });
+      let audits = null;
+      try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* skills audit is optional */ }
+      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits });
       // never write into Claude Code's own data directory
       const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
       const safeOut = (file) => {
@@ -322,6 +326,29 @@ async function main() {
         if (card) console.log(dim(`  card written to ${card} (aggregate numbers only)`));
         if (html) console.log(dim(`  report written to ${html} (local only; it names projects and hosts)`));
         else console.log(dim(`  visual report: blackbox scan --html`));
+      }
+      return;
+    }
+    case 'skills': {
+      const { auditAll, savePins } = require('../src/skills');
+      const extra = args.flatMap((a, i) => (a === '--path' && args[i + 1] ? [args[i + 1]] : []));
+      const pinsFile = path.join(P.home, 'skill-pins.json');
+      const audits = auditAll({ extra, pinsFile });
+      if (flag('--pin')) {
+        savePins(pinsFile, audits);
+        console.log(green(`pinned ${audits.length} skills`) + dim(` → ${pinsFile}`));
+        return;
+      }
+      if (flag('--json')) {
+        console.log(JSON.stringify(audits.map(({ files, ...a }) => a), null, 2));
+      } else {
+        console.log(require('../src/skills-report').renderSkills(audits, { color: tty, all: flag('--all') }));
+      }
+      const failOn = opt('--fail-on');
+      if (failOn) {
+        const min = failOn === 'medium' ? 2 : 3;
+        const sev = { high: 3, medium: 2, low: 1, none: 0 };
+        if (audits.some((a) => sev[a.risk] >= min)) process.exitCode = 1;
       }
       return;
     }

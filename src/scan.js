@@ -122,7 +122,7 @@ function humanPrompt(content) {
   return t || null;
 }
 
-function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig() } = {}) {
+function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null } = {}) {
   const policy = new Policy(cfg, { sessions: {} }, crypto.randomBytes(32));
   const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
 
@@ -135,6 +135,14 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
   const dayCats = new Map(); // YYYY-MM-DD -> Map(category -> calls)
   const programs = new Map();
   const hosts = new Map(); // host -> { calls, kind }
+  const skillUse = new Map(); // name -> { model, user, sessions:Set }
+  const useSkill = (name, who, sid) => {
+    const k = String(name).replace(/^\//, '').trim();
+    if (!k) return;
+    const r = skillUse.get(k) || { model: 0, user: 0, sessions: new Set() };
+    r[who]++; r.sessions.add(sid);
+    skillUse.set(k, r);
+  };
   const allowed = (h) => (cfg.allowHosts || []).some((a) => h === a || h.endsWith('.' + a));
   const flagged = [];
   const flaggedKey = new Set();
@@ -177,6 +185,7 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           const tool_input = b.input && typeof b.input === 'object' ? b.input : {};
           t.toolCalls++; s.tools++; proj.toolCalls++;
           toolCounts.set(b.name, (toolCounts.get(b.name) || 0) + 1);
+          if (b.name === 'Skill') useSkill(tool_input.skill || tool_input.name || tool_input.command || '', 'model', session_id);
           const cat = categoryOf(b.name);
           bump(catCounts, cat);
           bump(proj.categories, cat);
@@ -213,6 +222,10 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           }
         }
       } else {
+        // a slash command the human typed: <command-name>/deploy</command-name>
+        const raw = typeof content === 'string' ? content : Array.isArray(content) ? textOfResult(content) : '';
+        const cmd = /<command-name>\/?([^<\s]+)<\/command-name>/.exec(raw);
+        if (cmd) useSkill(cmd[1], 'user', session_id);
         const prompt = e.isMeta ? null : humanPrompt(content);
         if (prompt != null) {
           if (typeof policy.userPrompt === 'function') { try { policy.userPrompt({ session_id, prompt }); } catch { /* optional */ } }
@@ -264,6 +277,12 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
     daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
     shellPrograms: top(programs, 15).map(([name, count]) => ({ name, count })),
     hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
+    skills: [...skillUse.entries()].sort((a, b) => (b[1].model + b[1].user) - (a[1].model + a[1].user)).slice(0, 25).map(([name, r]) => {
+      const a = audits ? require('./skills').riskFor(audits, name) : null;
+      return { name, calls: r.model + r.user, byModel: r.model, byUser: r.user, sessions: r.sessions.size,
+        risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
+        rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
+    }),
     projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
       sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size,
       categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
@@ -321,6 +340,15 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
       const ci = CATEGORIES.findIndex((cdef) => cdef.id === t.category);
       out.push(`    ${String(n(t.count)).padStart(7)}  ${paint(ci < 0 ? 6 : ci, '■')} ${t.name}`);
     }
+  }
+  if ((S.skills || []).length) {
+    out.push('');
+    out.push(bold('  skills used') + dim('   (model = the agent chose it, you = slash command)'));
+    for (const k of S.skills.slice(0, 10)) {
+      const risk = k.risk == null ? dim('not installed here') : k.risk === 'high' ? red('high risk') : k.risk === 'medium' ? yellow('medium risk') : k.risk === 'low' ? dim('low') : green('clean');
+      out.push(`    ${String(n(k.calls)).padStart(7)}  ${k.name.slice(0, 32).padEnd(32)} ${dim(`model ${k.byModel} · you ${k.byUser}`.padEnd(18))} ${risk}${k.rules && k.rules.length ? dim(' · ' + k.rules.join(', ')) : ''}`);
+    }
+    out.push(dim(`    audit every installed skill: blackbox skills`));
   }
   if ((S.shellPrograms || []).length) {
     out.push('');
