@@ -275,6 +275,7 @@ class Policy {
   session(id) {
     const s = (this.state.sessions[id] ||= { private: null, untrusted: null, secrets: [] });
     s.secrets ||= [];
+    if (!s.secrets.length) s.secretLens ||= []; // sessions saved before this field existed keep no filter
     s.written ||= [];   // files the agent wrote or downloaded this session
     s.netFiles ||= [];  // ...of which contain network code
     return s;
@@ -321,16 +322,25 @@ class Policy {
   // Returns the fingerprint of the first known secret found in text, or null.
   containsKnownSecret(sess, text) {
     if (!sess.secrets.length || !text) return null;
-    const known = new Set(sess.secrets);
     const ph = this.phraseHits(sess, text)[0];
     if (ph) return this.fingerprint(ph[2]);
+    const hit = this.knownMatcher(sess);
     for (const m of text.matchAll(TOKEN)) {
       const tok = m[0];
-      if (known.has(this.mac(tok))) return this.fingerprint(tok);
+      if (hit(tok)) return this.fingerprint(tok);
       // also catch the value inside KEY=value or key:value
-      for (const part of tok.split(/[=:]/)) if (part.length >= 8 && known.has(this.mac(part))) return this.fingerprint(part);
+      for (const part of tok.split(/[=:]/)) if (hit(part)) return this.fingerprint(part);
     }
     return null;
+  }
+
+  // Is this token a secret the session already learned? An HMAC per token is
+  // the cost of scanning text, so tokens whose length no known secret has are
+  // skipped (secretLens is a superset of the lengths, never a subset).
+  knownMatcher(sess) {
+    const known = new Set(sess.secrets);
+    const lens = sess.secretLens ? new Set(sess.secretLens) : null;
+    return (t) => t.length >= 8 && (!lens || lens.has(t.length)) && known.has(this.mac(t));
   }
 
   // Replace secrets with [secret:<fingerprint>] before anything is written to
@@ -351,8 +361,7 @@ class Policy {
     }
     out = out.replace(ENV_SECRET_LINE, (m, k, v) => (v.startsWith('[secret:') || v.startsWith('[private-key:') ? m : m.replace(v, `[secret:${this.fingerprint(v)}]`)));
     if (sess && sess.secrets && sess.secrets.length) {
-      const known = new Set(sess.secrets);
-      const hit = (t) => t.length >= 8 && known.has(this.mac(t));
+      const hit = this.knownMatcher(sess);
       out = out.replace(TOKEN, (tok) => {
         if (hit(tok)) return `[secret:${this.fingerprint(tok)}]`;
         if (!/[=:]/.test(tok)) return tok;
@@ -620,6 +629,7 @@ class Policy {
       const set = new Set(sess.secrets);
       for (const s of secrets) set.add(this.mac(s));
       sess.secrets = [...set].slice(-500);
+      if (sess.secretLens) sess.secretLens = [...new Set([...sess.secretLens, ...secrets.map((x) => x.length)])];
       const lens = new Set(sess.phraseLens || []);
       for (const s of secrets) if (s.includes(' ')) lens.add(s.split(' ').length);
       sess.phraseLens = [...lens];

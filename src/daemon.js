@@ -150,7 +150,17 @@ class Daemon {
     this.state.bodyIndexOffset ||= 0;
   }
 
+  // The in-memory state is what the policy uses; the file only matters after a
+  // restart, so bursts of changes are written once, off the request path.
   saveState() {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.safe(() => this.flushState()), 250);
+    this.saveTimer.unref();
+  }
+
+  flushState() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
     const tmp = P.state + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
     fs.renameSync(tmp, P.state);
@@ -158,10 +168,20 @@ class Daemon {
 
   // ---- in-memory index for the timeline UI ----
   indexLedger() {
+    this.lines = new Map(); // seq -> [byte offset, byte length]: payload lookups read one line, not the file
     if (!fs.existsSync(P.ledger)) return;
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      try { this.index(JSON.parse(line)); } catch { /* verify reports it */ }
+    const buf = fs.readFileSync(P.ledger);
+    for (let off = 0; off < buf.length;) {
+      let end = buf.indexOf(10, off);
+      if (end < 0) end = buf.length;
+      if (end > off) {
+        try {
+          const rec = JSON.parse(buf.toString('utf8', off, end));
+          this.lines.set(rec.seq, [off, end - off]);
+          this.index(rec);
+        } catch { /* verify reports it */ }
+      }
+      off = end + 1;
     }
   }
 
@@ -184,7 +204,9 @@ class Daemon {
   }
 
   append(kind, fields) {
+    const at = this.ledger.size;
     const rec = this.ledger.append(kind, fields);
+    this.lines.set(rec.seq, [at, this.ledger.size - at - 1]);
     this.index(rec);
     return rec;
   }
@@ -348,8 +370,7 @@ class Daemon {
 
   // Decrypted payload of one record, for the human reviewing the evidence.
   payload(seq) {
-    const s = [...this.sessions.values()].flatMap((x) => x.records).find((r) => r.seq === seq);
-    const rec = s || this.findRecord(seq);
+    const rec = this.findRecord(seq);
     if (!rec) return { status: 404, body: { error: 'unknown record' } };
     const out = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
     for (const f of ['payload', 'request_blob', 'response_blob']) {
@@ -365,12 +386,14 @@ class Daemon {
     return { status: 200, body: out };
   }
 
+  // One record by sequence number, read straight from its place in the file.
   findRecord(seq) {
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      try { const r = JSON.parse(line); if (r.seq === seq) return r; } catch { /* skip */ }
-    }
-    return null;
+    const at = this.lines.get(seq);
+    if (!at) return null;
+    const buf = Buffer.alloc(at[1]);
+    const fd = fs.openSync(P.ledger, 'r');
+    try { fs.readSync(fd, buf, 0, at[1], at[0]); } finally { fs.closeSync(fd); }
+    try { return JSON.parse(buf.toString('utf8')); } catch { return null; }
   }
 
   drainSpool() {
@@ -577,7 +600,7 @@ async function runDaemon() {
   d.log(`listening on 127.0.0.1:${P.port}, ledger seq ${d.ledger.seq}, mode ${d.cfg.mode}`);
   const stop = () => {
     d.safe(() => d.pollBodies());
-    d.safe(() => d.saveState());
+    d.safe(() => d.flushState());
     try { if (fs.readFileSync(P.pid, 'utf8') === String(process.pid)) fs.unlinkSync(P.pid); } catch { /* gone */ }
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();

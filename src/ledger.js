@@ -52,6 +52,7 @@ class Ledger {
     this.P = P;
     this.vault = vault;
     this.keys = loadOrCreateKeys(P);
+    this.size = fs.existsSync(P.ledger) ? fs.statSync(P.ledger).size : 0; // bytes written so far
     const last = readLastLine(P.ledger);
     if (last) {
       const rec = JSON.parse(last);
@@ -108,7 +109,9 @@ class Ledger {
     const hash = sha256(canon(rec));
     const sig = crypto.sign(null, Buffer.from(hash, 'hex'), this.keys.priv).toString('base64');
     const full = { ...rec, hash, sig };
-    fs.appendFileSync(this.P.ledger, JSON.stringify(full) + '\n', { mode: 0o600 });
+    const line = JSON.stringify(full) + '\n';
+    fs.appendFileSync(this.P.ledger, line, { mode: 0o600 });
+    this.size += Buffer.byteLength(line);
     this.seq = rec.seq;
     this.head = hash;
     this.last = full;
