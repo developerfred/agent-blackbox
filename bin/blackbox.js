@@ -185,6 +185,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox timeline [id|--last] [--otel]
   blackbox verify [ledger]    check hashes, chain links, signatures, blobs
   blackbox anchor             print the signed chain head to publish elsewhere
+  blackbox share [--days N] [--out dir] [--no-video]
+                              images and a 10 s video for X / TikTok / Reels (numbers only)
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
   blackbox mode ask|deny|monitor
@@ -327,6 +329,22 @@ async function main() {
         if (html) console.log(dim(`  report written to ${html} (local only; it names projects and hosts)`));
         else console.log(dim(`  visual report: blackbox scan --html`));
       }
+      return;
+    }
+    case 'share': {
+      const { scan, defaultProjectsDir } = require('../src/scan');
+      const days = Number(opt('--days') || 30);
+      let audits = null;
+      try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* optional */ }
+      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits });
+      const out = path.resolve(opt('--out') || 'blackbox-share');
+      const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+      if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write under ${claudeDir}`);
+      console.log(bold('Making your share kit') + dim(` · last ${days} days · ${summary.toolCalls} tool calls`));
+      const { made } = await require('../src/share').makeShareKit(summary, out, { video: !flag('--no-video'), log: (m) => console.log(dim('  ' + m)) });
+      for (const f of made) console.log(`  ${green('✔')} ${path.join(out, f)}`);
+      console.log(dim('\n  Only totals and tool categories are included: no project names, hosts, commands or secrets.'));
+      console.log(dim('  Suggested post: caption.txt'));
       return;
     }
     case 'skills': {
