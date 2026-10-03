@@ -202,6 +202,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
+  blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N | --session ID]
                               crypto-erase payloads (destroy session keys); the chain stays valid
@@ -227,7 +228,10 @@ async function main() {
       const h = await health();
       const cfg = loadConfig();
       console.log(h ? `${green('●')} recording · pid ${h.pid} · ledger #${h.seq} · mode ${h.mode}` : `${red('●')} not running`);
-      console.log(`  installed: ${cfg.installed ? `yes (${cfg.installed.settings})` : 'no'}   data: ${P.home}`);
+      const { checkHooks } = require('../src/integrity');
+      const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: (cfg.installed || {}).hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
+      console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${P.home}`);
+      for (const p of ig.problems) console.log(red(`  ✘ ${p}`));
       return;
     }
     case 'install': {
@@ -311,6 +315,16 @@ async function main() {
       const r = await call('GET', `/api/payload?seq=${seq}`);
       if (r.status !== 200) throw new Error((r.body && r.body.error) || `failed (${r.status})`);
       console.log(JSON.stringify(r.body, null, 2));
+      return;
+    }
+    case 'managed-settings': {
+      // hooks owned by an admin: print what to put in the managed settings file
+      const { managedSettingsPath, managedSettingsSnippet } = require('../src/integrity');
+      const { HOOK_EVENTS, stablePath } = require('../src/install');
+      const command = `"${stablePath(process.execPath)}" "${stablePath(path.resolve(__dirname, 'hook.js'))}" # agent-blackbox-hook`;
+      console.log(dim(`# Merge into ${managedSettingsPath()} (needs an admin account; on a managed fleet, push it with MDM).`));
+      console.log(dim('# Hooks defined there cannot be edited or removed from the user\'s own settings files.'));
+      console.log(JSON.stringify(managedSettingsSnippet({ command, events: HOOK_EVENTS }), null, 2));
       return;
     }
     case 'eval': {

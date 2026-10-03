@@ -82,12 +82,15 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | `secret-egress` | A secret value read earlier in the session appears in an outbound call (Bash, WebFetch, WebSearch, MCP), toward any host | deny |
 | `sensitive-egress` | One command both reads a sensitive file (`.env`, `~/.ssh`, keystores…) and sends data out | deny |
 | `lethal-trifecta` | The session touched private data **and** untrusted content, and now calls a host the user did not name | ask (configurable) |
+| `lethal-trifecta` (code) | Same, but the call runs code the policy cannot inspect: a script the agent wrote or downloaded, inline or heredoc code, `\| sh`, `eval`, a planted git hook, a test runner after risky edits | ask (`opaqueCode`) |
+| `secret-to-code` | A secret read earlier is passed to such code | ask |
 | `post-denial` | Something was already denied in this session, and a call goes out | ask |
-| `self-protection` | The agent touches `~/.blackbox` | deny |
-| `hook-tamper` | The agent edits `~/.claude/settings.json` | ask |
+| `self-protection` | The agent touches `~/.blackbox` (quotes, backslashes and globs undone first) | deny |
+| `hook-tamper` | The agent edits Claude Code settings or plugin files; the daemon also checks the hooks every minute | ask / alert |
 
 - **Private data**: sensitive paths, secret-looking values in tool output, and commands that print credentials (`env`, `printenv`, `gh auth token`, `aws secretsmanager …`, `kubectl get secret`, …).
 - **Untrusted content**: WebFetch, WebSearch, MCP tool results, and the output of network commands.
+- **Outbound**: network tools, network code in interpreters, downloads with a URL (`git clone`, `npm install <url>`, `pip install git+…`, `open <url>`), and publishing commands (`git push`, `gh gist`/`issue`/`pr`/`api` writes, `npm publish`, S3/GCS uploads, mail) even toward allowlisted hosts. Commands are matched before and after undoing quotes, backslashes, `$'\x..'` strings and `$IFS`.
 - **User intent**: hosts you type in your own prompt are allowed destinations for that session. Pasted text and turns Claude Code starts on its own never widen the list.
 - **Denials stay quiet**: when a call is denied, the agent is told only that the policy blocked it. The rule, the fingerprint and the reason go to you and to the ledger, so a prompt injection cannot learn what is protected by probing.
 
@@ -110,7 +113,8 @@ A recorder that sees everything is itself a target. agent-blackbox stores proof 
 - **Secrets are replaced before anything is written.** API keys, tokens, private keys and `.env`-style `KEY=value` pairs become `[secret:<fingerprint>]` in every summary and payload. The fingerprint is an HMAC with a per-install key, so the ledger can say "secret `a91f…` was read at #5 and tried to leave at #12" without holding the value.
 - **Every endpoint needs a token**, including reads. `blackbox ui` opens the page with it in the URL fragment, which is never sent over the network. Other local users and processes get `401`.
 - **Files are private** (`0700` folders, `0600` files), and the agent is blocked from `~/.blackbox` through its tools.
-- **Erase on demand.** `blackbox purge [--days N]` deletes stored payloads. The chain keeps every hash and still verifies; erased content shows as "blob missing".
+- **Encrypted at rest, one key per session.** Payloads are sealed with AES-256-GCM under a random key for their session, stored wrapped by a master key. Copies of the folder (backups, Time Machine, cloud sync, a tool indexing your disk) hold only ciphertext.
+- **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload.
 - **Raw model bodies are off by default.** With `--raw`, Claude Code itself writes each body in clear text to `~/.blackbox/api-bodies/`; the recorder scrubs and moves it as soon as Claude Code indexes it (at most ~3 minutes later).
 
 ## The evidence
@@ -118,8 +122,8 @@ A recorder that sees everything is itself a target. agent-blackbox stores proof 
 ```
 ~/.blackbox/
   ledger.jsonl     one record per line: seq, ts, kind, summary, payload digest, prev, hash, sig
-  blobs/           scrubbed payloads, content-addressed by sha256 (mode 0600)
-  keys/            Ed25519 signing key (only the daemon uses it)
+  blobs/<key>/     scrubbed payloads, encrypted per session, named by the sha256 of their content
+  keys/            Ed25519 signing key, master key, wrapped session keys (only the daemon uses them)
   anchors.jsonl    chain heads you exported with `blackbox anchor`
 ```
 
@@ -135,13 +139,18 @@ The design follows what recent work recommends: deterministic policy on actions,
 [Agent Flight Recorder](https://arxiv.org/html/2609.01931) (tamper-evident audit trails),
 and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why we publish no protection rate until it has been measured against adaptive attacks. See [ROADMAP.md](ROADMAP.md).
 
-## Honest limitations (v0.2)
+## How well does the policy work?
 
-- **Any process running as your OS user can read `~/.blackbox`** (scrubbed, but prompts and commands are there) and its signing key. The agent is blocked through its tools, not by the OS.
-- **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it, but an admin can remove the hooks. On company machines use Claude Code managed settings (`allowManagedHooksOnly`).
+`blackbox eval` runs the policy against [eval/corpus.js](eval/corpus.js): known evasions (quote splitting, `$IFS`, ANSI-C strings, writing a script and then running it, heredocs, `base64 | sh`, planted git hooks, publishing through `gh`, glob paths to the evidence) and benign commands that must stay quiet. Today: 41 of 41 attacks caught, 0 of 10 false alarms, and 3 known gaps listed openly. These are static attacks we know about; an attacker who studies the policy will find others. Add one to the corpus, or report it (SECURITY.md).
+
+## Honest limitations (v0.3)
+
+- **Same-user processes are not stopped by the OS.** Until you run the recorder as a dedicated user (`blackbox harden`), any process running as you, including a command the agent finds a way around the policy to run, can read the master and signing keys, decrypt payloads, and rewrite the ledger and re-sign it. The rules protecting `~/.blackbox` are pattern matching on tool arguments, not an OS boundary. What still holds: a rewrite cannot match a chain head you already published with `blackbox anchor`, and erased session keys stay erased.
+- **The firewall catches known patterns, not every attack.** It stops naive exfiltration and the evasions in the corpus. An adaptive attacker can get through, for example with instructions planted in a repository file (Read is not marked untrusted) or a script that existed before the session. Treat it as friction and evidence, not a guarantee.
+- **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it. Removing the hooks or setting `disableAllHooks` is detected and recorded (the daemon checks once a minute and on every session start), but not prevented. To make the hooks admin-owned, put them in Claude Code managed settings: `blackbox managed-settings` prints the block.
 - **Fail-open by default.** If the recorder is unreachable, tools still run (set `"failMode": "closed"` to deny instead).
 - **HTTPS payloads of shell commands are not visible**; the command line is, before it runs, and that is where the policy acts.
-- **Heuristics, not proofs.** Secret detection matches patterns and exact values; encoded or split secrets can slip through. Not yet measured against adaptive attacks.
+- **Heuristics, not proofs.** Secret detection matches patterns and exact values; encoded or split secrets can slip through.
 - **User intent is inferred from your prompt text.** If you name a host, calls to it are not asked about (secrets are still denied).
 - Claude Code only for now.
 
