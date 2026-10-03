@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { Policy, redact } = require('./policy');
+const { Policy, redact, hostsIn } = require('./policy');
 const { loadConfig } = require('./paths');
 
 const DAY = 86400000;
@@ -17,6 +17,49 @@ const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'le
 const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
 // Rules worth listing per session in --details (plain egress is too common).
 const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper']);
+
+// Tool categories, in a fixed order: the order is also the color order in the
+// HTML report, so a category keeps its color everywhere.
+const CATEGORIES = [
+  { id: 'shell', label: 'Shell' },
+  { id: 'read', label: 'Read & search' },
+  { id: 'edit', label: 'Edit & write' },
+  { id: 'web', label: 'Web' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'agents', label: 'Agents & planning' },
+  { id: 'other', label: 'Other' },
+];
+function categoryOf(name) {
+  if (/^mcp__/.test(name)) return 'mcp';
+  if (/^(Bash|PowerShell|BashOutput|KillShell|KillBash|Monitor)$/.test(name)) return 'shell';
+  if (/^(Read|Grep|Glob|LS|NotebookRead|ListMcpResourcesTool|ReadMcpResourceTool)$/.test(name)) return 'read';
+  if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(name)) return 'edit';
+  if (/^(WebFetch|WebSearch)$/.test(name)) return 'web';
+  if (/^(Task|Agent|Todo\w*|Task\w+|Skill|Workflow|SendMessage|ExitPlanMode|EnterPlanMode|EnterWorktree|ExitWorktree)$/.test(name)) return 'agents';
+  return 'other';
+}
+
+// First program of each segment of a shell command (`cd x && npm test | tee`
+// -> cd, npm, tee). Names only: arguments never leave this function.
+function programsOf(cmd) {
+  const out = [];
+  // Inline scripts are not programs: drop heredoc bodies and quoted strings.
+  const text = String(cmd || '')
+    .split(/<<-?\s*['"]?[A-Za-z_]+['"]?/)[0]
+    .replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, ' ');
+  for (const seg of text.split(/&&|\|\||[;|\n]/)) {
+    const words = seg.trim().replace(/^\(+/, '').split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+    let w = words[0];
+    if (w === 'sudo' || w === 'time' || w === 'exec' || w === 'nohup') w = words[1];
+    if (!w) continue;
+    w = w.replace(/^["']|["']$/g, '').split('/').pop();
+    if (/^[A-Za-z0-9._+-]{1,32}$/.test(w)) out.push(w);
+  }
+  return out;
+}
+
+const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
+const top = (map, k) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
 
 function defaultProjectsDir() {
   const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -88,6 +131,11 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
   // numbers follow each entry's own cwd rather than one cwd per session.
   const projects = new Map(); // basename -> { sessions:Set, toolCalls, flagged:Set }
   const toolCounts = new Map();
+  const catCounts = new Map();
+  const dayCats = new Map(); // YYYY-MM-DD -> Map(category -> calls)
+  const programs = new Map();
+  const hosts = new Map(); // host -> { calls, kind }
+  const allowed = (h) => (cfg.allowHosts || []).some((a) => h === a || h.endsWith('.' + a));
   const flagged = [];
   const flaggedKey = new Set();
   const t = { toolCalls: 0, outboundCalls: 0, wouldDenyCalls: 0, wouldAskCalls: 0, malformedLines: 0 };
@@ -119,7 +167,7 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
       const s = sess(session_id, e);
       const project = e.cwd ? path.basename(e.cwd) : '(unknown)';
       let proj = projects.get(project);
-      if (!proj) projects.set(project, (proj = { sessions: new Set(), toolCalls: 0, flagged: new Set() }));
+      if (!proj) projects.set(project, (proj = { sessions: new Set(), toolCalls: 0, flagged: new Set(), categories: new Map() }));
       proj.sessions.add(session_id);
 
       if (e.type === 'assistant') {
@@ -129,6 +177,23 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           const tool_input = b.input && typeof b.input === 'object' ? b.input : {};
           t.toolCalls++; s.tools++; proj.toolCalls++;
           toolCounts.set(b.name, (toolCounts.get(b.name) || 0) + 1);
+          const cat = categoryOf(b.name);
+          bump(catCounts, cat);
+          bump(proj.categories, cat);
+          const dk = e.timestamp ? String(e.timestamp).slice(0, 10) : null;
+          if (dk) { if (!dayCats.has(dk)) dayCats.set(dk, new Map()); bump(dayCats.get(dk), cat); }
+          if (cat === 'shell' && typeof tool_input.command === 'string') {
+            for (const prog of programsOf(tool_input.command)) bump(programs, prog);
+          }
+          const targets = b.name === 'WebFetch' && typeof tool_input.url === 'string' ? hostsIn(tool_input.url)
+            : cat === 'shell' && typeof tool_input.command === 'string' ? hostsIn(tool_input.command) : [];
+          for (const h of new Set(targets)) {
+            const rec = hosts.get(h) || { calls: 0, kind: null };
+            rec.calls++;
+            const intent = (policy.session(session_id).intentHosts || []).some((a) => h === a || h.endsWith('.' + a));
+            rec.kind = allowed(h) ? 'allowlisted' : intent ? 'named by you' : 'external';
+            hosts.set(h, rec);
+          }
           pending.set(b.id, { name: b.name, input: tool_input, session_id });
           let d = null;
           try { d = policy.preToolUse({ session_id, tool_name: b.name, tool_input, tool_use_id: b.id }); } catch { /* odd input */ }
@@ -194,8 +259,15 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
     wouldDenySessions: count((s) => s.rules.has('secret-egress') || s.rules.has('sensitive-egress')),
     flaggedSessions: count((s) => s.rules.size > 0),
     rules: ruleCounts,
-    topTools: [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, count]) => ({ name, count })),
-    projects: Object.fromEntries([...projects].map(([name, p]) => [name, { sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size }])),
+    topTools: top(toolCounts, 15).map(([name, count]) => ({ name, count, category: categoryOf(name) })),
+    categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, catCounts.get(c.id) || 0])),
+    daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
+    shellPrograms: top(programs, 15).map(([name, count]) => ({ name, count })),
+    hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
+    projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
+      sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size,
+      categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
+    }])),
     malformedLines: t.malformedLines,
     flagged: flagged.sort((a, b) => String(a.date).localeCompare(String(b.date))),
   };
@@ -228,17 +300,62 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
   if (S.rules['self-protection'] || S.rules['hook-tamper']) {
     row('settings / evidence tampering attempts', warn((S.rules['self-protection'] || 0) + (S.rules['hook-tamper'] || 0), red));
   }
+  // 256-color approximations of the report's category colors, same order
+  const CAT_ANSI = [33, 208, 36, 214, 211, 28, 99];
+  const paint = (i, str) => (color ? `\x1b[38;5;${CAT_ANSI[i]}m${str}\x1b[0m` : str);
+  const cats = CATEGORIES.map((cdef, i) => ({ ...cdef, i, v: (S.categories || {})[cdef.id] || 0 }));
+  const catMax = Math.max(1, ...cats.map((x) => x.v));
+  if (S.toolCalls) {
+    out.push('');
+    out.push(bold('  tool calls by category'));
+    for (const x of cats) {
+      const w = Math.round((x.v / catMax) * 28);
+      const share = Math.round((x.v / S.toolCalls) * 100);
+      out.push(`    ${x.label.padEnd(18)} ${paint(x.i, '█'.repeat(w) || (x.v ? '▏' : ''))}${' '.repeat(Math.max(0, 29 - Math.max(w, x.v ? 1 : 0)))}${String(n(x.v)).padStart(6)}  ${dim(String(share).padStart(3) + '%')}`);
+    }
+  }
   if (S.topTools.length) {
     out.push('');
     out.push(bold('  top tools'));
-    for (const t of S.topTools.slice(0, 8)) out.push(`    ${String(n(t.count)).padStart(7)}  ${t.name}`);
+    for (const t of S.topTools.slice(0, 8)) {
+      const ci = CATEGORIES.findIndex((cdef) => cdef.id === t.category);
+      out.push(`    ${String(n(t.count)).padStart(7)}  ${paint(ci < 0 ? 6 : ci, '■')} ${t.name}`);
+    }
+  }
+  if ((S.shellPrograms || []).length) {
+    out.push('');
+    out.push(bold('  shell programs'));
+    out.push('    ' + S.shellPrograms.slice(0, 10).map((p) => `${p.name} ${dim(n(p.count))}`).join('  ·  '));
+  }
+  if ((S.hosts || []).length) {
+    out.push('');
+    out.push(bold('  network destinations'));
+    for (const h of S.hosts.slice(0, 8)) {
+      const kind = h.kind === 'external' ? yellow(h.kind) : dim(h.kind);
+      out.push(`    ${String(n(h.calls)).padStart(7)}  ${h.host.slice(0, 40).padEnd(40)} ${kind}`);
+    }
   }
   const projects = Object.entries(S.projects).sort((a, b) => b[1].toolCalls - a[1].toolCalls);
   if (projects.length) {
     out.push('');
-    out.push(bold('  projects'));
+    out.push(bold('  projects') + dim('   (bar: share of each category)'));
     for (const [name, p] of projects.slice(0, 10)) {
-      out.push(`    ${name.slice(0, 32).padEnd(32)} ${String(p.sessions).padStart(4)} sessions ${String(n(p.toolCalls)).padStart(7)} calls${p.flagged ? '  ' + red(`${p.flagged} flagged`) : ''}`);
+      const pc = p.categories || {};
+      let bar = '';
+      if (p.toolCalls) {
+        let used = 0;
+        CATEGORIES.forEach((cdef, i) => {
+          const v = pc[cdef.id] || 0;
+          if (!v) return;
+          const w = Math.max(1, Math.round((v / p.toolCalls) * 16));
+          bar += paint(i, '█'.repeat(w));
+          used += w;
+        });
+        bar += ' '.repeat(Math.max(0, 18 - used));
+      }
+      const main = CATEGORIES.map((cdef) => [cdef.label, pc[cdef.id] || 0]).filter(([, v]) => v).sort((a, b) => b[1] - a[1]).slice(0, 2)
+        .map(([l, v]) => `${l.split(' ')[0].toLowerCase()} ${Math.round((v / (p.toolCalls || 1)) * 100)}%`).join(', ');
+      out.push(`    ${name.slice(0, 28).padEnd(28)} ${String(p.sessions).padStart(3)} sess ${String(n(p.toolCalls)).padStart(6)} calls  ${color ? bar : ''}${dim(main)}${p.flagged ? '  ' + red(`${p.flagged} flagged`) : ''}`);
     }
     if (projects.length > 10) out.push(dim(`    … ${projects.length - 10} more`));
   }
@@ -300,4 +417,4 @@ ${body}
 `;
 }
 
-module.exports = { scan, renderReport, renderCard, defaultProjectsDir };
+module.exports = { scan, renderReport, renderCard, defaultProjectsDir, CATEGORIES, categoryOf, programsOf };
