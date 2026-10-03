@@ -187,6 +187,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox anchor             print the signed chain head to publish elsewhere
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
+  blackbox mcp [--days N] [--all] [--json] [--pin] [--fail-on high|medium]
+                              MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
   blackbox mode ask|deny|monitor
@@ -300,7 +302,9 @@ async function main() {
       if (!(days > 0)) throw new Error('--days must be a positive number');
       let audits = null;
       try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* skills audit is optional */ }
-      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits });
+      let mcpAudits = null;
+      try { mcpAudits = require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }); } catch { /* optional */ }
+      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits });
       // never write into Claude Code's own data directory
       const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
       const safeOut = (file) => {
@@ -336,7 +340,9 @@ async function main() {
       const days = Number(opt('--days') || 30);
       let audits = null;
       try { audits = require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }); } catch { /* optional */ }
-      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits });
+      let mcpAudits = null;
+      try { mcpAudits = require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }); } catch { /* optional */ }
+      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits });
       const out = path.resolve(opt('--out') || 'blackbox-share');
       const claudeDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
       if (out === claudeDir || out.startsWith(claudeDir + path.sep)) throw new Error(`refusing to write under ${claudeDir}`);
@@ -345,6 +351,20 @@ async function main() {
       for (const f of made) console.log(`  ${green('✔')} ${path.join(out, f)}`);
       console.log(dim('\n  Only totals and tool categories are included: no project names, hosts, commands or secrets.'));
       console.log(dim('  Suggested post: caption.txt'));
+      return;
+    }
+    case 'mcp': {
+      const { auditServers, saveMcpPins } = require('../src/mcp');
+      const { scan, defaultProjectsDir } = require('../src/scan');
+      const pinsFile = path.join(P.home, 'mcp-pins.json');
+      const audits = auditServers({ pinsFile });
+      if (flag('--pin')) { saveMcpPins(pinsFile, audits); console.log(green(`pinned ${audits.length} MCP server definitions`) + dim(` → ${pinsFile}`)); return; }
+      const days = Number(opt('--days') || 30);
+      const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, mcpAudits: audits });
+      if (flag('--json')) { console.log(JSON.stringify({ configured: audits, usage: summary.mcp }, null, 2)); return; }
+      console.log(require('../src/mcp-report').renderMcp(audits, summary, { color: tty, all: flag('--all') }));
+      const failOn = opt('--fail-on');
+      if (failOn) { const min = failOn === 'medium' ? 2 : 3; const sev = { high: 3, medium: 2, low: 1, none: 0 }; if (audits.some((a) => sev[a.risk] >= min)) process.exitCode = 1; }
       return;
     }
     case 'skills': {
