@@ -79,6 +79,10 @@ class Daemon {
   // removal or disableAllHooks is also shown to the human on the next event.
   checkIntegrity() {
     return this.safe(() => {
+      // Running as a dedicated user, this process cannot see the human's
+      // Claude Code settings; `blackbox status` checks them as the human, and
+      // managed settings make removal impossible in the first place.
+      if (this.cfg.hardened) return { problems: [] };
       const { checkHooks } = require('./integrity');
       const { HOOK_EVENTS } = require('./install');
       const prev = this.state.integrity || {};
@@ -500,6 +504,10 @@ class Daemon {
         if (url.pathname === '/api/events') {
           const s = this.sessions.get(url.searchParams.get('session'));
           return send(s ? 200 : 404, s ? s.records : { error: 'unknown session' });
+        }
+        if (url.pathname === '/api/anchor') {
+          const l = this.ledger.last;
+          return send(l ? 200 : 404, l ? { seq: l.seq, hash: l.hash, sig: l.sig, key_id: this.ledger.keys.keyId } : { error: 'ledger is empty' });
         }
         if (url.pathname === '/api/verify') {
           return send(200, verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault }));

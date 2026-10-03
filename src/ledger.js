@@ -57,6 +57,7 @@ class Ledger {
       const rec = JSON.parse(last);
       this.seq = rec.seq;
       this.head = rec.hash;
+      this.last = rec;
     } else {
       this.seq = 0;
       this.head = GENESIS;
@@ -110,6 +111,7 @@ class Ledger {
     fs.appendFileSync(this.P.ledger, JSON.stringify(full) + '\n', { mode: 0o600 });
     this.seq = rec.seq;
     this.head = hash;
+    this.last = full;
     return full;
   }
 }

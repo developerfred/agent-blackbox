@@ -67,7 +67,22 @@ function readToken() {
 // With the recorder running as a dedicated user, only the ingest token is
 // in the human's folder and this returns ''; reads then go through sudo.
 function readAdminToken() {
-  try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { return ''; }
+  try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { /* not ours to read */ }
+  return '';
+}
+
+// With the recorder as a dedicated user, the admin token is read through sudo,
+// which asks the human for a password the agent cannot type. Only the CLI
+// calls this, and only for commands that read, verify or erase.
+let sudoToken = null;
+function readAdminTokenViaSudo() {
+  if (sudoToken !== null) return sudoToken;
+  const cfg = loadConfig();
+  if (!cfg.remoteDaemon || !cfg.recorderHome || !cfg.recorderUser) return (sudoToken = '');
+  try {
+    const out = require('child_process').execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
+    return (sudoToken = out.toString('utf8').trim());
+  } catch { return (sudoToken = ''); }
 }
 
 function loadConfig() {
@@ -80,4 +95,4 @@ function saveConfig(cfg) {
   fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
 
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, loadConfig, saveConfig };
+module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig };
