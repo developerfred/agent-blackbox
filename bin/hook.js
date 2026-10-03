@@ -40,14 +40,18 @@ process.stdin.on('end', () => {
       fs.mkdirSync(P.home, { recursive: true, mode: 0o700 });
       fs.appendFileSync(P.spool, JSON.stringify({ received_at: new Date().toISOString(), payload: ev }) + '\n', { mode: 0o600 });
     } catch { /* nothing else we can do */ }
-    try {
-      const log = fs.openSync(P.log, 'a');
-      spawn(process.execPath, [path.join(__dirname, 'blackbox.js'), 'daemon'], {
-        detached: true, stdio: ['ignore', log, log],
-      }).unref();
-    } catch { /* ignore */ }
     let cfg = {};
     try { cfg = loadConfig(); } catch { /* defaults */ }
+    // With the recorder running as a dedicated user, the system service
+    // restarts it; this user must not start a second recorder of its own.
+    if (!cfg.remoteDaemon) {
+      try {
+        const log = fs.openSync(P.log, 'a');
+        spawn(process.execPath, [path.join(__dirname, 'blackbox.js'), 'daemon'], {
+          detached: true, stdio: ['ignore', log, log],
+        }).unref();
+      } catch { /* ignore */ }
+    }
     if (ev.hook_event_name === 'PreToolUse' && cfg.failMode === 'closed') {
       return done({
         hookSpecificOutput: {
@@ -68,10 +72,39 @@ process.stdin.on('end', () => {
     res.on('data', (c) => out.push(c));
     res.on('end', () => {
       if (res.statusCode !== 200) return fallback();
-      try { done(JSON.parse(Buffer.concat(out).toString('utf8')).stdout); } catch { fallback(); }
+      let stdout;
+      try { stdout = JSON.parse(Buffer.concat(out).toString('utf8')).stdout; } catch { return fallback(); }
+      // The recorder is up: hand over anything queued while it was down. A
+      // dedicated-user recorder cannot read this user's folder, so the hook sends it.
+      drainSpool(() => done(stdout));
     });
   });
   req.on('timeout', () => req.destroy(new Error('timeout')));
   req.on('error', fallback);
   req.end(raw);
 });
+
+function drainSpool(next) {
+  let cfg = {};
+  try { cfg = loadConfig(); } catch { /* defaults */ }
+  if (!cfg.remoteDaemon || !fs.existsSync(P.spool)) return next();
+  const work = `${P.spool}.${process.pid}.sending`;
+  try { fs.renameSync(P.spool, work); } catch { return next(); }
+  const events = fs.readFileSync(work, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const body = JSON.stringify({ events });
+  const req = http.request({
+    host: '127.0.0.1', port: P.port, path: '/spool', method: 'POST', timeout: 4000,
+    headers: { 'content-type': 'application/json', 'x-blackbox-token': readToken(), host: `127.0.0.1:${P.port}` },
+  }, (res) => {
+    res.resume();
+    res.on('end', () => {
+      if (res.statusCode === 200) fs.unlinkSync(work);
+      else fs.appendFileSync(P.spool, fs.readFileSync(work)), fs.unlinkSync(work);
+      next();
+    });
+  });
+  const putBack = () => { try { fs.appendFileSync(P.spool, fs.readFileSync(work)); fs.unlinkSync(work); } catch { /* keep */ } next(); };
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.on('error', putBack);
+  req.end(body);
+}

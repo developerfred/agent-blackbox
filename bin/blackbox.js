@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
-const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('../src/paths');
+const { P, ensureDirs, readToken, readAdminToken, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
 
 const tty = process.stdout.isTTY;
@@ -17,7 +17,7 @@ function call(method, p, body) {
     const data = body ? JSON.stringify(body) : null;
     const req = http.request({
       host: '127.0.0.1', port: P.port, path: p, method, timeout: 5000,
-      headers: { host: `127.0.0.1:${P.port}`, 'content-type': 'application/json', 'x-blackbox-token': readToken() },
+      headers: { host: `127.0.0.1:${P.port}`, 'content-type': 'application/json', 'x-blackbox-token': readAdminToken() || readToken() },
     }, (res) => {
       const out = [];
       res.on('data', (d) => out.push(d));
@@ -347,7 +347,7 @@ async function main() {
     case 'ui': {
       await start({ quiet: true });
       // The token travels in the URL fragment, which the browser never sends to a server.
-      const url = `http://127.0.0.1:${P.port}/#token=${readToken()}`;
+      const url = `http://127.0.0.1:${P.port}/#token=${readAdminToken() || readToken()}`;
       const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
       try { spawn(opener, [url], { stdio: 'ignore', detached: true }).unref(); } catch { /* print only */ }
       console.log(`http://127.0.0.1:${P.port}/ ${dim('(opened with a private access token)')}`);

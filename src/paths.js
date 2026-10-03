@@ -16,7 +16,10 @@ const P = {
   keys: path.join(HOME, 'keys'),
   privKey: path.join(HOME, 'keys', 'ed25519.key'),
   pubKey: path.join(HOME, 'keys', 'ed25519.pub'),
+  // ingest token: lets hooks and telemetry add events (and read /health) only
   token: path.join(HOME, 'keys', 'token'),
+  // admin token: everything else (timeline, payloads, verify, purge)
+  adminToken: path.join(HOME, 'keys', 'admin-token'),
   config: path.join(HOME, 'config.json'),
   state: path.join(HOME, 'state.json'),
   spool: path.join(HOME, 'spool.jsonl'),
@@ -52,13 +55,19 @@ const DEFAULT_CONFIG = {
 function ensureDirs() {
   for (const d of [P.home, P.keys]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   for (const d of [P.blobs, P.bodies]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
-  if (!fs.existsSync(P.token)) {
-    fs.writeFileSync(P.token, crypto.randomBytes(24).toString('hex'), { mode: 0o600 });
+  for (const f of [P.token, P.adminToken]) {
+    if (!fs.existsSync(f)) fs.writeFileSync(f, crypto.randomBytes(24).toString('hex'), { mode: 0o600 });
   }
 }
 
 function readToken() {
   try { return fs.readFileSync(P.token, 'utf8').trim(); } catch { return ''; }
+}
+
+// With the recorder running as a dedicated user, only the ingest token is
+// in the human's folder and this returns ''; reads then go through sudo.
+function readAdminToken() {
+  try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { return ''; }
 }
 
 function loadConfig() {
@@ -71,4 +80,4 @@ function saveConfig(cfg) {
   fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
 
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, loadConfig, saveConfig };
+module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, loadConfig, saveConfig };

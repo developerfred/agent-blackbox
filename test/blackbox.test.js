@@ -11,7 +11,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-test-'));
 process.env.BLACKBOX_HOME = path.join(HOME, 'bb');
 process.env.BLACKBOX_PORT = String(17000 + Math.floor(Math.random() * 2000));
 
-const { P, ensureDirs, DEFAULT_CONFIG, readToken } = require('../src/paths');
+const { P, ensureDirs, DEFAULT_CONFIG, readToken, readAdminToken } = require('../src/paths');
 const { Ledger, verify } = require('../src/ledger');
 const { Policy, redact } = require('../src/policy');
 const { Vault } = require('../src/vault');
@@ -215,7 +215,15 @@ test('daemon: token and host checks, hook decisions, OTLP ingest, spool drain', 
       assert.equal((await get(port, p)).status, 401, `GET ${p} without token`);
     }
     assert.equal((await get(port, '/')).status, 200, 'static page needs no token');
-    assert.equal((await get(port, '/api/sessions', tok)).status, 200);
+    // the ingest token (what hooks hold) can add events but not read or erase them
+    assert.equal((await get(port, '/api/sessions', tok)).status, 403);
+    assert.equal((await post(port, '/purge', {}, tok)).status, 403);
+    assert.equal((await get(port, '/api/payload?seq=1', tok)).status, 403);
+    const h = JSON.parse((await get(port, '/health', tok)).body);
+    assert.ok(h.ok && !('head' in h) && !('home' in h), 'ingest health shows no details');
+    const adm = { 'x-blackbox-token': readAdminToken() };
+    assert.notEqual(adm['x-blackbox-token'], tok['x-blackbox-token']);
+    assert.equal((await get(port, '/api/sessions', adm)).status, 200);
     assert.equal((await post(port, '/hook', {}, { ...tok, host: 'evil.example' })).status, 403);
 
     const sid = 'live';
@@ -263,7 +271,7 @@ test('daemon: token and host checks, hook decisions, OTLP ingest, spool drain', 
     assert.ok(!fs.existsSync(path.join(P.bodies, 'u1.request.json')), 'raw body moved out of the drop folder');
 
     // purge erases payloads; the chain still verifies, with warnings
-    const pr = JSON.parse((await post(port, '/purge', {}, tok)).body);
+    const pr = JSON.parse((await post(port, '/purge', {}, adm)).body);
     assert.ok(pr.keys > 0);
     const after = verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs, vault: d.vault });
     assert.ok(after.ok, JSON.stringify(after.errors));
