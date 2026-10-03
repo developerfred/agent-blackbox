@@ -1,6 +1,6 @@
 {
   "name": "agent-blackbox",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A tamper-evident flight recorder and lethal-trifecta firewall for AI coding agents (Claude Code first).",
   "license": "Apache-2.0",
   "author": "Frederick Silva (codingsh)",
@@ -10,6 +10,8 @@
   "files": [
     "bin",
     "src",
+    "hooks",
+    ".claude-plugin",
     "README.md",
     "LICENSE"
   ],

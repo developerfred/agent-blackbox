@@ -1,0 +1,15 @@
+{
+  "name": "agent-blackbox",
+  "description": "agent-blackbox: security and audit plugins for AI coding agents.",
+  "owner": {
+    "name": "Frederick Silva",
+    "url": "https://github.com/developerfred"
+  },
+  "plugins": [
+    {
+      "name": "agent-blackbox",
+      "source": "./",
+      "description": "Tamper-evident flight recorder and lethal-trifecta firewall for Claude Code."
+    }
+  ]
+}

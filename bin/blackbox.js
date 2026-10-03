@@ -184,9 +184,10 @@ function tamperDemo() {
 
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
-  blackbox install [--mode ask|deny|monitor] [--raw] [--force]
+  blackbox install [--mode ask|deny|monitor] [--raw] [--force] [--telemetry-only]
                               add hooks + telemetry to ~/.claude/settings.json, start recorder
-                              (--raw also keeps full model request/response bodies, scrubbed)
+                              (--raw also keeps full model request/response bodies, scrubbed;
+                               --telemetry-only when the hooks come from the Claude Code plugin)
   blackbox uninstall          remove them (evidence is kept)
   blackbox start | stop | status
   blackbox sessions           list recorded sessions
@@ -231,7 +232,7 @@ async function main() {
       const mode = opt('--mode');
       if (mode && !['ask', 'deny', 'monitor'].includes(mode)) throw new Error('mode must be ask, deny or monitor');
       console.log(bold('Installing agent-blackbox into Claude Code'));
-      require('../src/install').install({ mode, raw: flag('--raw'), force: flag('--force') });
+      require('../src/install').install({ mode, raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
       await stop().catch(() => {});
       await start();
       console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);

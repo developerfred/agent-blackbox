@@ -70,7 +70,8 @@ function stripOurHooks(settings) {
   if (!Object.keys(hooks).length) delete settings.hooks; else settings.hooks = hooks;
 }
 
-function install({ mode, raw = false, force = false, log = console.log } = {}) {
+// hooks: false installs only the telemetry settings (for the plugin, which brings its own hooks)
+function install({ mode, raw = false, force = false, hooks = true, log = console.log } = {}) {
   ensureDirs();
   const file = settingsPath();
   const settings = readSettings(file);
@@ -86,9 +87,12 @@ function install({ mode, raw = false, force = false, log = console.log } = {}) {
   stripOurHooks(settings);
   settings.hooks ||= {};
   const command = `"${nodePath()}" "${hookScript}" # agent-blackbox-hook`;
-  for (const ev of HOOK_EVENTS) {
-    (settings.hooks[ev] ||= []).push({ hooks: [{ type: 'command', command, timeout: 10 }] });
+  if (hooks) {
+    for (const ev of HOOK_EVENTS) {
+      (settings.hooks[ev] ||= []).push({ hooks: [{ type: 'command', command, timeout: 10 }] });
+    }
   }
+  if (!Object.keys(settings.hooks).length) delete settings.hooks;
 
   // env: native OpenTelemetry export + raw API bodies, remembering prior values
   const cfg = loadConfig();
@@ -115,7 +119,7 @@ function install({ mode, raw = false, force = false, log = console.log } = {}) {
   saveConfig(cfg);
 
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-  log(`  hooks   ${HOOK_EVENTS.length} events → ${hookScript}`);
+  log(hooks ? `  hooks   ${HOOK_EVENTS.length} events → ${hookScript}` : '  hooks   left to the Claude Code plugin');
   log(`  telemetry → http://127.0.0.1:${P.port}/v1/logs${raw ? ' + raw API bodies (scrubbed)' : ''}`);
   if (skipped.length) log(`  kept your existing values for: ${skipped.join(', ')} (rerun with --force to override)`);
   return { file, skipped };
