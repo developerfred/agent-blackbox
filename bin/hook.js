@@ -16,14 +16,17 @@ function pluginStepsAside() {
 }
 
 const shadowed = pluginStepsAside();
+/** @type {Buffer[]} */
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
   if (shadowed) process.exit(0);
   const raw = Buffer.concat(chunks).toString('utf8');
+  /** @type {Partial<import('../src/types').HookEvent>} */
   let ev = {};
   try { ev = JSON.parse(raw); } catch { process.exit(0); }
 
+  /** @param {object | null} out what Claude Code reads from the hook's stdout */
   const done = (out) => {
     if (out) process.stdout.write(JSON.stringify(out));
     process.exit(0);
@@ -34,6 +37,7 @@ process.stdin.on('end', () => {
       fs.mkdirSync(P.home, { recursive: true, mode: 0o700 });
       fs.appendFileSync(P.spool, JSON.stringify({ received_at: new Date().toISOString(), payload: ev }) + '\n', { mode: 0o600 });
     } catch { /* nothing else we can do */ }
+    /** @type {Partial<import('../src/types').Config>} */
     let cfg = {};
     try { cfg = loadConfig(); } catch { /* defaults */ }
     // With the recorder running as a dedicated user, the system service
@@ -66,7 +70,9 @@ process.stdin.on('end', () => {
   }).catch(fallback); // a hook never exits non-zero
 });
 
+/** @param {() => void} next */
 function drainSpool(next) {
+  /** @type {Partial<import('../src/types').Config>} */
   let cfg = {};
   try { cfg = loadConfig(); } catch { /* defaults */ }
   if (!cfg.remoteDaemon || !fs.existsSync(P.spool)) return next();

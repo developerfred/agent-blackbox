@@ -17,7 +17,9 @@ const PRIV = '0x' + 'a1b2c3d4e5f60718293a4b5c6d7e8f90'.repeat(2);
 const PHRASE = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
 const readSeed = { post: 'Read', input: { file_path: '/repo/deploy.txt' }, response: { file: { content: `MNEMONIC="${PHRASE}"\n` } } };
 const readKey = { post: 'Read', input: { file_path: '/repo/deploy.txt' }, response: { file: { content: `Private key: ${PRIV}\n` } } };
+/** @param {string} file_path @param {string} content */
 const write = (file_path, content) => ({ post: 'Write', input: { file_path, content }, response: { type: 'create' } });
+/** @param {string} command */
 const bash = (command) => ({ tool: 'Bash', input: { command } });
 
 const CASES = [
