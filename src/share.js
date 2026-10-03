@@ -174,7 +174,7 @@ async function withChrome(chrome, fn) {
     if (!port) throw new Error('Chrome did not start');
     const targets = await new Promise((resolve, reject) => {
       http.get({ host: '127.0.0.1', port, path: '/json/list' }, (res) => {
-        const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(c))); } catch (e) { reject(e); } });
+        const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(c).toString('utf8'))); } catch (e) { reject(e); } });
       }).on('error', reject);
     });
     const page = targets.find((t) => t.type === 'page');
@@ -221,6 +221,11 @@ function screenshotOnce(chrome, file, w, h, out) {
   return r.status === 0 && fs.existsSync(out);
 }
 
+/**
+ * @param {any} S scan summary
+ * @param {string} outDir
+ * @param {{ video?: boolean, log?: (msg: string) => void }} [opts]
+ */
 async function makeShareKit(S, outDir, { video = true, log = () => {} } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   const made = [];

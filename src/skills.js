@@ -21,6 +21,7 @@ const SEVERITY = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
 
 // ---------- discovery ----------
 
+/** @returns {{ dir: string, source: string, deep?: boolean, commands?: boolean }[]} */
 function candidateRoots(home = os.homedir(), cwd = process.cwd()) {
   const claude = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
   return [
@@ -55,8 +56,9 @@ function findSkillDirs(dir, depth, out = []) {
   return out;
 }
 
+/** @param {{ home?: string, cwd?: string, extra?: string[] }} [opts] */
 function discoverSkills({ home, cwd, extra = [] } = {}) {
-  const roots = [...candidateRoots(home, cwd), ...extra.map((d) => ({ dir: path.resolve(d), source: 'path' }))];
+  const roots = [...candidateRoots(home, cwd), ...extra.map((d) => ({ dir: path.resolve(d), source: 'path', deep: false, commands: false }))];
   const seen = new Set();
   const skills = [];
   for (const root of roots) {
@@ -254,7 +256,7 @@ function auditFile(file, rel, text, { isSkillMd }) {
       for (const m of text.matchAll(re)) {
         const cmd = m[1];
         const ln = text.slice(0, m.index).split('\n').length;
-        const risky = RULES.some((r) => r.sev === 'high' && r.re.test(cmd)) || new RegExp(`\\b${NET}`, 'i').test(cmd) || RULES.find((r) => r.id === 'credential-access').re.test(cmd);
+        const risky = RULES.some((r) => r.sev === 'high' && r.re.test(cmd)) || new RegExp(`\\b${NET}`, 'i').test(cmd) || RULES.find((r) => r.id === 'credential-access')?.re.test(cmd);
         add(risky ? 'high' : 'low', 'load-time-command', ln, risky ? 'runs a network or sensitive command automatically when the skill loads' : 'runs a command automatically when the skill loads', excerpt(cmd));
       }
     }
@@ -302,6 +304,7 @@ function auditSkill(skill) {
 
 function loadPins(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } }
 
+/** @returns {{ status: 'new' | 'pinned' | 'changed', changed?: string[], pinnedAt?: string }} */
 function comparePin(pins, a) {
   const p = pins[a.realpath];
   if (!p) return { status: 'new' };
@@ -319,13 +322,14 @@ function savePins(file, audits) {
   return pins;
 }
 
+/** @param {{ home?: string, cwd?: string, extra?: string[], pinsFile?: string }} [opts] */
 function auditAll({ home, cwd, extra, pinsFile } = {}) {
   const pins = pinsFile ? loadPins(pinsFile) : {};
   return discoverSkills({ home, cwd, extra }).map((s) => {
     const a = auditSkill(s);
     const pin = comparePin(pins, a);
     if (pin.status === 'changed') {
-      a.findings.unshift({ severity: 'high', rule: 'changed-since-pinned', file: pin.changed.slice(0, 5).join(', '), line: 0, message: `content changed since it was pinned on ${String(pin.pinnedAt).slice(0, 10)}`, excerpt: null });
+      a.findings.unshift({ severity: 'high', rule: 'changed-since-pinned', file: (pin.changed || []).slice(0, 5).join(', '), line: 0, message: `content changed since it was pinned on ${String(pin.pinnedAt).slice(0, 10)}`, excerpt: null });
       a.counts.high++;
       a.risk = 'high';
     }

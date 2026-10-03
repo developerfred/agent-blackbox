@@ -52,7 +52,8 @@ function shred(file) {
 }
 
 class Vault {
-  constructor({ keysDir, masterKey } = {}) {
+  /** @param {{ keysDir: string, masterKey?: string }} opts */
+  constructor({ keysDir, masterKey }) {
     this.dir = path.join(keysDir, 'sessions');
     this.masterFile = path.join(keysDir, 'master.key');
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -126,6 +127,7 @@ class Vault {
 }
 
 // The scope that decides which key protects a record's payloads.
+/** @param {string | undefined | null} sessionId @param {Date | string | number} [ts] */
 function scopeOf(sessionId, ts = new Date()) {
   return sessionId ? `session:${sessionId}` : `month:${new Date(ts).toISOString().slice(0, 7)}`;
 }

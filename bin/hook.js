@@ -10,21 +10,16 @@ const { P, readToken, loadConfig } = require('../src/paths');
 
 // Installed both as a plugin and with `blackbox install`? Record once: the
 // settings.json install wins and the plugin's copy of the hook steps aside.
-if (process.argv.includes('--plugin')) {
-  try {
-    const os = require('os');
-    const dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-    if (fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').includes('agent-blackbox-hook')) {
-      process.stdin.resume();
-      process.stdin.on('end', () => process.exit(0));
-      return;
-    }
-  } catch { /* no settings: the plugin records */ }
+function pluginStepsAside() {
+  if (!process.argv.includes('--plugin')) return false;
+  try { return fs.readFileSync(path.join(require('../src/util').claudeDir(), 'settings.json'), 'utf8').includes('agent-blackbox-hook'); } catch { return false; /* no settings: the plugin records */ }
 }
 
+const shadowed = pluginStepsAside();
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
+  if (shadowed) process.exit(0);
   const raw = Buffer.concat(chunks).toString('utf8');
   let ev = {};
   try { ev = JSON.parse(raw); } catch { process.exit(0); }
@@ -77,7 +72,7 @@ function drainSpool(next) {
   if (!cfg.remoteDaemon || !fs.existsSync(P.spool)) return next();
   const work = `${P.spool}.${process.pid}.sending`;
   try { fs.renameSync(P.spool, work); } catch { return next(); }
-  const events = fs.readFileSync(work, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const events = require('../src/util').readJsonl(work);
   const putBack = () => { try { fs.appendFileSync(P.spool, fs.readFileSync(work)); fs.unlinkSync(work); } catch { /* keep */ } next(); };
   request({ port: P.port, method: 'POST', path: '/spool', token: readToken(), body: { events }, timeout: 4000 }).then((res) => {
     if (res.status !== 200) return putBack();

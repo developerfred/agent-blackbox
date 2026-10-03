@@ -4,6 +4,7 @@
 // send something out. Each condition alone is normal; together they are the
 // shape of a prompt-injection exfiltration.
 const crypto = require('crypto');
+const { baseName, pushCapped } = require('./util');
 
 const SENSITIVE_PATH = [
   /(^|[\/\s'"=@<])\.env(\.[\w-]+)?(\b|$)/i,
@@ -67,6 +68,7 @@ const DEV_TCP = /\/dev\/(tcp|udp)\//;
 // Commands that publish data to a service. They count as egress even toward
 // allowlisted hosts (a secret pasted into a public gist is still a leak): the
 // allowlist is for downloads, not uploads.
+/** @type {[RegExp, string][]} */
 const PUBLISH = [
   [/\bgit\s+push\b/, 'git push'],
   [/\bgh\s+gist\s+(?:create|new|edit)\b/, 'gh gist (publishes content)'],
@@ -196,6 +198,7 @@ function urlCarriesData(text) {
 const FILE_READER_CMD = /\b(?:cat|head|tail|less|more|bat|sed|awk|grep|rg|ag|xxd|strings)\b/;
 // Commands that sign or broadcast a transaction, or move keys. A broadcast
 // cannot be undone, so these ask even outside the lethal trifecta (cfg.web3).
+/** @type {[RegExp, string][]} */
 const WEB3 = [
   [/\bcast\s+(?:send|publish|mktx|rpc\s+eth_send\w*)\b/, 'cast signs or broadcasts a transaction'],
   [/\bcast\s+wallet\s+sign\b/, 'cast signs a message with a wallet key'],
@@ -261,7 +264,13 @@ function inputText(toolInput) {
 }
 
 class Policy {
-  // protect: extra paths (the real data folder) the agent may never touch
+  /**
+   * protect: extra paths (the real data folder) the agent may never touch.
+   * @param {import('./types').Config} cfg
+   * @param {{ sessions: Record<string, import('./types').SessionState> }} state
+   * @param {string | Buffer} salt
+   * @param {{ protect?: string[], readFile?: ((file: string, cwd?: string) => string | null) | null }} [opts]
+   */
   constructor(cfg, state, salt, { protect = [], readFile = null } = {}) {
     this.cfg = cfg;
     // readFile(path, cwd) -> text | null: lets the policy look inside a script
@@ -273,7 +282,7 @@ class Policy {
   }
 
   session(id) {
-    const s = (this.state.sessions[id] ||= { private: null, untrusted: null, secrets: [] });
+    const s = (this.state.sessions[id] ||= { private: null, untrusted: null, secrets: [], secretLens: [], written: [], netFiles: [] });
     s.secrets ||= [];
     if (!s.secrets.length) s.secretLens ||= []; // sessions saved before this field existed keep no filter
     s.written ||= [];   // files the agent wrote or downloaded this session
@@ -409,7 +418,13 @@ class Policy {
     return m ? m[1] : null;
   }
 
-  // Is this tool call an attempt to send data out of the machine?
+  /**
+   * Is this tool call an attempt to send data out of the machine?
+   * @param {string} tool
+   * @param {Record<string, any>} input
+   * @param {import('./types').SessionState} [sess]
+   * @returns {import('./types').Egress}
+   */
   egress(tool, input, sess) {
     const allow = this.cfg.allowHosts;
     const sessIntent = (sess && sess.intentHosts) || [];
@@ -470,7 +485,7 @@ class Policy {
   runsCode(raw, cmd, sess) {
     const written = (sess && sess.written) || [];
     const netFiles = (sess && sess.netFiles) || [];
-    const base = (f) => f.replace(/^~\//, '').split('/').filter(Boolean).pop() || f;
+    const base = (f) => baseName(f.replace(/^~\//, ''), f);
     const match = (arg, list) => list.find((w) => w === arg || base(w) === base(arg) || w.endsWith('/' + arg.replace(/^\.\//, '')));
     const targets = [];
     const sk = normalizeCmd(shellSkeleton(raw));
@@ -501,15 +516,19 @@ class Policy {
   // Is this target the evidence store? Normalized, with globs expanded.
   touchesEvidence(text) {
     const n = normalizeCmd(text);
-    const names = ['.blackbox', ...this.protect.map((p) => p.split('/').filter(Boolean).pop())];
+    const names = ['.blackbox', ...this.protect.map((p) => baseName(p))];
     if (/\.blackbox(\/|\b)/.test(text) || /\.blackbox(\/|\b)/.test(n)) return true;
     if (this.protect.some((p) => text.includes(p) || n.includes(p))) return true;
     return globsIn(n).some((re) => names.some((name) => re.test(name)));
   }
 
-  // PreToolUse: decide. Returns null (no opinion) or { decision, rule, reason }.
+  /**
+   * PreToolUse: decide. Null means no opinion.
+   * @param {import('./types').HookEvent} ev
+   * @returns {import('./types').PolicyDecision | null}
+   */
   preToolUse(ev) {
-    const tool = ev.tool_name;
+    const tool = ev.tool_name || '';
     const input = ev.tool_input || {};
     const text = inputText(input);
     const sess = this.session(ev.session_id);
@@ -527,6 +546,7 @@ class Policy {
     const out = this.egress(tool, input, sess);
     const secretOut = this.containsKnownSecret(sess, stringsOf(input).join('\n'));
     const readsSensitive = SENSITIVE_PATH.some((re) => re.test(text));
+    /** @param {string} rule @param {string} reason @param {{ secret?: string }} [extra] @returns {import('./types').PolicyDecision} */
     const deny = (rule, reason, extra = {}) => {
       // A denial teaches an attacker what is protected. Record it, and make
       // every later outbound call in this session ask (counterfactual edge,
@@ -570,7 +590,7 @@ class Policy {
     if (out.yes && sess.denied && this.cfg.mode !== 'monitor') {
       return { decision: 'ask', rule: 'post-denial', reason: `An earlier call in this session was blocked (${sess.denied.rule}); this one sends data out (${out.why}).` };
     }
-    if (out.yes) return { decision: 'note', rule: out.opaque ? 'runs-code' : 'egress', reason: out.why };
+    if (out.yes) return { decision: 'note', rule: out.opaque ? 'runs-code' : 'egress', reason: out.why || '' };
     return null;
   }
 
@@ -622,8 +642,8 @@ class Policy {
     if (tool === 'Bash' || tool === 'PowerShell') wrote.push(...writtenBy(input.command || ''));
     const body = [input.content, input.new_string, input.new_source, ...((input.edits || []).map((e) => e.new_string)), tool === 'Bash' ? input.command : null].filter((x) => typeof x === 'string').join('\n');
     for (const f of wrote.filter(Boolean)) {
-      if (!sess.written.includes(f)) sess.written = [...sess.written, f].slice(-500);
-      if ((NET_SOURCE.test(body) || DYNAMIC_SOURCE.test(body) || /\b(?:curl|wget)\b[^;&|]*\s-(?:o|O)\b/.test(input.command || '')) && !sess.netFiles.includes(f)) sess.netFiles = [...sess.netFiles, f].slice(-500);
+      sess.written = pushCapped(sess.written, f);
+      if (NET_SOURCE.test(body) || DYNAMIC_SOURCE.test(body) || /\b(?:curl|wget)\b[^;&|]*\s-(?:o|O)\b/.test(input.command || '')) sess.netFiles = pushCapped(sess.netFiles, f);
     }
     if (secrets.length) {
       const set = new Set(sess.secrets);

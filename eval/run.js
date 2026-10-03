@@ -5,6 +5,7 @@ const { Policy } = require('../src/policy');
 const { DEFAULT_CONFIG } = require('../src/paths');
 const { CASES } = require('./corpus');
 
+/** @param {any} c @param {import('../src/types').Mode} [mode] */
 function runCase(c, mode = 'ask') {
   const state = { sessions: {} };
   const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });

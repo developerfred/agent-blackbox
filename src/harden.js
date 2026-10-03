@@ -7,6 +7,7 @@
 // reviewed line by line.
 const os = require('os');
 const path = require('path');
+const { defined } = require('./util');
 
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -105,7 +106,7 @@ function hardenScript(opts = {}) {
   const d = defaults(opts.platform);
   const o = {
     ...d,
-    ...Object.fromEntries(Object.entries(opts).filter(([, v]) => v != null)),
+    ...defined(opts),
     node: opts.node || process.execPath,
     port: opts.port || 7071,
     human: opts.human || os.userInfo().username,
@@ -191,7 +192,7 @@ echo "The ledger from before stays in $HUMAN_HOME and is readable by the agent: 
 
 function undoScript(opts = {}) {
   const d = defaults(opts.platform);
-  const o = { ...d, ...Object.fromEntries(Object.entries(opts).filter(([, v]) => v != null)), humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox') };
+  const o = { ...d, ...defined(opts), humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox') };
   if (!['darwin', 'linux'].includes(o.platform)) throw new Error(`harden supports macOS (launchd) and Linux (systemd), not ${o.platform}`);
   const stop = o.platform === 'darwin'
     ? `launchctl bootout system/${LABEL} 2>/dev/null || true\nrm -f /Library/LaunchDaemons/${LABEL}.plist`
@@ -213,6 +214,10 @@ echo "service removed. The user ${o.user} and ${o.data} are kept; remove them by
 
 // Is the recorder running as someone other than the human? health is the
 // body of GET /health.
+/**
+ * @param {{ uid?: number | null } | null} health body of GET /health
+ * @param {{ uid?: number | null, cfg?: Partial<import('./types').Config> }} [opts]
+ */
 function checkHardened(health, { uid = typeof process.getuid === 'function' ? process.getuid() : null, cfg = {} } = {}) {
   const lines = [];
   let ok = true;
