@@ -46,8 +46,11 @@ function readLastLine(file) {
 }
 
 class Ledger {
-  constructor(P) {
+  // vault (optional): a Vault; when set, payload blobs are sealed with the key
+  // of their session and stored under blobs/<kid>/<sha>.
+  constructor(P, { vault = null } = {}) {
     this.P = P;
+    this.vault = vault;
     this.keys = loadOrCreateKeys(P);
     const last = readLastLine(P.ledger);
     if (last) {
@@ -61,14 +64,32 @@ class Ledger {
     }
   }
 
-  // Store content by its hash; returns the digest recorded in the chain.
-  putBlob(content) {
+  // Store content by its hash; returns the digest recorded in the chain (the
+  // sha256 of the plaintext) and, when encrypted, the id of the key used.
+  putBlob(content, scope = null) {
     const buf = Buffer.isBuffer(content) ? content
       : Buffer.from(typeof content === 'string' ? content : canon(content));
     const digest = sha256(buf);
+    if (this.vault && scope) {
+      const kid = this.vault.kid(scope);
+      const dir = path.join(this.P.blobs, kid);
+      const file = path.join(dir, digest);
+      if (!fs.existsSync(file)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file, this.vault.seal(scope, buf).data, { mode: 0o600 });
+      }
+      return { sha: digest, size: buf.length, key: kid };
+    }
     const file = path.join(this.P.blobs, digest);
     if (!fs.existsSync(file)) fs.writeFileSync(file, buf, { mode: 0o600 });
     return { sha: digest, size: buf.length };
+  }
+
+  // Read a payload back (decrypting it if needed). Throws if it was erased.
+  getBlob(sha, kid) {
+    const file = blobPath(this.P.blobs, sha, kid);
+    const raw = fs.readFileSync(file);
+    return this.vault ? this.vault.open(raw) : raw;
   }
 
   // Move a file into the blob store (used for raw API bodies).
@@ -94,11 +115,23 @@ class Ledger {
 }
 
 const BLOB_FIELDS = ['payload', 'request_blob', 'response_blob'];
+const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(dir, sha));
 
 // Walk the whole chain. Integrity proves nothing recorded was changed,
 // removed or reordered; it does not prove that everything was recorded.
-function verify({ ledgerPath, pubPem, blobsDir }) {
-  const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: new Set() };
+// With a vault, encrypted payloads are decrypted and checked against their
+// hash; without one (a third party checking the chain), they are counted as
+// sealed and their content is not checked.
+function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
+  const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: new Set(), sealed: 0, erasedKeys: 0 };
+  const erasedSeen = new Set();
+  // purge records come after the records they erase, so look ahead once
+  const purgedKeys = new Set();
+  try {
+    for (const l of fs.readFileSync(ledgerPath, 'utf8').split('\n')) {
+      if (l.includes('"kind":"purge"')) { try { for (const k of JSON.parse(l).erased_keys || []) purgedKeys.add(k); } catch { /* reported below */ } }
+    }
+  } catch { /* reported below */ }
   if (!fs.existsSync(ledgerPath)) {
     out.ok = false; out.errors.push({ line: 0, problem: 'ledger not found' }); return out;
   }
@@ -133,9 +166,20 @@ function verify({ ledgerPath, pubPem, blobsDir }) {
     for (const f of BLOB_FIELDS) {
       const d = rec[f];
       if (!d) continue;
-      const file = path.join(blobsDir, d);
-      if (!fs.existsSync(file)) out.warnings.push(`seq ${rec.seq}: ${f} blob missing (erased or not copied)`);
-      else if (sha256(fs.readFileSync(file)) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
+      const file = blobPath(blobsDir, d, rec.key);
+      // erased keys are known from the vault, or from the signed purge records
+      if (rec.key && ((vault && !vault.hasKey(rec.key)) || purgedKeys.has(rec.key))) {
+        // crypto-erased: the key is gone, so the content is unrecoverable by design
+        if (!erasedSeen.has(rec.key)) { erasedSeen.add(rec.key); out.erasedKeys++; }
+        continue;
+      }
+      if (!fs.existsSync(file)) { out.warnings.push(`seq ${rec.seq}: ${f} blob missing (erased or not copied)`); continue; }
+      if (rec.key) {
+        if (!vault) { out.sealed++; continue; }
+        let plain;
+        try { plain = vault.open(fs.readFileSync(file)); } catch { fail(`seq ${rec.seq}: ${f} blob content changed (decryption failed)`); continue; }
+        if (sha256(plain) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
+      } else if (sha256(fs.readFileSync(file)) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
     }
     if (rec.session_id) out.sessions.add(rec.session_id);
     prev = hash;
@@ -146,4 +190,4 @@ function verify({ ledgerPath, pubPem, blobsDir }) {
   return out;
 }
 
-module.exports = { Ledger, verify, canon, sha256, GENESIS };
+module.exports = { Ledger, verify, canon, sha256, blobPath, GENESIS };

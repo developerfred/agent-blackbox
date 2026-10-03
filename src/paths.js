@@ -29,6 +29,8 @@ const P = {
 const DEFAULT_CONFIG = {
   // ask = make Claude Code prompt the human; deny = block; monitor = log only
   mode: 'ask',
+  // encrypt payloads at rest with one key per session (purge = crypto-erasure)
+  encrypt: true,
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // hosts considered safe destinations for outbound traffic (suffix match)

@@ -14,6 +14,7 @@ process.env.BLACKBOX_PORT = String(17000 + Math.floor(Math.random() * 2000));
 const { P, ensureDirs, DEFAULT_CONFIG, readToken } = require('../src/paths');
 const { Ledger, verify } = require('../src/ledger');
 const { Policy, redact } = require('../src/policy');
+const { Vault } = require('../src/vault');
 const { Daemon } = require('../src/daemon');
 
 const policy = (cfg = {}) => new Policy({ ...DEFAULT_CONFIG, ...cfg }, { sessions: {} }, 'salt');
@@ -243,17 +244,31 @@ test('daemon: token and host checks, hook decisions, OTLP ingest, spool drain', 
     const text = fs.readFileSync(P.ledger, 'utf8');
     for (const k of ['"kind":"taint"', '"rule":"lethal-trifecta"', '"kind":"otel"', '"kind":"api_body"', '"spooled":true']) assert.ok(text.includes(k), k);
     assert.ok(!text.includes('zzzz9999yyyy8888'), 'secret not in ledger text');
-    for (const f of fs.readdirSync(P.blobs)) {
-      assert.ok(!fs.readFileSync(path.join(P.blobs, f), 'utf8').includes('zzzz9999yyyy8888'), `secret found in blob ${f}`);
+    // payloads are encrypted at rest, and the secret is scrubbed even after decryption
+    // (blobs at the top level come from the plain Ledger test above; the daemon writes under blobs/<kid>/)
+    const daemonRecs = fs.readFileSync(P.ledger, 'utf8').split('\n').filter(Boolean).map(JSON.parse).filter((r) => r.payload && ['hook', 'otel'].includes(r.kind) && r.seq > 6);
+    assert.ok(daemonRecs.every((r) => r.key), 'every daemon payload record names its key');
+    const blobFiles = fs.readdirSync(P.blobs, { recursive: true }).filter((f) => f.includes(path.sep)).map((f) => path.join(P.blobs, f)).filter((f) => fs.statSync(f).isFile());
+    assert.ok(blobFiles.length > 0);
+    for (const f of blobFiles) {
+      const raw = fs.readFileSync(f);
+      assert.ok(Vault.isSealed(raw), `blob ${f} is not encrypted`);
+      assert.ok(!raw.toString('utf8').includes('"hook_event_name"'), 'ciphertext does not leak structure');
+      assert.ok(!d.vault.open(raw).toString('utf8').includes('zzzz9999yyyy8888'), `secret found in blob ${f}`);
     }
+    const okBefore = verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs, vault: d.vault });
+    assert.ok(okBefore.ok && !okBefore.sealed, JSON.stringify(okBefore.errors));
+    // an outside verifier without the key still checks the whole chain
+    assert.ok(verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs }).sealed > 0);
     assert.ok(!fs.existsSync(path.join(P.bodies, 'u1.request.json')), 'raw body moved out of the drop folder');
 
     // purge erases payloads; the chain still verifies, with warnings
     const pr = JSON.parse((await post(port, '/purge', {}, tok)).body);
-    assert.ok(pr.erased > 0);
-    const after = verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs });
+    assert.ok(pr.keys > 0);
+    const after = verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs, vault: d.vault });
     assert.ok(after.ok, JSON.stringify(after.errors));
-    assert.ok(after.warnings.length > 0);
+    assert.ok(after.erasedKeys > 0);
+    assert.equal(fs.readdirSync(path.join(P.keys, 'sessions')).length, 0, 'session keys destroyed');
     assert.ok(fs.readFileSync(P.ledger, 'utf8').includes('"kind":"purge"'));
     assert.ok(verify({ ledgerPath: P.ledger, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs }).ok);
   } finally { server.close(); }
