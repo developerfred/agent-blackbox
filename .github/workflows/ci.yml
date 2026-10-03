@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+        if: matrix.node == 22
+      # numbers only: shared runners are too noisy to fail a build on a budget
+      - run: npm run bench
+        if: matrix.node == 22

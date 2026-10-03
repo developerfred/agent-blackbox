@@ -11,12 +11,13 @@ const path = require('path');
 const crypto = require('crypto');
 const { Policy, redact, hostsIn } = require('./policy');
 const { loadConfig } = require('./paths');
+const { claudeDir, baseName } = require('./util');
 
 const DAY = 86400000;
 const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'lethal-trifecta']);
 const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
 // Rules worth listing per session in --details (plain egress is too common).
-const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper']);
+const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper', 'web3-transaction']);
 
 // Tool categories, in a fixed order: the order is also the color order in the
 // HTML report, so a category keeps its color everywhere.
@@ -52,7 +53,7 @@ function programsOf(cmd) {
     let w = words[0];
     if (w === 'sudo' || w === 'time' || w === 'exec' || w === 'nohup') w = words[1];
     if (!w) continue;
-    w = w.replace(/^["']|["']$/g, '').split('/').pop();
+    w = baseName(w.replace(/^["']|["']$/g, ''));
     if (/^[A-Za-z0-9._+-]{1,32}$/.test(w)) out.push(w);
   }
   return out;
@@ -62,7 +63,7 @@ const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
 const top = (map, k) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
 
 function defaultProjectsDir() {
-  const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const base = claudeDir();
   return path.join(base, 'projects');
 }
 
@@ -94,7 +95,7 @@ function* lines(file) {
       if (!n) break;
       const chunk = rest + buf.toString('utf8', 0, n);
       const parts = chunk.split('\n');
-      rest = parts.pop();
+      rest = parts.pop() ?? '';
       yield* parts;
     }
     if (rest) yield rest;
@@ -122,6 +123,9 @@ function humanPrompt(content) {
   return t || null;
 }
 
+/**
+ * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
+ */
 function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null, mcpAudits = null } = {}) {
   const { parseToolName, configFor } = require('./mcp');
   const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
@@ -303,7 +307,7 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
         return {
           server, plugin: r.plugin, calls: r.calls, sessions: r.sessions.size, outboundCalls: r.outbound, errors: r.errors,
           firstUsed: r.first, lastUsed: r.last,
-          tools: top(r.tools, 50).map(([name, count]) => ({ name, calls: count, outbound: parseToolName(`mcp__x__${name}`).outbound })),
+          tools: top(r.tools, 50).map(([name, count]) => ({ name, calls: count, outbound: parseToolName(`mcp__x__${name}`)?.outbound })),
           configured: cfgs.map((c) => ({ client: c.client, scope: c.scope, transport: c.transport, risk: c.risk, rules: c.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) })),
         };
       });

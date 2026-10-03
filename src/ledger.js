@@ -17,7 +17,7 @@ function canon(v) {
     .map((k) => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
 }
 
-const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const { sha256, parseLine } = require('./util');
 
 function loadOrCreateKeys(P) {
   if (!fs.existsSync(P.privKey)) {
@@ -48,15 +48,18 @@ function readLastLine(file) {
 class Ledger {
   // vault (optional): a Vault; when set, payload blobs are sealed with the key
   // of their session and stored under blobs/<kid>/<sha>.
+  /** @param {import('./types').Paths} P @param {{ vault?: import('./vault').Vault | null }} [opts] */
   constructor(P, { vault = null } = {}) {
     this.P = P;
     this.vault = vault;
     this.keys = loadOrCreateKeys(P);
+    this.size = fs.existsSync(P.ledger) ? fs.statSync(P.ledger).size : 0; // bytes written so far
     const last = readLastLine(P.ledger);
     if (last) {
       const rec = JSON.parse(last);
       this.seq = rec.seq;
       this.head = rec.hash;
+      this.last = rec;
     } else {
       this.seq = 0;
       this.head = GENESIS;
@@ -66,6 +69,7 @@ class Ledger {
 
   // Store content by its hash; returns the digest recorded in the chain (the
   // sha256 of the plaintext) and, when encrypted, the id of the key used.
+  /** @param {unknown} content @param {string | null} [scope] */
   putBlob(content, scope = null) {
     const buf = Buffer.isBuffer(content) ? content
       : Buffer.from(typeof content === 'string' ? content : canon(content));
@@ -86,6 +90,7 @@ class Ledger {
   }
 
   // Read a payload back (decrypting it if needed). Throws if it was erased.
+  /** @param {string} sha @param {string} [kid] */
   getBlob(sha, kid) {
     const file = blobPath(this.P.blobs, sha, kid);
     const raw = fs.readFileSync(file);
@@ -107,9 +112,12 @@ class Ledger {
     const hash = sha256(canon(rec));
     const sig = crypto.sign(null, Buffer.from(hash, 'hex'), this.keys.priv).toString('base64');
     const full = { ...rec, hash, sig };
-    fs.appendFileSync(this.P.ledger, JSON.stringify(full) + '\n', { mode: 0o600 });
+    const line = JSON.stringify(full) + '\n';
+    fs.appendFileSync(this.P.ledger, line, { mode: 0o600 });
+    this.size += Buffer.byteLength(line);
     this.seq = rec.seq;
     this.head = hash;
+    this.last = full;
     return full;
   }
 }
@@ -122,21 +130,26 @@ const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(
 // With a vault, encrypted payloads are decrypted and checked against their
 // hash; without one (a third party checking the chain), they are counted as
 // sealed and their content is not checked.
+/**
+ * @param {{ ledgerPath: string, pubPem?: string | null, blobsDir: string, vault?: import('./vault').Vault | null }} opts
+ */
 function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
-  const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: new Set(), sealed: 0, erasedKeys: 0 };
+  /** @type {{ ok: boolean, records: number, errors: { line: number, problem: string }[], warnings: string[], head: { seq: number, hash: string } | null, sessions: number, sealed: number, erasedKeys: number }} */
+  const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: 0, sealed: 0, erasedKeys: 0 };
+  const sessions = new Set();
   const erasedSeen = new Set();
-  // purge records come after the records they erase, so look ahead once
-  const purgedKeys = new Set();
-  try {
-    for (const l of fs.readFileSync(ledgerPath, 'utf8').split('\n')) {
-      if (l.includes('"kind":"purge"')) { try { for (const k of JSON.parse(l).erased_keys || []) purgedKeys.add(k); } catch { /* reported below */ } }
-    }
-  } catch { /* reported below */ }
-  if (!fs.existsSync(ledgerPath)) {
+  let text;
+  try { text = fs.readFileSync(ledgerPath, 'utf8'); } catch {
     out.ok = false; out.errors.push({ line: 0, problem: 'ledger not found' }); return out;
   }
+  const lines = text.split('\n');
+  // purge records come after the records they erase, so look ahead once
+  const purgedKeys = new Set();
+  for (const l of lines) {
+    if (!l.includes('"kind":"purge"')) continue;
+    for (const k of (parseLine(l) || {}).erased_keys || []) purgedKeys.add(k);
+  }
   const pub = pubPem ? crypto.createPublicKey(pubPem) : null;
-  const lines = fs.readFileSync(ledgerPath, 'utf8').split('\n');
   let prev = GENESIS;
   let expectSeq = 1;
   let chainPub = pub;
@@ -144,8 +157,8 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
     const line = lines[i];
     if (!line) continue;
     const fail = (problem) => { out.ok = false; out.errors.push({ line: i + 1, problem }); };
-    let rec;
-    try { rec = JSON.parse(line); } catch { fail('not valid JSON'); continue; }
+    const rec = parseLine(line);
+    if (!rec) { fail('not valid JSON'); continue; }
     out.records++;
     const { hash, sig, ...body } = rec;
     if (rec.seq !== expectSeq) fail(`sequence gap: expected ${expectSeq}, found ${rec.seq}`);
@@ -181,12 +194,12 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
         if (sha256(plain) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
       } else if (sha256(fs.readFileSync(file)) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
     }
-    if (rec.session_id) out.sessions.add(rec.session_id);
+    if (rec.session_id) sessions.add(rec.session_id);
     prev = hash;
     expectSeq = rec.seq + 1;
     out.head = { seq: rec.seq, hash };
   }
-  out.sessions = out.sessions.size;
+  out.sessions = sessions.size;
   return out;
 }
 

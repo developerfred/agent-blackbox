@@ -20,7 +20,9 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "bench": "node bench/run.js",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "keywords": [
     "ai-agents",
@@ -38,5 +40,9 @@
   "homepage": "https://github.com/developerfred/agent-blackbox#readme",
   "bugs": {
     "url": "https://github.com/developerfred/agent-blackbox/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
   }
 }

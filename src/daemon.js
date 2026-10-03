@@ -6,6 +6,7 @@ const path = require('path');
 const http = require('http');
 const zlib = require('zlib');
 const crypto = require('crypto');
+const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
 const { Vault, scopeOf } = require('./vault');
@@ -17,6 +18,16 @@ const clip = (s, n = 160) => {
   const t = redact(s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
+
+// Contents of a script the agent is about to run, if it is a small regular
+// file. Run as the recorder's own user, this may not see the human's folders;
+// then the script is trusted as before.
+function readScript(file, cwd) {
+  const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, require('os').homedir()));
+  const st = fs.statSync(p);
+  if (!st.isFile() || st.size > 200_000) return null;
+  return fs.readFileSync(p, 'utf8');
+}
 
 function summarize(ev) {
   const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
@@ -47,7 +58,17 @@ function otlpValue(v) {
   return null;
 }
 
+/** Placeholder for fields assigned in start(): only the process that owns the port opens the ledger. */
+const unset = /** @type {any} */ (null);
+
 class Daemon {
+  /** @type {Ledger} */ ledger = unset;
+  /** @type {Policy} */ policy = unset;
+  /** @type {Vault | null} */ vault = null;
+  /** @type {import('./types').DaemonState} */ state = unset;
+  /** @type {Map<number, [number, number]>} seq -> [byte offset, byte length] in the ledger file */ lines = new Map();
+  /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+
   constructor() {
     this.cfg = loadConfig();
     this.token = readToken();
@@ -60,7 +81,7 @@ class Daemon {
     this.vault = this.cfg.encrypt === false ? null : new Vault({ keysDir: P.keys });
     this.ledger = new Ledger(P, { vault: this.vault });
     this.loadState();
-    this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home] });
+    this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home], readFile: readScript });
     this.indexLedger();
     this.drainSpool();
     this.bodyTimer = setInterval(() => this.safe(() => this.pollBodies()), 2000);
@@ -79,17 +100,21 @@ class Daemon {
   // removal or disableAllHooks is also shown to the human on the next event.
   checkIntegrity() {
     return this.safe(() => {
+      // Running as a dedicated user, this process cannot see the human's
+      // Claude Code settings; `blackbox status` checks them as the human, and
+      // managed settings make removal impossible in the first place.
+      if (this.cfg.hardened) return { problems: [] };
       const { checkHooks } = require('./integrity');
       const { HOOK_EVENTS } = require('./install');
-      const prev = this.state.integrity || {};
-      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: (loadConfig().installed || {}).hooks === true ? 'settings' : null, wasVia: prev.via || null });
-      if (r.fingerprint === prev.fingerprint && r.problems.length === (prev.problems || []).length) return r;
-      this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev.fingerprint || undefined });
+      const prev = this.state.integrity;
+      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
+      if (r.fingerprint === prev?.fingerprint && r.problems.length === (prev?.problems || []).length) return r;
+      this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev?.fingerprint || undefined });
       if (r.problems.length) {
         this.append('decision', { decision: 'alert', rule: 'hook-tamper', reason: r.problems.join('; ') });
         this.pendingWarning = `agent-blackbox protection changed: ${r.problems.join('; ')}. Check with: blackbox status`;
       }
-      this.state.integrity = { fingerprint: r.fingerprint, via: r.via || prev.via || null, problems: r.problems, at: new Date().toISOString() };
+      this.state.integrity = { fingerprint: r.fingerprint, via: r.via || prev?.via || null, problems: r.problems, at: new Date().toISOString() };
       this.saveState();
       return r;
     });
@@ -118,6 +143,7 @@ class Daemon {
     return { decision: 'ask', rule: 'risky-mcp', reason: `The MCP server "${mp.server}" has high-risk findings in its local configuration: ${rules}. Review with: blackbox mcp` };
   }
 
+  /** @returns {import('./types').PolicyDecision | null} */
   skillGate(name) {
     const { riskFor } = require('./skills');
     const a = riskFor(this.skillAudits || [], name);
@@ -130,13 +156,21 @@ class Daemon {
   log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
 
   loadState() {
-    try { this.state = JSON.parse(fs.readFileSync(P.state, 'utf8')); } catch { this.state = {}; }
-    this.state.sessions ||= {};
+    this.state = { sessions: {}, salt: '', bodyIndexOffset: 0, ...readJson(P.state, {}) };
     this.state.salt ||= crypto.randomBytes(32).toString('hex');
-    this.state.bodyIndexOffset ||= 0;
   }
 
+  // The in-memory state is what the policy uses; the file only matters after a
+  // restart, so bursts of changes are written once, off the request path.
   saveState() {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.safe(() => this.flushState()), 250);
+    this.saveTimer.unref();
+  }
+
+  flushState() {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
     const tmp = P.state + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
     fs.renameSync(tmp, P.state);
@@ -144,10 +178,20 @@ class Daemon {
 
   // ---- in-memory index for the timeline UI ----
   indexLedger() {
+    this.lines.clear(); // payload lookups read one line, not the file
     if (!fs.existsSync(P.ledger)) return;
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      try { this.index(JSON.parse(line)); } catch { /* verify reports it */ }
+    const buf = fs.readFileSync(P.ledger);
+    for (let off = 0; off < buf.length;) {
+      let end = buf.indexOf(10, off);
+      if (end < 0) end = buf.length;
+      if (end > off) {
+        try {
+          const rec = JSON.parse(buf.toString('utf8', off, end));
+          this.lines.set(rec.seq, [off, end - off]);
+          this.index(rec);
+        } catch { /* verify reports it */ }
+      }
+      off = end + 1;
     }
   }
 
@@ -170,7 +214,9 @@ class Daemon {
   }
 
   append(kind, fields) {
+    const at = this.ledger.size;
     const rec = this.ledger.append(kind, fields);
+    this.lines.set(rec.seq, [at, this.ledger.size - at - 1]);
     this.index(rec);
     return rec;
   }
@@ -289,10 +335,7 @@ class Daemon {
     const lastByKey = new Map(); // kid -> { last, sessions }
     const plainOld = new Set();
     const plainKeep = new Set();
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      let r;
-      try { r = JSON.parse(line); } catch { continue; }
+    for (const r of readJsonl(P.ledger)) {
       const t = Date.parse(r.ts);
       if (r.key) {
         const k = lastByKey.get(r.key) || { last: 0, sessions: new Set() };
@@ -334,8 +377,7 @@ class Daemon {
 
   // Decrypted payload of one record, for the human reviewing the evidence.
   payload(seq) {
-    const s = [...this.sessions.values()].flatMap((x) => x.records).find((r) => r.seq === seq);
-    const rec = s || this.findRecord(seq);
+    const rec = this.findRecord(seq);
     if (!rec) return { status: 404, body: { error: 'unknown record' } };
     const out = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
     for (const f of ['payload', 'request_blob', 'response_blob']) {
@@ -351,12 +393,14 @@ class Daemon {
     return { status: 200, body: out };
   }
 
+  // One record by sequence number, read straight from its place in the file.
   findRecord(seq) {
-    for (const line of fs.readFileSync(P.ledger, 'utf8').split('\n')) {
-      if (!line) continue;
-      try { const r = JSON.parse(line); if (r.seq === seq) return r; } catch { /* skip */ }
-    }
-    return null;
+    const at = this.lines.get(seq);
+    if (!at) return null;
+    const buf = Buffer.alloc(at[1]);
+    const fd = fs.openSync(P.ledger, 'r');
+    try { fs.readSync(fd, buf, 0, at[1], at[0]); } finally { fs.closeSync(fd); }
+    try { return JSON.parse(buf.toString('utf8')); } catch { return null; }
   }
 
   drainSpool() {
@@ -364,10 +408,8 @@ class Daemon {
     const work = P.spool + '.draining';
     fs.renameSync(P.spool, work);
     let n = 0;
-    for (const line of fs.readFileSync(work, 'utf8').split('\n')) {
-      if (!line) continue;
+    for (const { payload, received_at } of readJsonl(work)) {
       try {
-        const { payload, received_at } = JSON.parse(line);
         this.handleHook(payload, { spooled: true, received_at });
         n++;
       } catch (e) { this.log('spool line skipped:', e.message); }
@@ -468,8 +510,9 @@ class Daemon {
         res.end(type === 'application/json' ? JSON.stringify(obj) : obj);
       };
       // DNS-rebinding guard: only answer requests addressed to loopback.
-      if (!okHosts.has(req.headers.host)) return send(403, { error: 'bad host' });
-      const url = new URL(req.url, `http://${req.headers.host}`);
+      const host = req.headers.host || '';
+      if (!okHosts.has(host)) return send(403, { error: 'bad host' });
+      const url = new URL(req.url || '/', `http://${host}`);
 
       // The page itself holds no data; everything else needs the token.
       if (req.method === 'GET' && url.pathname === '/') {
@@ -500,6 +543,10 @@ class Daemon {
         if (url.pathname === '/api/events') {
           const s = this.sessions.get(url.searchParams.get('session'));
           return send(s ? 200 : 404, s ? s.records : { error: 'unknown session' });
+        }
+        if (url.pathname === '/api/anchor') {
+          const l = this.ledger.last;
+          return send(l ? 200 : 404, l ? { seq: l.seq, hash: l.hash, sig: l.sig, key_id: this.ledger.keys.keyId } : { error: 'ledger is empty' });
         }
         if (url.pathname === '/api/verify') {
           return send(200, verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault }));
@@ -559,7 +606,7 @@ async function runDaemon() {
   d.log(`listening on 127.0.0.1:${P.port}, ledger seq ${d.ledger.seq}, mode ${d.cfg.mode}`);
   const stop = () => {
     d.safe(() => d.pollBodies());
-    d.safe(() => d.saveState());
+    d.safe(() => d.flushState());
     try { if (fs.readFileSync(P.pid, 'utf8') === String(process.pid)) fs.unlinkSync(P.pid); } catch { /* gone */ }
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();
