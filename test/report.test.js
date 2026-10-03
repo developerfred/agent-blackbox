@@ -21,3 +21,14 @@ test('blackbox skills report: sorted by risk then name, low notes behind --all',
   const names = [...golden.skills.matchAll(/^ {2}(?:high|medium|low|clean) +(\S+)/gm)].map((m) => m[1]);
   assert.deepEqual(names, ['zeta', 'beta', 'alpha']);
 });
+
+test('cli: --mode is validated for eval and install', () => {
+  const { spawnSync } = require('child_process');
+  const bin = require('path').join(__dirname, '..', 'bin', 'blackbox.js');
+  const bad = spawnSync(process.execPath, [bin, 'eval', '--mode', 'bogus'], { encoding: 'utf8', env: { ...process.env, BLACKBOX_HOME: require('os').tmpdir() + '/bb-mode' } });
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /mode must be ask, deny or monitor/);
+  const ok = spawnSync(process.execPath, [bin, 'eval', '--mode', 'deny', '--json'], { encoding: 'utf8', env: { ...process.env, BLACKBOX_HOME: require('os').tmpdir() + '/bb-mode' } });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.ok(JSON.parse(ok.stdout).attacks > 0);
+});

@@ -105,3 +105,35 @@ export interface Paths {
   config: string; state: string; spool: string; pid: string; log: string;
   bodies: string; anchors: string;
 }
+
+export type Severity = 'high' | 'medium' | 'low' | 'none';
+
+export interface Finding {
+  severity: Severity;
+  rule: string;
+  message: string;
+  detail?: string | null;
+  file?: string;
+  line?: number;
+  excerpt?: string;
+}
+
+export interface Counts { high: number; medium: number; low: number }
+
+/** One configured MCP server, audited (src/mcp.js). */
+export interface McpAudit {
+  name: string; client: string; scope: string; transport: string;
+  command?: string | null; args: string[]; url?: string | null;
+  findings: Finding[]; counts: Counts; risk: Severity;
+  pin: 'new' | 'pinned' | 'changed';
+  [extra: string]: unknown;
+}
+
+/** One installed skill, audited (src/skills.js). */
+export interface SkillAudit {
+  name: string; source: string; fileCount: number;
+  risk: Severity; counts: Counts;
+  pin: { status: 'new' | 'pinned' | 'changed'; [extra: string]: unknown };
+  findings: Finding[];
+  [extra: string]: unknown;
+}

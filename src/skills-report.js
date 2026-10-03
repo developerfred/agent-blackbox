@@ -1,11 +1,16 @@
 'use strict';
 // Terminal view of `blackbox skills`.
+const { palette } = require('./term');
+
+/** @type {Record<string, number>} */
 const SEV_ORDER = { high: 0, medium: 1, low: 2, none: 3 };
 
+/**
+ * @param {import('./types').SkillAudit[]} audits
+ * @param {{ color?: boolean, all?: boolean }} [opts]
+ */
 function renderSkills(audits, { color = false, all = false } = {}) {
-  const c = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : String(s));
-  const red = c(31), yellow = c(33), green = c(32), dim = c(2), bold = c(1), cyan = c(36);
-  const sevCol = { high: red, medium: yellow, low: dim, none: green };
+  const { red, yellow, dim, bold, cyan, bySeverity: sevCol } = palette(color);
   const out = [bold(`agent-blackbox skills · ${audits.length} installed`)];
   if (!audits.length) {
     out.push(dim('  no skills found (looked in ~/.claude, ~/.agents, ~/.cursor, ~/.codex, ~/.copilot and this project)'));

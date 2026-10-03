@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const { Policy, redact, hostsIn } = require('./policy');
 const { loadConfig } = require('./paths');
 const { claudeDir, baseName } = require('./util');
+const { palette } = require('./term');
 
 const DAY = 86400000;
 const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'lethal-trifecta']);
@@ -330,8 +331,7 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
 const day = (ts) => (ts ? String(ts).slice(0, 10) : '?');
 
 function renderReport(summary, { color = (process.stdout.isTTY ? true : false), details = false } = {}) {
-  const c = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : String(s));
-  const red = c(31), green = c(32), yellow = c(33), dim = c(2), bold = c(1), cyan = c(36);
+  const { red, green, yellow, dim, bold, cyan } = palette(color);
   const S = summary;
   const n = (x) => Number(x).toLocaleString('en-US');
   const warn = (x, col) => (x ? col(n(x)) : green(n(x)));

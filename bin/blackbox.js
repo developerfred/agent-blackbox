@@ -9,8 +9,7 @@ const { verify, GENESIS } = require('../src/ledger');
 const { readJsonl } = require('../src/util');
 
 const tty = process.stdout.isTTY;
-const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
-const red = c(31), green = c(32), yellow = c(33), dim = c(2), bold = c(1), cyan = c(36);
+const { red, green, yellow, dim, bold, cyan } = require('../src/term').palette(!!tty);
 
 // admin: this call reads, verifies or erases, so it needs the admin token
 function call(method, p, body, admin = true) {
@@ -187,6 +186,16 @@ function tamperDemo() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+/** @type {import('../src/types').Mode[]} */
+const MODES = ['ask', 'deny', 'monitor'];
+
+/** @param {string} m @returns {import('../src/types').Mode} */
+function parseMode(m) {
+  const mode = MODES.find((x) => x === m);
+  if (!mode) throw new Error('mode must be ask, deny or monitor');
+  return mode;
+}
+
 // One scan of past sessions with the skill and MCP audits attached (both optional).
 function scanSummary(opt, badDays = '--days must be a positive number') {
   const { scan, defaultProjectsDir } = require('../src/scan');
@@ -262,9 +271,9 @@ async function main() {
     }
     case 'install': {
       const mode = opt('--mode');
-      if (mode && !['ask', 'deny', 'monitor'].includes(mode)) throw new Error('mode must be ask, deny or monitor');
+      if (mode) parseMode(mode);
       console.log(bold('Installing agent-blackbox into Claude Code'));
-      require('../src/install').install({ mode: /** @type {import('../src/types').Mode | undefined} */ (mode), raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+      require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
       await stop().catch(() => {});
       await start();
       console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
@@ -274,7 +283,7 @@ async function main() {
     case 'uninstall': return require('../src/install').uninstall();
     case 'mode': {
       const m = args[0];
-      if (!['ask', 'deny', 'monitor'].includes(m)) throw new Error('usage: blackbox mode ask|deny|monitor');
+      if (!MODES.includes(/** @type {any} */ (m))) throw new Error('usage: blackbox mode ask|deny|monitor');
       if (remote()) {
         const c = loadConfig();
         console.log('The policy lives with the recorder, which runs as its own user, so only an admin can change it:');
@@ -394,7 +403,7 @@ async function main() {
     case 'eval': {
       // the policy against the evasion corpus: catch rate, false alarms, known gaps
       const { runAll } = require('../eval/run');
-      const r = runAll(opt('--mode') || 'ask');
+      const r = runAll(parseMode(opt('--mode') || 'ask'));
       if (flag('--json')) { console.log(JSON.stringify(r, null, 2)); return; }
       console.log(bold('agent-blackbox policy evaluation') + dim(` · ${r.results.length} cases · mode ${opt('--mode') || 'ask'}`));
       console.log(`  attacks caught   ${r.caught === r.attacks ? green(`${r.caught}/${r.attacks}`) : red(`${r.caught}/${r.attacks}`)}`);
