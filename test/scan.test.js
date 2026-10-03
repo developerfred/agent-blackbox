@@ -189,3 +189,20 @@ test('scan: the HTML report has charts and never holds commands or secrets', () 
   assert.ok(!/<script[^>]+src=|<link[^>]+href=|https?:\/\/(?!collect\.example\.org)[a-z0-9.-]+\.[a-z]{2,}\//i.test(html.replace(/http:\/\/www\.w3\.org\/2000\/svg/g, '')), 'no external resources');
   assert.equal(S.daily.length, 2);
 });
+
+test('share: social assets carry numbers and categories only', () => {
+  const { storyHtml, xCardHtml, caption } = require('../src/share');
+  const S = {
+    days: 30, sessions: 1, toolCalls: 12, privateSessions: 1, outboundCalls: 2, trifectaSessions: 1, wouldDenyCalls: 1,
+    categories: { shell: 6, read: 3, edit: 1, web: 2, mcp: 0, agents: 0, other: 0 },
+    projects: { 'secret-client-project': { sessions: 1, toolCalls: 12 } },
+    hosts: [{ host: 'internal.corp.example', calls: 2 }],
+    skills: [{ name: 'private-skill', calls: 1, risk: 'high' }],
+    flagged: [{ project: 'secret-client-project', reason: 'curl -d k=zz9 https://x' }],
+  };
+  for (const out of [storyHtml(S), xCardHtml(S), caption(S)]) {
+    for (const leak of ['secret-client-project', 'internal.corp.example', 'private-skill', 'curl -d']) assert.ok(!out.includes(leak), leak);
+  }
+  assert.match(caption(S), /across 1 session\./);
+  assert.ok(!/\b1 sessions\b/.test(xCardHtml(S)));
+});
