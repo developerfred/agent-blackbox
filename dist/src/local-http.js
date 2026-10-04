@@ -1,11 +1,11 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.request = request;
 // A minimal JSON-over-HTTP client for the recorder on 127.0.0.1. Loading
 // node's `http` costs about 8 ms per process, which every hook pays; `net` is
 // already loaded, so the hook and the CLI speak HTTP/1.1 over it directly.
-const net = require('net');
-/** @param {Buffer} buf */
+const net = require("net");
 function decodeChunked(buf) {
-    /** @type {Buffer[]} */
     const out = [];
     for (let i = 0; i < buf.length;) {
         const eol = buf.indexOf('\r\n', i);
@@ -22,8 +22,6 @@ function decodeChunked(buf) {
 /**
  * One request to the recorder. Resolves with the status and the parsed JSON
  * body (null if empty or not JSON); rejects on a socket error or timeout.
- * @param {{ port: number, method?: string, path: string, token?: string, body?: string | object | null, timeout?: number }} opts
- * @returns {Promise<{ status: number, body: any }>}
  */
 function request({ port, method = 'GET', path, token = '', body = null, timeout = 5000 }) {
     return new Promise((resolve, reject) => {
@@ -32,7 +30,6 @@ function request({ port, method = 'GET', path, token = '', body = null, timeout 
             `${method} ${path} HTTP/1.1`, `host: 127.0.0.1:${port}`, 'connection: close', 'content-type: application/json',
             `x-blackbox-token: ${token}`, ...(payload ? [`content-length: ${payload.length}`] : []), '', '',
         ].join('\r\n');
-        /** @type {Buffer[]} */
         const chunks = [];
         const sock = net.connect({ host: '127.0.0.1', port }, () => sock.write(payload ? Buffer.concat([Buffer.from(head), payload]) : head));
         sock.setTimeout(timeout, () => sock.destroy(new Error('timeout')));
@@ -57,4 +54,3 @@ function request({ port, method = 'GET', path, token = '', body = null, timeout 
         });
     });
 }
-module.exports = { request };
