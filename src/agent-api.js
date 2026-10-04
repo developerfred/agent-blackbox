@@ -202,4 +202,4 @@ function handle(daemon, url, admin) {
   return { status: 404, body: { error: 'not found' } };
 }
 
-module.exports = { handle, capabilities, openapi, compact, ENDPOINTS, RULES, RECORD_KINDS, SCHEMAS, SCHEMA };
+module.exports = { VERSION: pkg.version, handle, capabilities, openapi, compact, ENDPOINTS, RULES, RECORD_KINDS, SCHEMAS, SCHEMA };
