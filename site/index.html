@@ -92,6 +92,7 @@ blackbox verify             # prove nothing was changed</code></pre>
 <div><dt>Secrets never stored</dt><dd>Replaced by HMAC fingerprints before anything is written.</dd></div>
 <div><dt>Real erasure</dt><dd>Per-session keys: <code>purge</code> or <code>retainDays</code> makes old sessions unreadable, backups included.</dd></div>
 <div><dt>Web3 aware</dt><dd>Seed phrases, keystores and transaction signing count as sensitive.</dd></div>
+<div><dt>Open format and OTel export</dt><dd>The <a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/spec/ledger-v1.md">ledger format</a> is specified with test vectors. <code>blackbox export</code> writes OpenTelemetry GenAI traces, metadata only.</dd></div>
 <div><dt>Measured</dt><dd><code>blackbox eval</code>: 62 of 62 known attacks caught, 0 of 20 false alarms.</dd></div>
 </dl>
 </div>
