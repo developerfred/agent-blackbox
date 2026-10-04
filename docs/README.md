@@ -1,6 +1,7 @@
 # Documentation
 
 - [PRIVACY.md](PRIVACY.md): what is recorded, where it is kept, retention, and what the defaults do not protect against
+- [AGENT-API.md](AGENT-API.md): the read-only JSON API for agents (`/v1/agent/*`), its scopes and what it never returns
 - [AGENTS.md](AGENTS.md): how agents plug in (adapters), and what each one can enforce
 - [spec/ledger-v1.md](spec/ledger-v1.md): the open ledger and event format (hash chain, signatures, sealed payloads, crypto-erase)
 - [ANCHORING.md](ANCHORING.md): Merkle batches of the chain, inclusion proofs, publishing the head

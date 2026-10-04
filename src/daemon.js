@@ -12,6 +12,7 @@ const { Ledger, verify } = require('./ledger');
 const { merkleRoot, MERKLE_ALG } = require('./merkle');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
+const agentApi = require('./agent-api');
 
 const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
@@ -85,6 +86,8 @@ class Daemon {
   /** @type {number[]} */ lineOff = [];
   /** @type {number[]} */ lineLen = [];
   /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+  verifiedAt = 0;
+  /** @type {any} */ verified = null;
 
   constructor() {
     this.cfg = loadConfig();
@@ -611,6 +614,16 @@ class Daemon {
     }
   }
 
+  /** Chain verification for /v1/agent/status, at most once every 10 seconds. */
+  verifyCached() {
+    const now = Date.now();
+    if (!this.verifiedAt || now - this.verifiedAt > 10_000) {
+      this.verified = verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault });
+      this.verifiedAt = now;
+    }
+    return this.verified;
+  }
+
   // ---- HTTP ----
   listen(port = P.port, host = '127.0.0.1') {
     const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -638,10 +651,14 @@ class Daemon {
       const same = (a) => !!a && tok.length === a.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(a));
       const admin = same(this.adminToken);
       if (!admin && !same(this.token)) return send(401, { error: 'token' });
-      const INGEST = new Set(['POST /hook', 'POST /v1/logs', 'POST /spool', 'GET /health']);
+      // the public tier of the agent API (what blackbox is, rules, a health line) is for the agent itself
+      const INGEST = new Set(['POST /hook', 'POST /v1/logs', 'POST /spool', 'GET /health',
+        ...agentApi.ENDPOINTS.filter((e) => e.scope === 'public').map((e) => `GET ${e.path}`)]);
       if (!admin && !INGEST.has(`${req.method} ${url.pathname}`)) return send(403, { error: 'this token can only add events' });
 
       if (req.method === 'GET') {
+        const a = agentApi.handle(this, url, admin);
+        if (a) return send(a.status, a.body);
         if (url.pathname === '/health') {
           const base = { ok: true, seq: this.ledger.seq, mode: this.cfg.mode, uid: typeof process.getuid === 'function' ? process.getuid() : null, encrypted: !!this.vault };
           return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: P.home, integrity: this.state.integrity || null } : base);
