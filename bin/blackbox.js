@@ -197,14 +197,16 @@ function parseMode(m) {
 }
 
 // One scan of past sessions with the skill and MCP audits attached (both optional).
-function scanSummary(opt, badDays = '--days must be a positive number') {
-  const { scan, defaultProjectsDir } = require('../src/scan');
+async function scanSummary(opt, badDays = '--days must be a positive number') {
+  const { scanParallel, defaultProjectsDir } = require('../src/scan');
   const days = Number(opt('--days') || 30);
+  const jobs = opt('--jobs') == null ? undefined : Number(opt('--jobs'));
+  if (jobs !== undefined && !(jobs >= 1)) throw new Error('--jobs must be a positive number');
   if (!(days > 0)) throw new Error(badDays);
   const optional = (fn) => { try { return fn(); } catch { return null; } };
   const audits = optional(() => require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }));
   const mcpAudits = optional(() => require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }));
-  return { days, summary: scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits }) };
+  return { days, summary: await scanParallel({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits, jobs }) };
 }
 
 // Reports and kits are never written into Claude Code's own data directory.
@@ -245,7 +247,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox eval [--all] [--json] [--mode deny]
                               run the policy against the evasion corpus (catch rate, false alarms, gaps)
   blackbox ui                 open the local timeline page
-  blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir]
+  blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir] [--jobs N]
                               audit past Claude Code sessions offline (no install, nothing uploaded)
 
 data: ${P.home}`;
@@ -428,7 +430,7 @@ async function main() {
     }
     case 'scan': {
       const { renderReport, renderCard } = require('../src/scan');
-      const { summary, days } = scanSummary(opt, '--days must be a positive number');
+      const { summary, days } = await scanSummary(opt, '--days must be a positive number');
       // never write into Claude Code's own data directory
       const safeOut = (file) => assertOutsideClaudeDir(path.resolve(file));
       const card = opt('--card');
@@ -455,7 +457,7 @@ async function main() {
       return;
     }
     case 'share': {
-      const { summary, days } = scanSummary(opt);
+      const { summary, days } = await scanSummary(opt);
       const out = assertOutsideClaudeDir(path.resolve(opt('--out') || 'blackbox-share'));
       console.log(bold('Making your share kit') + dim(` · last ${days} days · ${summary.toolCalls} tool calls`));
       const { made } = await require('../src/share').makeShareKit(summary, out, { video: !flag('--no-video'), log: (m) => console.log(dim('  ' + m)) });

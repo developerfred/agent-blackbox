@@ -29,7 +29,7 @@ npx agent-blackbox scan                 # or: node bin/blackbox.js scan
 npx agent-blackbox scan --card me.svg   # a shareable card with numbers only
 ```
 
-It replays your past sessions (`~/.claude/projects`) through the policy and tells you how many read secrets, ingested web content, called out, and which calls would have been blocked. Use `--days N`, `--details` or `--json`.
+It replays your past sessions (`~/.claude/projects`) through the policy and tells you how many read secrets, ingested web content, called out, and which calls would have been blocked. Use `--days N`, `--details` or `--json`. Transcripts are replayed on worker threads (one per core, up to 8); `--jobs N` sets the count and `--jobs 1` keeps it single-threaded.
 
 ```bash
 npx agent-blackbox scan --html          # local HTML report: tool categories, projects, skills, MCP servers, hosts
