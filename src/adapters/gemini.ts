@@ -1,4 +1,3 @@
-'use strict';
 // Google Gemini CLI. Hooks live in ~/.gemini/settings.json under "hooks", keyed
 // by Gemini's own event names; a hook reads JSON on stdin and prints only JSON
 // on stdout. Gemini's tools have their own names, which this adapter maps to
@@ -8,12 +7,13 @@
 //   - AfterTool sees the result, so the session learns what it read;
 //   - BeforeAgent is the prompt, AfterAgent the end of a turn.
 // Gemini's model-level hooks (BeforeModel, AfterModel, BeforeToolSelection) are not used.
-const path = require('path');
-const os = require('os');
-const { withAskFallback, stripOurs, str } = require('./shared');
+import * as path from 'path';
+import * as os from 'os';
+import { withAskFallback, stripOurs, str } from './shared';
+import type { Adapter, HookEvent } from '../types';
 
 /** native event -> canonical event */
-const EVENTS = /** @type {Record<string, string>} */ ({
+const EVENTS: Record<string, string> = {
   SessionStart: 'SessionStart',
   SessionEnd: 'SessionEnd',
   BeforeAgent: 'UserPromptSubmit',
@@ -21,15 +21,13 @@ const EVENTS = /** @type {Record<string, string>} */ ({
   BeforeTool: 'PreToolUse',
   AfterTool: 'PostToolUse',
   Notification: 'Notification',
-});
+};
 const TOOL_EVENTS = new Set(['BeforeTool', 'AfterTool']);
 
-/** @param {string} text @returns {string[]} */
-const urlsIn = (text) => (text.match(/https?:\/\/[^\s"'<>)\]]+/g) || []).map((u) => u.replace(/[.,;:]+$/, ''));
+const urlsIn = (text: string): string[] => (text.match(/https?:\/\/[^\s"'<>)\]]+/g) || []).map((u) => u.replace(/[.,;:]+$/, ''));
 
-/** One Gemini tool call as the canonical { tool_name, tool_input }.
- * @param {Record<string, any>} n */
-function mapTool(n) {
+/** One Gemini tool call as the canonical { tool_name, tool_input }. */
+function mapTool(n: Record<string, any>): { tool_name: string; tool_input: Record<string, any> } {
   const name = str(n.tool_name);
   const input = n.tool_input && typeof n.tool_input === 'object' ? n.tool_input : {};
   const file = str(input.file_path) || str(input.absolute_path);
@@ -39,7 +37,7 @@ function mapTool(n) {
     case 'run_shell_command': return { tool_name: 'Bash', tool_input: { command: str(input.command), directory: input.directory } };
     case 'read_file': return { tool_name: 'Read', tool_input: { file_path: file } };
     case 'read_many_files': {
-      const paths = [].concat(input.paths || input.include || []).map(String);
+      const paths = ([] as any[]).concat(input.paths || input.include || []).map(String);
       return { tool_name: 'Read', tool_input: { file_path: paths[0] || '', path: paths.join('\n') } };
     }
     case 'write_file': return { tool_name: 'Write', tool_input: { file_path: file, content: input.content } };
@@ -61,8 +59,7 @@ function mapTool(n) {
   }
 }
 
-/** @type {import('../types').Adapter} */
-const adapter = {
+const adapter: Adapter = {
   id: 'gemini',
   name: 'Gemini CLI',
   capabilities: { preTool: true, ask: false, postTool: true, prompt: true, session: true },
@@ -70,8 +67,7 @@ const adapter = {
   decode(native) {
     const event = EVENTS[native.hook_event_name];
     if (!event || !native.session_id) return null;
-    /** @type {import('../types').HookEvent} */
-    const ev = { hook_event_name: event, agent: 'gemini', session_id: String(native.session_id), cwd: str(native.cwd) || undefined };
+    const ev: HookEvent = { hook_event_name: event, agent: 'gemini', session_id: String(native.session_id), cwd: str(native.cwd) || undefined };
     if (TOOL_EVENTS.has(native.hook_event_name)) {
       Object.assign(ev, mapTool(native));
       if (native.hook_event_name === 'AfterTool') ev.tool_response = native.tool_response;
@@ -86,8 +82,7 @@ const adapter = {
   encode(res, native, opts = {}) {
     const v = withAskFallback(res && res.verdict, adapter.capabilities.ask, opts.askFallback || 'deny');
     if (!v) return {};
-    /** @type {Record<string, any>} */
-    const out = {};
+    const out: Record<string, any> = {};
     if (v.permission === 'deny' && native.hook_event_name === 'BeforeTool') {
       out.decision = 'deny';
       out.reason = v.agentMessage;
@@ -115,4 +110,4 @@ const adapter = {
     note: 'Gemini CLI hooks may need to be enabled in your Gemini settings, and take effect in a new session.',
   },
 };
-module.exports = adapter;
+export = adapter;

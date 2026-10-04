@@ -1,4 +1,3 @@
-'use strict';
 // Cursor (editor and agent). Hooks live in ~/.cursor/hooks.json, one command
 // per event name, each event with its own payload and its own reply:
 //   beforeShellExecution / beforeMCPExecution  { permission: allow|deny|ask, user_message, agent_message }
@@ -10,12 +9,13 @@
 //   - file edits arrive only afterFileEdit: recorded, not gated. The memory-write
 //     rule cannot stop a write in Cursor, it can only be seen afterwards.
 // Only the events above are registered; Cursor's other hook points are left alone.
-const path = require('path');
-const os = require('os');
-const { maybeJson, str, stripOurs } = require('./shared');
+import * as path from 'path';
+import * as os from 'os';
+import { maybeJson, str, stripOurs } from './shared';
+import type { Adapter, HookEvent } from '../types';
 
 /** native event -> canonical event */
-const EVENTS = /** @type {Record<string, string>} */ ({
+const EVENTS: Record<string, string> = {
   beforeShellExecution: 'PreToolUse',
   afterShellExecution: 'PostToolUse',
   beforeMCPExecution: 'PreToolUse',
@@ -24,20 +24,18 @@ const EVENTS = /** @type {Record<string, string>} */ ({
   afterFileEdit: 'PostToolUse',
   beforeSubmitPrompt: 'UserPromptSubmit',
   stop: 'Stop',
-});
+};
 const GATED = new Set(['beforeShellExecution', 'beforeMCPExecution']);
 
-/** The MCP server's name: Cursor names the tool, not always the server.
- * @param {Record<string, any>} n */
-function mcpServer(n) {
+/** The MCP server's name: Cursor names the tool, not always the server. */
+function mcpServer(n: Record<string, any>): string {
   let name = str(n.server) || str(n.server_name);
   if (!name && str(n.url)) { try { name = new URL(n.url).hostname; } catch { /* not a URL */ } }
   if (!name && str(n.command)) name = path.basename(n.command.trim().split(/\s+/)[0]);
   return (name || 'cursor').replace(/[^\w.-]/g, '_');
 }
 
-/** @type {import('../types').Adapter} */
-const adapter = {
+const adapter: Adapter = {
   id: 'cursor',
   name: 'Cursor',
   capabilities: { preTool: true, ask: true, postTool: true, prompt: true, session: false },
@@ -46,8 +44,7 @@ const adapter = {
     const event = EVENTS[native.hook_event_name];
     const sid = str(native.conversation_id) || str(native.session_id);
     if (!event || !sid) return null;
-    /** @type {import('../types').HookEvent} */
-    const ev = {
+    const ev: HookEvent = {
       hook_event_name: event, agent: 'cursor', session_id: sid,
       cwd: str(native.cwd) || (Array.isArray(native.workspace_roots) ? str(native.workspace_roots[0]) : '') || undefined,
       prompt_id: str(native.generation_id) || undefined,
@@ -100,4 +97,4 @@ const adapter = {
     note: 'Restart Cursor so it reads the new hooks. File edits are recorded after they happen, not gated.',
   },
 };
-module.exports = adapter;
+export = adapter;

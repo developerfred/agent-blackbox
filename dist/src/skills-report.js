@@ -1,22 +1,17 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.renderSkills = renderSkills;
 // Terminal view of `blackbox skills`.
-const { palette } = require('./term');
-/** @type {Record<string, number>} */
-/** @type {Record<string, number>} */
+const term_1 = require("./term");
 const SEV_ORDER = { high: 0, medium: 1, low: 2, none: 3 };
-/**
- * @param {import('./types').SkillAudit[]} audits
- * @param {{ color?: boolean, all?: boolean }} [opts]
- */
 function renderSkills(audits, { color = false, all = false } = {}) {
-    const { red, yellow, dim, bold, cyan, bySeverity: sevCol } = palette(color);
+    const { red, yellow, dim, bold, cyan, bySeverity: sevCol } = (0, term_1.palette)(color);
     const out = [bold(`agent-blackbox skills · ${audits.length} installed`)];
     if (!audits.length) {
         out.push(dim('  no skills found (looked in ~/.claude, ~/.agents, ~/.cursor, ~/.codex, ~/.copilot and this project)'));
         return out.join('\n');
     }
     const sorted = [...audits].sort((a, b) => SEV_ORDER[a.risk] - SEV_ORDER[b.risk] || a.name.localeCompare(b.name));
-    /** @type {Record<string, number>} */
     const tally = { high: 0, medium: 0, low: 0, none: 0 };
     for (const a of audits)
         tally[a.risk]++;
@@ -42,4 +37,3 @@ function renderSkills(audits, { color = false, all = false } = {}) {
         out.push(dim('  Low-severity notes hidden; show them with --all.'));
     return out.join('\n');
 }
-module.exports = { renderSkills };
