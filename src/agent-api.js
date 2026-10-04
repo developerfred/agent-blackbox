@@ -39,10 +39,12 @@ const RULES = [
 
 const RECORD_KINDS = ['genesis', 'hook', 'decision', 'intent', 'taint', 'settings', 'otel', 'api_body', 'purge', 'anchor'];
 
+/** @param {Record<string, unknown>} properties @param {string[]} [required] */
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: true });
 const str = { type: 'string' };
 const int = { type: 'integer' };
 const bool = { type: 'boolean' };
+/** @param {unknown} items */
 const arr = (items) => ({ type: 'array', items });
 
 /** Response shapes, shared by the OpenAPI document and the tests. */
@@ -101,6 +103,7 @@ function capabilities() {
 }
 
 function openapi() {
+  /** @type {Record<string, any>} */
   const paths = {};
   for (const e of ENDPOINTS) {
     const ok = e.schema
@@ -133,10 +136,13 @@ function openapi() {
   };
 }
 
+/** @param {unknown} v @param {number} dflt */
 const num = (v, dflt) => { const n = Number(v); return v != null && v !== '' && Number.isFinite(n) ? Math.trunc(n) : dflt; };
 
 /** Drop everything but metadata: no summary, no payload references, no signature. */
+/** @param {Record<string, any>} rec */
 function compact(rec) {
+  /** @type {Record<string, any>} */
   const out = { seq: rec.seq, ts: rec.ts, kind: rec.kind, hash: rec.hash };
   for (const f of ['event', 'session_id', 'prompt_id', 'tool_name', 'tool_use_id', 'decision', 'rule', 'reason', 'flag', 'why', 'hosts', 'via', 'problems', 'from', 'to', 'count', 'root']) {
     if (rec[f] !== undefined) out[f] = rec[f];
@@ -186,7 +192,7 @@ function handle(daemon, url, admin) {
       const out = [];
       let last = after;
       for (let i = 0; i < seqs.length && out.length < limit; i += 200) {
-        const batch = seqs.slice(i, i + 200).filter((q) => q > after);
+        const batch = seqs.slice(i, i + 200).filter((/** @type {number} */ q) => q > after);
         for (const rec of daemon.readRecords(batch)) {
           last = rec.seq;
           if (kinds.has(rec.kind) && (!session || rec.session_id === session)) {
@@ -195,7 +201,7 @@ function handle(daemon, url, admin) {
           }
         }
       }
-      const more = out.length >= limit && seqs.some((q) => q > last);
+      const more = out.length >= limit && seqs.some((/** @type {number} */ q) => q > last);
       return { status: 200, body: { schema: SCHEMA, records: out, next_after: more ? last : null } };
     }
   }
