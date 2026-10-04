@@ -266,10 +266,10 @@ async function main() {
     case 'status': {
       const h = await health();
       const cfg = loadConfig();
-      console.log(h ? `${green('●')} recording · pid ${h.pid || '?'} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
+      console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       const { checkHooks } = require('../src/integrity');
       const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
-      console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${P.home}`);
+      console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home}`);
       for (const p of ig.problems) console.log(red(`  ✘ ${p}`));
       return;
     }
