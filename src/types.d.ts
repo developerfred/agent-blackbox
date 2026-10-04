@@ -154,6 +154,11 @@ export interface LedgerRecord {
   request_blob?: string;
   response_blob?: string;
   key?: string;
+  decision?: string;
+  rule?: string;
+  reason?: string;
+  flag?: string;
+  why?: string;
   [extra: string]: unknown;
 }
 

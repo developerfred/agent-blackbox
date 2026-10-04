@@ -10,11 +10,13 @@ const { readJsonl } = require('../src/util');
 const tty = process.stdout.isTTY;
 const { red, green, yellow, dim, bold, cyan } = require('../src/term').palette(!!tty);
 // admin: this call reads, verifies or erases, so it needs the admin token
+/** @param {string} method @param {string} p @param {any} [body] @param {boolean} [admin] */
 function call(method, p, body, admin = true) {
     const token = cliToken(admin);
     return require('../src/local-http').request({ port: P.port, method, path: p, token, body });
 }
 const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
+/** @param {number} ms */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** @param {{ quiet?: boolean }} [opts] */
 async function start({ quiet } = {}) {
@@ -79,6 +81,7 @@ async function readRecords() {
     }
     return recs.sort((a, b) => a.seq - b.seq);
 }
+/** @param {import('../src/types').LedgerRecord[]} recs */
 function sessionsOf(recs) {
     const m = new Map();
     for (const r of recs) {
@@ -93,13 +96,15 @@ function sessionsOf(recs) {
             s.cwd = r.cwd;
         if (r.kind === 'taint')
             s.flags.add(r.flag);
-        if (r.kind === 'decision' && ['ask', 'deny', 'alert'].includes(r.decision))
+        if (r.kind === 'decision' && ['ask', 'deny', 'alert'].includes(String(r.decision)))
             s.blocks++;
         m.set(r.session_id, s);
     }
     return [...m.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
 }
+/** @param {string | number | Date} ts */
 const time = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+/** @param {import('../src/types').LedgerRecord[]} recs @param {string} id @param {{ otel?: boolean }} [opts] */
 function printTimeline(recs, id, { otel = false } = {}) {
     const rows = recs.filter((r) => r.session_id === id && (otel || r.kind !== 'otel'));
     if (!rows.length) {
@@ -115,7 +120,7 @@ function printTimeline(recs, id, { otel = false } = {}) {
         }
         else if (r.kind === 'decision') {
             const col = r.decision === 'deny' ? red : r.decision === 'ask' || r.decision === 'alert' ? yellow : dim;
-            console.log(`${t} ${seq} ${col(`■ ${r.decision.toUpperCase()} ${r.rule}`.padEnd(22))} ${col(r.reason)}`);
+            console.log(`${t} ${seq} ${col(`■ ${String(r.decision).toUpperCase()} ${r.rule}`.padEnd(22))} ${col(r.reason)}`);
         }
         else if (r.kind === 'api_body') {
             console.log(`${t} ${seq} ${cyan('◆ model call'.padEnd(22))} ${r.summary || ''}`);
@@ -141,6 +146,7 @@ function localVault() {
         return null;
     }
 }
+/** @param {any} r a verify result */
 function report(r) {
     if (r.ok) {
         console.log(`${green('✔ chain intact')} · ${r.records} records · ${r.sessions} session${r.sessions === 1 ? '' : 's'} · head #${r.head.seq} ${r.head.hash.slice(0, 16)}…`);
@@ -165,7 +171,9 @@ async function demo() {
     const sid = `demo-${Date.now().toString(36)}`;
     const key = 'sk-demo-' + 'Q7f3kLm9Xz2Rw8Vt5Np1Hc6Jd4';
     let n = 0;
+    /** @param {Record<string, any>} ev */
     const hook = async (ev) => (await call('POST', '/hook', { session_id: sid, cwd: '/tmp/demo-repo', ...ev }, false)).body.stdout;
+    /** @param {string} tool_name @param {Record<string, any>} tool_input @param {any} [tool_response] */
     const tool = async (tool_name, tool_input, tool_response) => {
         const id = `toolu_demo_${++n}`;
         const out = await hook({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: id });
@@ -232,6 +240,7 @@ function parseMode(m) {
     return mode;
 }
 // One scan of past sessions with the skill and MCP audits attached (both optional).
+/** @param {(f: string) => string | undefined} opt @param {string} [badDays] */
 async function scanSummary(opt, badDays = '--days must be a positive number') {
     const { scanParallel, defaultProjectsDir } = require('../src/scan');
     const days = Number(opt('--days') || 30);
@@ -240,6 +249,7 @@ async function scanSummary(opt, badDays = '--days must be a positive number') {
         throw new Error('--jobs must be a positive number');
     if (!(days > 0))
         throw new Error(badDays);
+    /** @template T @param {() => T} fn @returns {T | null} */
     const optional = (fn) => { try {
         return fn();
     }
@@ -251,6 +261,7 @@ async function scanSummary(opt, badDays = '--days must be a positive number') {
     return { days, summary: await scanParallel({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits, jobs }) };
 }
 // Reports and kits are never written into Claude Code's own data directory.
+/** @param {string} out */
 function assertOutsideClaudeDir(out) {
     const dir = path.resolve(require('../src/util').claudeDir());
     if (out === dir || out.startsWith(dir + path.sep))
@@ -313,7 +324,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
 data: ${P.home}`;
 async function main() {
     const [cmd, ...args] = process.argv.slice(2);
+    /** @param {string} f */
     const flag = (f) => args.includes(f);
+    /** @param {string} f */
     const opt = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
     switch (cmd) {
         case 'daemon': return require('../src/daemon').runDaemon();
@@ -644,7 +657,7 @@ async function main() {
                 const r = await call('POST', '/docs/clear', flag('--clear-all') ? { all: true } : { path: path.resolve(target || '') });
                 if (r.status !== 200)
                     throw new Error(`the recorder refused (${r.status})`);
-                console.log(r.body.cleared.length ? r.body.cleared.map((k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
+                console.log(r.body.cleared.length ? r.body.cleared.map((/** @type {string} */ k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
                 return;
             }
             const r = await call('GET', '/api/docs');
@@ -737,6 +750,7 @@ async function main() {
             const { renderReport, renderCard } = require('../src/scan');
             const { summary, days } = await scanSummary(opt, '--days must be a positive number');
             // never write into Claude Code's own data directory
+            /** @param {string} file */
             const safeOut = (file) => assertOutsideClaudeDir(path.resolve(file));
             const card = opt('--card');
             if (card)
@@ -800,6 +814,7 @@ async function main() {
             const failOn = opt('--fail-on');
             if (failOn) {
                 const min = failOn === 'medium' ? 2 : 3;
+                /** @type {Record<string, number>} */
                 const sev = { high: 3, medium: 2, low: 1, none: 0 };
                 if (audits.some((a) => sev[a.risk] >= min))
                     process.exitCode = 1;
