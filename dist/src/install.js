@@ -13,6 +13,10 @@ const HOOK_EVENTS = [
 const settingsPath = () => path.join(claudeDir(), 'settings.json');
 const hookScript = stablePath(path.resolve(__dirname, '..', 'bin', 'hook.js'));
 const nodePath = () => stablePath(process.execPath);
+// With the recorder as its own user, the hook script is the root-owned copy it runs from:
+// an agent running as you can edit your clone, but not that folder.
+const hookScriptPath = () => { const code = loadConfig().recorderCode; return code ? path.join(code, 'dist', 'bin', 'hook.js') : hookScript; };
+const hookCommand = () => `"${nodePath()}" "${hookScriptPath()}" # agent-blackbox-hook`;
 /** @param {any} h */
 const isOurs = (h) => h && typeof h.command === 'string' && h.command.includes('agent-blackbox-hook');
 /** @param {{ raw?: boolean, prompts?: boolean }} opts @returns {Record<string, string>} */
@@ -91,7 +95,7 @@ function install({ mode, raw = false, prompts = false, force = false, hooks = tr
     // comment marks the entry as ours so uninstall finds it.
     stripOurHooks(settings);
     settings.hooks ||= {};
-    const command = `"${nodePath()}" "${hookScript}" # agent-blackbox-hook`;
+    const command = hookCommand();
     if (hooks) {
         for (const ev of HOOK_EVENTS) {
             (settings.hooks[ev] ||= []).push({ hooks: [{ type: 'command', command, timeout: 10 }] });
@@ -133,7 +137,7 @@ function install({ mode, raw = false, prompts = false, force = false, hooks = tr
     cfg.installed.settings = file;
     saveConfig(cfg);
     fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
-    log(hooks ? `  hooks   ${HOOK_EVENTS.length} events → ${hookScript}` : '  hooks   left to the Claude Code plugin');
+    log(hooks ? `  hooks   ${HOOK_EVENTS.length} events → ${hookScriptPath()}` : '  hooks   left to the Claude Code plugin');
     log(`  telemetry → http://127.0.0.1:${P.port}/v1/logs${prompts ? ' + prompt and response text' : ''}${raw ? ' + raw API bodies (scrubbed)' : ''}`);
     if (skipped.length)
         log(`  kept your existing values for: ${skipped.join(', ')} (rerun with --force to override)`);
@@ -159,4 +163,4 @@ function uninstall({ log = console.log } = {}) {
     log(`  removed agent-blackbox hooks and telemetry settings from ${file}`);
     log(`  evidence kept in ${P.home}`);
 }
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath };
+module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand };
