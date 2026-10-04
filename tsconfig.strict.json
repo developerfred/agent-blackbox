@@ -30,7 +30,15 @@
     "src/mcp-server.js",
     "bench/run.js",
     "bin/blackbox.js",
-    "src/brief.js",
-    "src/daemon.js"
+    "src/daemon.js",
+    "src/anchor.js",
+    "src/install-cli.js",
+    "src/mcp.js",
+    "src/merkle.js",
+    "src/otel-genai.js",
+    "src/paths.js",
+    "src/scan-worker.js",
+    "scripts/build.js",
+    "src/brief.js"
   ]
 }
