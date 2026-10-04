@@ -139,6 +139,39 @@ class Ledger {
     }
 }
 const BLOB_FIELDS = ['payload', 'request_blob', 'response_blob'];
+// Does a line of valid JSON repeat a key inside one object? JSON.parse keeps
+// the last value silently, so two readers of the same line could disagree.
+/** @param {string} text */
+function hasDuplicateKeys(text) {
+    /** @type {{ keys: Set<string> | null, expectKey: boolean }[]} */
+    const stack = [];
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        const top = stack[stack.length - 1];
+        if (c === '"') {
+            let j = i + 1;
+            while (text[j] !== '"')
+                j += text[j] === '\\' ? 2 : 1;
+            if (top && top.keys && top.expectKey) {
+                const k = JSON.parse(text.slice(i, j + 1));
+                if (top.keys.has(k))
+                    return true;
+                top.keys.add(k);
+                top.expectKey = false;
+            }
+            i = j;
+        }
+        else if (c === '{')
+            stack.push({ keys: new Set(), expectKey: true });
+        else if (c === '[')
+            stack.push({ keys: null, expectKey: false });
+        else if (c === '}' || c === ']')
+            stack.pop();
+        else if (c === ',' && top && top.keys)
+            top.expectKey = true;
+    }
+    return false;
+}
 /** @param {string} dir @param {string} sha @param {string} [kid] */
 const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(dir, sha));
 // Walk the whole chain. Integrity proves nothing recorded was changed,
@@ -150,7 +183,7 @@ const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(
  * @param {{ ledgerPath: string, pubPem?: string | null, blobsDir: string, vault?: import('./vault').Vault | null }} opts
  */
 function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
-    /** @type {{ ok: boolean, records: number, errors: { line: number, problem: string }[], warnings: string[], head: { seq: number, hash: string } | null, sessions: number, sealed: number, erasedKeys: number }} */
+    /** @type {{ ok: boolean, records: number, errors: { line: number, problem: string, code?: string }[], warnings: string[], head: { seq: number, hash: string } | null, sessions: number, sealed: number, erasedKeys: number }} */
     const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: 0, sealed: 0, erasedKeys: 0 };
     const sessions = new Set();
     const erasedSeen = new Set();
@@ -180,35 +213,62 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
         const line = lines[i];
         if (!line)
             continue;
-        /** @param {string} problem */
-        const fail = (problem) => { out.ok = false; out.errors.push({ line: i + 1, problem }); };
+        // codes are those of docs/spec/ledger-v1.md, section 11
+        /** @param {string} problem @param {string} [code] */
+        const fail = (problem, code) => { out.ok = false; out.errors.push({ line: i + 1, problem, code }); };
         const rec = parseLine(line);
-        if (!rec) {
-            fail('not valid JSON');
+        if (!rec || typeof rec !== 'object' || Array.isArray(rec)) {
+            fail('not valid JSON', 'INVALID_JSON');
             continue;
         }
+        if (hasDuplicateKeys(line))
+            fail('a key appears twice in the record', 'DUPLICATE_KEY');
+        const first = out.records === 0;
         out.records++;
         const { hash, sig, ...body } = rec;
+        const unsupported = rec.v !== 1;
+        if (unsupported)
+            fail(`seq ${rec.seq}: record version ${JSON.stringify(rec.v)} is not supported`, 'UNSUPPORTED_VERSION');
         if (rec.seq !== expectSeq)
-            fail(`sequence gap: expected ${expectSeq}, found ${rec.seq}`);
+            fail(`sequence gap: expected ${expectSeq}, found ${rec.seq}`, 'SEQ_GAP');
         if (rec.prev !== prev)
-            fail(`seq ${rec.seq}: prev does not match the previous record's hash (record removed, inserted or reordered)`);
-        if (sha256(canon(body)) !== hash)
-            fail(`seq ${rec.seq}: content does not match its hash (record edited)`);
-        if (rec.kind === 'genesis') {
-            const gpub = crypto.createPublicKey(rec.public_key);
-            if (pub && pub.export({ type: 'spki', format: 'der' }).compare(gpub.export({ type: 'spki', format: 'der' })) !== 0) {
-                fail('genesis key differs from the trusted public key (chain rewritten with another key)');
+            fail(`seq ${rec.seq}: prev does not match the previous record's hash (record removed, inserted or reordered)`, 'PREV_MISMATCH');
+        if (first && rec.kind !== 'genesis')
+            fail(`seq ${rec.seq}: the first record must be genesis`, 'GENESIS_REQUIRED');
+        if (!first && rec.kind === 'genesis')
+            fail(`seq ${rec.seq}: only the first record may be genesis`, 'GENESIS_DUPLICATE');
+        if (first && rec.kind === 'genesis') {
+            /** @type {crypto.KeyObject | null} */
+            let gpub = null;
+            try {
+                gpub = crypto.createPublicKey(rec.public_key);
+            }
+            catch { /* reported below */ }
+            if (!gpub || sha256(gpub.export({ type: 'spki', format: 'der' })).slice(0, 16) !== rec.key_id) {
+                fail(`seq ${rec.seq}: key_id does not match public_key`, 'KEY_ID_MISMATCH');
+            }
+            if (pub && gpub && pub.export({ type: 'spki', format: 'der' }).compare(gpub.export({ type: 'spki', format: 'der' })) !== 0) {
+                fail('genesis key differs from the trusted public key (chain rewritten with another key)', 'TRUSTED_KEY_MISMATCH');
             }
             chainPub = pub || gpub;
         }
-        try {
-            if (!chainPub || !crypto.verify(null, Buffer.from(hash, 'hex'), chainPub, Buffer.from(sig, 'base64'))) {
-                fail(`seq ${rec.seq}: bad signature`);
+        // a record of an unknown version cannot be hashed or signed by these rules
+        if (!unsupported) {
+            if (sha256(canon(body)) !== hash)
+                fail(`seq ${rec.seq}: content does not match its hash (record edited)`, 'HASH_MISMATCH');
+            // with no key at all (no genesis, no trusted key) the signature cannot be checked
+            if (chainPub) {
+                let good = false;
+                try {
+                    const raw = Buffer.from(String(sig), 'base64');
+                    good = raw.length === 64 && crypto.verify(null, Buffer.from(String(hash), 'hex'), chainPub, raw);
+                }
+                catch {
+                    good = false;
+                }
+                if (!good)
+                    fail(`seq ${rec.seq}: bad signature`, 'BAD_SIGNATURE');
             }
-        }
-        catch {
-            fail(`seq ${rec.seq}: unreadable signature`);
         }
         for (const f of BLOB_FIELDS) {
             const d = rec[f];
@@ -252,6 +312,10 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
         prev = hash;
         expectSeq = rec.seq + 1;
         out.head = { seq: rec.seq, hash };
+    }
+    if (!out.records && !out.errors.length) {
+        out.ok = false;
+        out.errors.push({ line: 0, problem: 'the ledger has no records', code: 'EMPTY_LEDGER' });
     }
     out.sessions = sessions.size;
     return out;
