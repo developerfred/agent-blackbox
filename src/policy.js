@@ -711,7 +711,8 @@ function redact(text) {
   for (const { re } of CONTEXT_SECRETS) out = out.replace(re, (m, v) => m.replace(v, '[redacted]'));
   out = out.replace(ENV_SECRET_LINE, (m, k, v) => m.replace(v, '[redacted]'));
   out = out.replace(/\b([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["'`]?)([^\s"'`#]{6,})/g, '$1[redacted]');
-  out = out.replace(/((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
+  // (?<!\[) keeps our own [secret:<fingerprint>] markers: the fingerprint is how a ledger line is tied to an event
+  out = out.replace(/(?<!\[)((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
   return out;
 }
 
