@@ -19,6 +19,17 @@ function pluginStepsAside() {
         return false; /* no settings: the plugin records */
     }
 }
+// Which agent is calling: `--agent <id>` (default claude). The adapter owns the
+// agent's payload and reply formats; everything after it is agent-neutral.
+const agentArg = process.argv.indexOf('--agent');
+/** @type {import('../src/types').Adapter} */
+let adapter;
+try {
+    adapter = require('../src/adapters').getAdapter(agentArg > 0 ? process.argv[agentArg + 1] || 'claude' : 'claude');
+}
+catch {
+    process.exit(0); /* a hook never exits non-zero */
+}
 const shadowed = pluginStepsAside();
 /** @type {Buffer[]} */
 const chunks = [];
@@ -27,17 +38,41 @@ process.stdin.on('end', () => {
     if (shadowed)
         process.exit(0);
     let raw = Buffer.concat(chunks).toString('utf8');
-    /** @type {Partial<import('../src/types').HookEvent>} */
-    let ev = {};
+    /** @type {Record<string, any>} */
+    let native = {};
     try {
-        ev = JSON.parse(raw);
+        native = JSON.parse(raw);
     }
     catch {
         process.exit(0);
     }
-    // The recorder may run as another user and not see our settings: at the start of a session
-    // we look at our own installation and report what we found with the event.
-    if (ev.hook_event_name === 'SessionStart') {
+    /** @type {Partial<import('../src/types').HookEvent> | null} */
+    let ev = null;
+    try {
+        ev = adapter.decode(native);
+    }
+    catch { /* an unreadable payload is not worth breaking the agent for */ }
+    /** @type {Partial<import('../src/types').Config>} */
+    let cfg = {};
+    try {
+        cfg = loadConfig();
+    }
+    catch { /* defaults */ }
+    /** @param {import('../src/types').HookOutput | null} out what the agent reads from the hook's stdout, stderr and exit code */
+    const done = (out) => {
+        if (out && out.stdout)
+            process.stdout.write(JSON.stringify(out.stdout));
+        if (out && out.stderr)
+            process.stderr.write(out.stderr);
+        process.exit(out && out.exit ? out.exit : 0);
+    };
+    if (!ev)
+        return done(adapter.encode(null, native, { askFallback: cfg.askFallback }));
+    if (adapter.id !== 'claude')
+        raw = JSON.stringify(ev);
+    // The recorder may run as another user and not see our settings: at the start of a Claude Code
+    // session we look at our own installation and report what we found with the event.
+    else if (ev.hook_event_name === 'SessionStart') {
         try {
             const { checkHooks } = require('../src/integrity');
             const { HOOK_EVENTS } = require('../src/install');
@@ -46,24 +81,12 @@ process.stdin.on('end', () => {
         }
         catch { /* never block the event on a failed self-check */ }
     }
-    /** @param {object | null} out what Claude Code reads from the hook's stdout */
-    const done = (out) => {
-        if (out)
-            process.stdout.write(JSON.stringify(out));
-        process.exit(0);
-    };
     const fallback = () => {
         try {
             fs.mkdirSync(P.home, { recursive: true, mode: 0o700 });
             fs.appendFileSync(P.spool, JSON.stringify({ received_at: new Date().toISOString(), payload: ev }) + '\n', { mode: 0o600 });
         }
         catch { /* nothing else we can do */ }
-        /** @type {Partial<import('../src/types').Config>} */
-        let cfg = {};
-        try {
-            cfg = loadConfig();
-        }
-        catch { /* defaults */ }
         // With the recorder running as a dedicated user, the system service
         // restarts it; this user must not start a second recorder of its own.
         if (!cfg.remoteDaemon) {
@@ -76,22 +99,18 @@ process.stdin.on('end', () => {
             catch { /* ignore */ }
         }
         if (ev.hook_event_name === 'PreToolUse' && cfg.failMode === 'closed') {
-            return done({
-                hookSpecificOutput: {
-                    hookEventName: 'PreToolUse',
-                    permissionDecision: 'deny',
-                    permissionDecisionReason: '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start',
-                },
-            });
+            const out = adapter.failClosed(/** @type {import('../src/types').HookEvent} */ (ev), '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start', native);
+            if (out)
+                return done(out);
         }
-        done(null);
+        done(adapter.encode(null, native, { askFallback: cfg.askFallback }));
     };
     request({ port: P.port, method: 'POST', path: '/hook', token: readToken(), body: raw, timeout: 4000 }).then((res) => {
         if (res.status !== 200 || !res.body)
             return fallback();
         // The recorder is up: hand over anything queued while it was down. A
         // dedicated-user recorder cannot read this user's folder, so the hook sends it.
-        drainSpool(() => done(res.body.stdout));
+        drainSpool(() => done(adapter.encode(res.body, native, { askFallback: cfg.askFallback })));
     }).catch(fallback); // a hook never exits non-zero
 });
 /** @param {() => void} next */

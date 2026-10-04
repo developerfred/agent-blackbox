@@ -20,6 +20,10 @@
     "eval/corpus.js",
     "src/skills.js",
     "src/install.js",
-    "src/scan.js"
+    "src/scan-html.js",
+    "src/share.js",
+    "src/scan.js",
+    "src/adapters/*.js",
+    "src/install-agent.js"
   ]
 }

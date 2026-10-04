@@ -1,8 +1,7 @@
 'use strict';
 // The vectors in docs/spec/vectors are built without src/. These tests check
-// that the reference implementation agrees with them where it implements the
-// rule (section 11 of docs/spec/ledger-v1.md); the gaps it has are listed in
-// the spec under "Reference implementation notes".
+// that the reference implementation (`blackbox verify`) reports exactly the
+// errors the spec requires (section 11 of docs/spec/ledger-v1.md).
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -21,12 +20,9 @@ test('spec vectors: canonical forms match src/ledger.js canon()', () => {
 });
 
 const level1 = manifest.cases.filter((c) => c.level === 1 && !c.anchor);
-// Reference verify() takes any key from genesis unless one is given; the
-// vectors that need rules it lacks (see the spec's implementation notes) are skipped.
-const refGaps = new Set(['invalid-second-genesis', 'invalid-no-genesis', 'invalid-key-id-mismatch', 'invalid-unsupported-version', 'invalid-duplicate-key', 'invalid-empty-ledger']);
+const set = (xs) => xs.map((x) => `${x.line}:${x.code}`).sort();
 
 for (const c of level1) {
-  if (refGaps.has(c.name)) continue;
   test(`spec vectors: reference verify agrees on ${c.name}`, () => {
     const r = verify({
       ledgerPath: path.join(DIR, c.ledger),
@@ -34,13 +30,10 @@ for (const c of level1) {
       blobsDir: path.join(DIR, 'no-blobs'),
     });
     assert.equal(r.ok, c.expect.ok, JSON.stringify(r.errors));
+    assert.deepEqual(set(r.errors), set(c.expect.errors));
     if (c.expect.ok) {
       assert.equal(r.records, c.expect.records);
       assert.deepEqual(r.head, c.expect.head);
-    } else {
-      // same lines flagged (the reference reports messages, not codes)
-      const lines = (xs) => [...new Set(xs.map((e) => e.line))].sort((a, b) => a - b);
-      assert.deepEqual(lines(r.errors), lines(c.expect.errors));
     }
   });
 }

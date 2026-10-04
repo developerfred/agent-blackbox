@@ -1,3 +1,9 @@
+# agent-blackbox, full documentation
+
+> Concatenation of the README, the agent guide and the privacy notes. Source: https://github.com/developerfred/agent-blackbox
+
+<!-- README.md -->
+
 # agent-blackbox
 
 **A tamper-evident flight recorder and prompt-injection firewall for AI coding agents.** Claude Code first; Codex, Cursor and Gemini CLI next.
@@ -135,9 +141,7 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
 
 The format is specified in [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md) (draft, with test vectors), so a verifier does not need this code. `blackbox export` writes the ledger as [OpenTelemetry GenAI](docs/OTEL.md) traces and logs: metadata only, to a local folder unless you pass `--endpoint`.
 
-Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it. `blackbox anchor --batch` also commits to a batch of records with a Merkle root, so one record can be proven to belong to a published anchor without handing over the rest ([docs/ANCHORING.md](docs/ANCHORING.md)).
-
-The format is an open, versioned specification: [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), with [test vectors](docs/spec/vectors/) and a standalone verifier with no dependencies, [verifier/bb-verify.js](verifier/README.md), so anyone can check a ledger without trusting or installing the recorder.
+Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
 
 ## Grounded in research
 
@@ -183,3 +187,122 @@ Gravador de caixa-preta para agentes de IA. Tudo roda na sua máquina, sem conta
 ## License
 
 Apache-2.0
+
+---
+
+<!-- docs/AGENT-GUIDE.md -->
+
+# Using agent-blackbox from an AI agent
+
+For coding agents (Claude Code, Codex, Cursor, Gemini CLI) and for agents setting it up for a person. Plain facts, no marketing. The authoritative references are [README.md](../README.md), [docs/PRIVACY.md](PRIVACY.md) and [docs/spec/ledger-v1.md](spec/ledger-v1.md).
+
+## What it is
+
+A local recorder and policy for coding agents. Hooks send every prompt, tool call and result to a recorder on `127.0.0.1`, which writes a hash-chained, Ed25519-signed ledger in `~/.blackbox/`. Before each tool call a deterministic policy decides `allow` (by saying nothing), `ask` or `deny`. Nothing leaves the machine.
+
+## If a tool call of yours is blocked
+
+The message reads "Blocked by the local security policy." Do this:
+
+1. Stop. Do not retry the call, rephrase it, split it, encode it or reach the same result another way. A retry after a denial is itself a signal and raises the bar for later calls.
+2. Tell the person what you were trying to do and why, in one or two sentences.
+3. Let them decide. They can see the rule and the reason in `blackbox timeline --last`; you cannot, on purpose.
+
+An `ask` is a prompt to the person, not an error. Wait for their answer.
+
+## Do not touch
+
+- `~/.blackbox/` (reading or writing it is denied by the `self-protection` rule).
+- Claude Code settings, plugin files and other agents' hook files (`hook-tamper` asks or alerts).
+- `blackbox purge`, `blackbox harden`, `blackbox uninstall`, `blackbox mode`: these change evidence or protection. Run them only when the person asked for exactly that.
+
+## Read-only commands that are safe to run
+
+| Command | What you get |
+| --- | --- |
+| `blackbox status` | whether the recorder is running, its data folder, whether it runs as a dedicated user |
+| `blackbox timeline --last` | what the last session did, step by step |
+| `blackbox verify` | proof the ledger chain and signatures are intact; names the first broken record |
+| `blackbox scan --json` | past Claude Code sessions replayed through the policy, as JSON (`--days N`, `--jobs N`) |
+| `blackbox skills --json`, `blackbox mcp --json` | audit of installed skills and MCP servers (`--fail-on high` for CI) |
+| `blackbox eval --json` | the policy against the attack corpus |
+| `blackbox export --out DIR` | the ledger as OpenTelemetry GenAI traces and logs, metadata only ([docs/OTEL.md](OTEL.md)) |
+
+Prefer `--json` when you will parse the output.
+
+## Installing it for a person
+
+```
+npm install -g agent-blackbox        # or: brew install developerfred/tap/agent-blackbox
+blackbox install                     # hooks + telemetry, starts the recorder
+blackbox install --fail-closed       # deny tool calls while the recorder is down
+blackbox install --prompts           # also log prompt and response text (off by default)
+```
+
+For Claude Code only, the plugin works too: `/plugin marketplace add developerfred/agent-blackbox`, then `/plugin install agent-blackbox@agent-blackbox`. `blackbox install` prints the key location and whether the recorder fails open. To run it as a dedicated OS user so an agent cannot read the keys, `blackbox harden` prints a root script for the person to read and run.
+
+## What the policy does
+
+| Rule | Decision |
+| --- | --- |
+| `secret-egress`: a secret read earlier appears in an outbound call | deny |
+| `sensitive-egress`: one command reads a sensitive file and sends data out | deny |
+| `lethal-trifecta`: private data, untrusted content, then an outbound call or opaque code | ask |
+| `web3-transaction`: signing or broadcasting a transaction | ask |
+| `post-denial`: something was denied, then another call goes out | ask |
+| `self-protection`: touching `~/.blackbox` | deny |
+| `hook-tamper`: editing agent settings or plugin files | ask or alert |
+
+Hosts the person names in their own prompt count as allowed destinations for that session. Pasted text and turns the agent starts on its own never widen the list.
+
+## Limits you should state accurately
+
+- It reduces risk and keeps evidence; it does not guarantee that no attack gets through.
+- The chain proves recorded events were not altered, not that every event was recorded.
+- Until `blackbox harden` is run, a process running as the same user can read the keys.
+
+---
+
+<!-- docs/PRIVACY.md -->
+
+# Privacy
+
+What agent-blackbox records, where it keeps it, how long, and what leaves your machine.
+
+## What leaves your machine
+
+Nothing. The code opens no outbound connection: the recorder listens on `127.0.0.1` only (`src/daemon.js`), the hook and CLI talk to it over loopback (`src/local-http.js`), and the local UI loads no external script, font or image. There are no runtime dependencies. `blackbox share` and `scan --card` draw images from aggregate numbers and fixed category labels, never from project names, hosts, commands or prompts.
+
+The one exception is something you do on purpose: a file you publish yourself (a share card, an `anchor` head).
+
+## What is recorded, and where
+
+Everything lives in `~/.blackbox/` (folders `0700`, files `0600`).
+
+| What | Where | Protection |
+| --- | --- | --- |
+| Record metadata: sequence, time, event kind, tool name, session id, working directory of a session start, decisions and rule names | `ledger.jsonl` | clear text, hash-chained and signed |
+| One-line summary of each hook record (prompt, command, path text, secrets masked) | `ledger.jsonl` | sealed with the session key (AES-256-GCM) |
+| Full payloads: prompt, tool arguments, tool results | `blobs/<key>/` | sealed with the session key, secrets replaced by fingerprints |
+| Prompt and response text through telemetry | blobs | only with `install --prompts` |
+| Full model request and response bodies | blobs | only with `install --raw`; Claude Code writes them in clear text to `api-bodies/` until the recorder scrubs and moves them (about 3 minutes at most) |
+| Secrets | never stored | replaced by `[secret:<fingerprint>]`; the fingerprint is a truncated HMAC with a per-install salt |
+
+Session keys are wrapped by a master key. `blackbox purge` or `retainDays` destroys a session key: that session's payloads and summaries become unreadable everywhere, backups included. The chain keeps every hash and still verifies.
+
+Still in clear text after a purge: record metadata, the working directory of session starts, rule names and the reasons of decisions (secrets masked). These are what lets `verify` and the timeline keep working.
+
+## Retention
+
+Nothing is deleted unless you ask. `blackbox purge --days N` erases on demand; `"retainDays": N` in `~/.blackbox/config.json` does it automatically (at start, then hourly). Off by default.
+
+## What the defaults do not protect against
+
+- A process running as your user can read the master key and the signing key. `blackbox harden` runs the recorder as a dedicated user and closes this; `blackbox install` tells you which case you are in.
+- Fingerprints of low-entropy secrets (a short password) can be brute-forced by someone who has the per-install salt, which sits in `state.json` next to the keys. Long random secrets (API keys, tokens) are not at risk.
+- Hosts in `allowHosts` (github.com, npm, PyPI, crates.io, Anthropic) do not count as outbound for the lethal-trifecta rule. Publishing commands still do.
+- By default the recorder fails open: if it is down, tools still run. `blackbox install --fail-closed` denies instead.
+
+## Team mode
+
+Not built. The privacy rules it must meet before any code are in [ROADMAP.md](../ROADMAP.md).

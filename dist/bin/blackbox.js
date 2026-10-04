@@ -265,7 +265,11 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                                --fail-closed denies tool calls while the recorder is unreachable;
                                --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
-  blackbox uninstall          remove them (evidence is kept)
+  blackbox install --agent codex
+                              record another agent too: hooks only, in that agent's own settings
+                              (docs/AGENTS.md says what each one can enforce)
+  blackbox uninstall [--agent <id>]
+                              remove them (evidence is kept)
   blackbox start | stop | status
   blackbox sessions           list recorded sessions
   blackbox timeline [id|--last] [--otel]
@@ -325,6 +329,17 @@ async function main() {
             const mode = opt('--mode');
             if (mode)
                 parseMode(mode);
+            const agent = opt('--agent') || 'claude';
+            if (agent !== 'claude') {
+                console.log(bold(`Installing agent-blackbox into ${require('../src/adapters').getAdapter(agent).name}`));
+                require('../src/install-agent').installAgent(agent, { mode: mode ? parseMode(mode) : undefined });
+                if (flag('--fail-closed'))
+                    saveConfig({ ...loadConfig(), failMode: 'closed' });
+                await stop().catch(() => { });
+                await start();
+                console.log(`\n  Start a new ${agent} session. Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
+                return;
+            }
             console.log(bold('Installing agent-blackbox into Claude Code'));
             require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
             if (flag('--fail-closed'))
@@ -338,7 +353,10 @@ async function main() {
             console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
             return;
         }
-        case 'uninstall': return require('../src/install').uninstall();
+        case 'uninstall': {
+            const agent = opt('--agent') || 'claude';
+            return agent === 'claude' ? require('../src/install').uninstall() : require('../src/install-agent').uninstallAgent(agent);
+        }
         case 'mode': {
             const m = args[0];
             if (!MODES.includes(/** @type {any} */ (m)))

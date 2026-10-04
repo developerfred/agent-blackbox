@@ -177,4 +177,4 @@ function installedHookScripts() {
     }
     return [...out];
 }
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, installedHookScripts };
+module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, installedHookScripts, nodePath, hookScriptPath };
