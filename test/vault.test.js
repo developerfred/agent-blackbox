@@ -18,10 +18,12 @@ function tmpHome() {
 test('vault: seal/open round trip, key ids hide the scope, tampering is detected', () => {
   const P = tmpHome();
   const v = new Vault({ keysDir: P.keys });
-  const { kid, data } = v.seal('session:abc', Buffer.from('hello secret world'));
+  const { kid, data } = v.seal('session:xyz-private', Buffer.from('hello secret world'));
   assert.ok(Vault.isSealed(data));
   assert.ok(!data.includes(Buffer.from('hello')));
-  assert.ok(!kid.includes('abc'));
+  // hex never contains 'x', so this cannot fail by chance (a random id can contain "abc")
+  assert.ok(!kid.includes('xyz'));
+  assert.ok(!data.includes(Buffer.from('xyz')));
   assert.equal(v.open(data).toString(), 'hello secret world');
   // a second vault from the same master key reads it (daemon restart)
   assert.equal(new Vault({ keysDir: P.keys }).open(data).toString(), 'hello secret world');
