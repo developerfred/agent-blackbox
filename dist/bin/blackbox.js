@@ -282,6 +282,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox harden [--out file] [--user NAME] [--node PATH] [--undo | --check]
                               print a reviewable root script that runs the recorder as its own OS user
                               (agent can write evidence but not read or erase it); --check tells if it does
+  blackbox docs [--clear PATH | --clear-all]
+                              instruction/memory files a tainted session wrote (they mark later sessions); clear a reviewed one
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N | --session ID]
@@ -467,6 +469,28 @@ async function main() {
             }
             else
                 process.stdout.write(text);
+            return;
+        }
+        case 'docs': {
+            // instruction/memory documents a tainted session wrote: list them, or clear a mark you have reviewed
+            const target = opt('--clear');
+            if (target || flag('--clear-all')) {
+                const r = await call('POST', '/docs/clear', flag('--clear-all') ? { all: true } : { path: path.resolve(target || '') });
+                if (r.status !== 200)
+                    throw new Error(`the recorder refused (${r.status})`);
+                console.log(r.body.cleared.length ? r.body.cleared.map((k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
+                return;
+            }
+            const r = await call('GET', '/api/docs');
+            if (r.status !== 200)
+                throw new Error(`the recorder refused (${r.status})`);
+            if (!r.body.length) {
+                console.log(dim('no marked documents'));
+                return;
+            }
+            for (const d of r.body)
+                console.log(`${yellow(d.path)}\n  ${dim(`written ${d.at} by session ${String(d.session).slice(0, 12)} · ${d.why}`)}`);
+            console.log(dim('\nA session that reads or loads these starts as untrusted. After you review one: blackbox docs --clear PATH (or declare it in trustedDocs).'));
             return;
         }
         case 'managed-settings': {

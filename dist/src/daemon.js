@@ -660,6 +660,8 @@ class Daemon {
                     const s = this.sessions.get(url.searchParams.get('session'));
                     return send(s ? 200 : 404, s ? s.records : { error: 'unknown session' });
                 }
+                if (url.pathname === '/api/docs')
+                    return send(200, this.policy.listDocs());
                 if (url.pathname === '/api/anchor') {
                     const l = this.ledger.last;
                     return send(l ? 200 : 404, l ? { seq: l.seq, hash: l.hash, sig: l.sig, key_id: this.ledger.keys.keyId } : { error: 'ledger is empty' });
@@ -701,6 +703,14 @@ class Daemon {
                             n++;
                         }
                         return send(200, { accepted: n });
+                    }
+                    if (url.pathname === '/docs/clear') {
+                        const cleared = this.policy.clearDocs(body.all ? null : String(body.path || ''));
+                        if (cleared.length) {
+                            this.append('docs', { action: 'clear', paths: cleared });
+                            this.saveState();
+                        }
+                        return send(200, { cleared });
                     }
                     if (url.pathname === '/purge')
                         return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));
