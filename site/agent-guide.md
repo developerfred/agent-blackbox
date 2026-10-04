@@ -36,6 +36,14 @@ An `ask` is a prompt to the person, not an error. Wait for their answer.
 
 Prefer `--json` when you will parse the output.
 
+## Reading it programmatically
+
+- `blackbox serve-mcp` is a local stdio MCP server that exposes the recorder as read-only tools. Add `{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }` to the MCP configuration. It is separate from `blackbox mcp`, which audits MCP servers.
+- The recorder serves a read-only JSON API on `127.0.0.1` under `/v1/agent/` (start with `GET /v1/agent/capabilities`; `openapi.json` describes the rest). Without the admin token you can read the public tier only: status and the rule catalogue, never why something was denied.
+- Most CLI commands take `--json`.
+
+Details and what is never returned: [AGENT-API.md](AGENT-API.md).
+
 ## Installing it for a person
 
 ```

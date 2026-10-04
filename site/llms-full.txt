@@ -141,7 +141,9 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
 
 The format is specified in [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md) (draft, with test vectors), so a verifier does not need this code. `blackbox export` writes the ledger as [OpenTelemetry GenAI](docs/OTEL.md) traces and logs: metadata only, to a local folder unless you pass `--endpoint`.
 
-Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
+Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it. `blackbox anchor --batch` also commits to a batch of records with a Merkle root, so one record can be proven to belong to a published anchor without handing over the rest ([docs/ANCHORING.md](docs/ANCHORING.md)).
+
+The format is an open, versioned specification: [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), with [test vectors](docs/spec/vectors/) and a standalone verifier with no dependencies, [verifier/bb-verify.js](verifier/README.md), so anyone can check a ledger without trusting or installing the recorder.
 
 ## Grounded in research
 
@@ -229,6 +231,14 @@ An `ask` is a prompt to the person, not an error. Wait for their answer.
 | `blackbox export --out DIR` | the ledger as OpenTelemetry GenAI traces and logs, metadata only ([docs/OTEL.md](OTEL.md)) |
 
 Prefer `--json` when you will parse the output.
+
+## Reading it programmatically
+
+- `blackbox serve-mcp` is a local stdio MCP server that exposes the recorder as read-only tools. Add `{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }` to the MCP configuration. It is separate from `blackbox mcp`, which audits MCP servers.
+- The recorder serves a read-only JSON API on `127.0.0.1` under `/v1/agent/` (start with `GET /v1/agent/capabilities`; `openapi.json` describes the rest). Without the admin token you can read the public tier only: status and the rule catalogue, never why something was denied.
+- Most CLI commands take `--json`.
+
+Details and what is never returned: [AGENT-API.md](AGENT-API.md).
 
 ## Installing it for a person
 

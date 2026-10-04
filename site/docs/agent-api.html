@@ -46,6 +46,13 @@
 curl -s -H "x-blackbox-token: $TOKEN" http://127.0.0.1:7071/v1/agent/capabilities
 curl -s -H "x-blackbox-token: $(cat ~/.blackbox/keys/admin-token)" \
   "http://127.0.0.1:7071/v1/agent/records?kind=decision&amp;limit=20"</code></pre>
+<h2 id="mcp-server">MCP server</h2>
+<p><code>blackbox serve-mcp</code> is a local MCP server (stdio, newline-delimited JSON-RPC, protocol 2025-06-18, no dependencies) that exposes the same API as read-only tools, so a coding agent can use it like any other tool:</p>
+<pre><code>{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }</code></pre>
+<div class="tablewrap"><table><tr><th>Tool</th><th>Endpoint</th><th>Offered</th></tr><tr><td><code>blackbox_capabilities</code></td><td><code>/v1/agent/capabilities</code></td><td>always</td></tr><tr><td><code>blackbox_status</code></td><td><code>/v1/agent/status</code></td><td>always</td></tr><tr><td><code>blackbox_rules</code></td><td><code>/v1/agent/rules</code></td><td>always</td></tr><tr><td><code>blackbox_sessions</code></td><td><code>/v1/agent/sessions</code></td><td>only with <code>--admin</code></td></tr><tr><td><code>blackbox_records</code></td><td><code>/v1/agent/records</code></td><td>only with <code>--admin</code></td></tr></table></div>
+<p>Without <code>--admin</code> the server uses the ingest token and can only reach the public tier. <code>--admin</code> is for a person who wants to give an agent the decision trail; with the default same-user install the agent could read that token anyway (see <a href="privacy.html">PRIVACY.md</a>). Every tool is annotated <code>readOnlyHint</code>, returns the JSON as <code>structuredContent</code> and declares its <code>outputSchema</code>. Note that <code>serve-mcp</code> is separate from <code>blackbox mcp</code>, which audits the MCP servers you have configured.</p>
+<h2 id="cli---json">CLI <code>--json</code></h2>
+<p>For scripts and agents that prefer a command: <code>blackbox status|sessions|timeline|verify|docs --json</code> print one JSON document (<code>schema: blackbox.cli/v1</code>, except <code>verify</code>, which prints the verifier's own result). <code>timeline --json</code> has the same metadata-only records as the API; use <code>blackbox show &lt;n&gt;</code> to open a payload. <code>scan</code>, <code>mcp</code>, <code>skills</code> and <code>eval</code> already had <code>--json</code>.</p>
 <p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/AGENT-API.md">Edit this page on GitHub</a></p>
 </main></div>
 <footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
