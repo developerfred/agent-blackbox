@@ -118,6 +118,8 @@ A recorder that sees everything is itself a target. agent-blackbox stores proof 
 - **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload.
 - **Raw model bodies are off by default.** With `--raw`, Claude Code itself writes each body in clear text to `~/.blackbox/api-bodies/`; the recorder scrubs and moves it as soon as Claude Code indexes it (at most ~3 minutes later).
 
+What is recorded, where, for how long, and what the defaults do not cover: [docs/PRIVACY.md](docs/PRIVACY.md).
+
 ## The evidence
 
 ```
