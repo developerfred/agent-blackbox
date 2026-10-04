@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent guide: using agent-blackbox from an AI coding agent</title>
+<meta name="description" content="What a coding agent should do when a tool call is blocked, which commands are safe to run and how to install the recorder for a person.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/docs/agent-guide.html">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="Agent guide: using agent-blackbox from an AI coding agent">
+<meta property="og:description" content="What a coding agent should do when a tool call is blocked, which commands are safe to run and how to install the recorder for a person.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/docs/agent-guide.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent guide: using agent-blackbox from an AI coding agent">
+<meta name="twitter:description" content="What a coding agent should do when a tool call is blocked, which commands are safe to run and how to install the recorder for a person.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="stylesheet" href="../style.css">
+<style>.doc{max-width:760px;margin:0 auto;padding-block:40px 24px}.doc h1{margin-bottom:18px}.doc h2{margin-top:36px}.doc h3{margin-top:26px;font-size:1.15rem}.doc ul.plain,.doc ol.plain{margin:0 0 14px;padding-left:1.3em}.doc blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid var(--accent);color:var(--muted)}.doc .tablewrap{margin:0 0 16px}.doc pre{margin:0 0 16px}.docnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;padding-block:12px;border-bottom:1px solid var(--line)}.docnav a{color:var(--muted);text-decoration:none}.docnav a:hover{color:var(--fg)}</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong><a href="../index.html" style="color:inherit;text-decoration:none">agent-blackbox</a></strong>
+<a href="../index.html#install">Install</a><a href="../index.html#policy">Policy</a><a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<div class="wrap"><div class="docnav"><a href="privacy.html">privacy</a><a href="agent-guide.html">agent guide</a><a href="agent-api.html">agent api</a><a href="ledger-spec.html">ledger spec</a><a href="anchoring.html">anchoring</a><a href="opentelemetry-export.html">opentelemetry export</a><a href="agents-supported.html">agents supported</a></div>
+<main class="doc">
+<h1>Using agent-blackbox from an AI agent</h1>
+<p>For coding agents (Claude Code, Codex, Cursor, Gemini CLI) and for agents setting it up for a person. Plain facts, no marketing. The authoritative references are <a href="https://github.com/developerfred/agent-blackbox/blob/main/README.md">README.md</a>, <a href="privacy.html">docs/PRIVACY.md</a> and <a href="ledger-spec.html">docs/spec/ledger-v1.md</a>.</p>
+<h2 id="what-it-is">What it is</h2>
+<p>A local recorder and policy for coding agents. Hooks send every prompt, tool call and result to a recorder on <code>127.0.0.1</code>, which writes a hash-chained, Ed25519-signed ledger in <code>~/.blackbox/</code>. Before each tool call a deterministic policy decides <code>allow</code> (by saying nothing), <code>ask</code> or <code>deny</code>. Nothing leaves the machine.</p>
+<h2 id="if-a-tool-call-of-yours-is-blocked">If a tool call of yours is blocked</h2>
+<p>The message reads "Blocked by the local security policy." Do this:</p>
+<ol class="plain"><li>Stop. Do not retry the call, rephrase it, split it, encode it or reach the same result another way. A retry after a denial is itself a signal and raises the bar for later calls.</li><li>Tell the person what you were trying to do and why, in one or two sentences.</li><li>Let them decide. They can see the rule and the reason in <code>blackbox timeline --last</code>; you cannot, on purpose.</li></ol>
+<p>An <code>ask</code> is a prompt to the person, not an error. Wait for their answer.</p>
+<h2 id="do-not-touch">Do not touch</h2>
+<ul class="plain"><li><code>~/.blackbox/</code> (reading or writing it is denied by the <code>self-protection</code> rule).</li><li>Claude Code settings, plugin files and other agents' hook files (<code>hook-tamper</code> asks or alerts).</li><li><code>blackbox purge</code>, <code>blackbox harden</code>, <code>blackbox uninstall</code>, <code>blackbox mode</code>: these change evidence or protection. Run them only when the person asked for exactly that.</li></ul>
+<h2 id="read-only-commands-that-are-safe-to-run">Read-only commands that are safe to run</h2>
+<div class="tablewrap"><table><tr><th>Command</th><th>What you get</th></tr><tr><td><code>blackbox status</code></td><td>whether the recorder is running, its data folder, whether it runs as a dedicated user</td></tr><tr><td><code>blackbox timeline --last</code></td><td>what the last session did, step by step</td></tr><tr><td><code>blackbox verify</code></td><td>proof the ledger chain and signatures are intact; names the first broken record</td></tr><tr><td><code>blackbox scan --json</code></td><td>past Claude Code sessions replayed through the policy, as JSON (<code>--days N</code>, <code>--jobs N</code>)</td></tr><tr><td><code>blackbox skills --json</code>, <code>blackbox mcp --json</code></td><td>audit of installed skills and MCP servers (<code>--fail-on high</code> for CI)</td></tr><tr><td><code>blackbox eval --json</code></td><td>the policy against the attack corpus</td></tr><tr><td><code>blackbox export --out DIR</code></td><td>the ledger as OpenTelemetry GenAI traces and logs, metadata only (<a href="opentelemetry-export.html">docs/OTEL.md</a>)</td></tr></table></div>
+<p>Prefer <code>--json</code> when you will parse the output.</p>
+<h2 id="reading-it-programmatically">Reading it programmatically</h2>
+<ul class="plain"><li><code>blackbox serve-mcp</code> is a local stdio MCP server that exposes the recorder as read-only tools. Add <code>{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }</code> to the MCP configuration. It is separate from <code>blackbox mcp</code>, which audits MCP servers.</li><li>The recorder serves a read-only JSON API on <code>127.0.0.1</code> under <code>/v1/agent/</code> (start with <code>GET /v1/agent/capabilities</code>; <code>openapi.json</code> describes the rest). Without the admin token you can read the public tier only: status and the rule catalogue, never why something was denied.</li><li>Most CLI commands take <code>--json</code>.</li></ul>
+<p>Details and what is never returned: <a href="agent-api.html">AGENT-API.md</a>.</p>
+<h2 id="installing-it-for-a-person">Installing it for a person</h2>
+<pre><code>npm install -g agent-blackbox        # or: brew install developerfred/tap/agent-blackbox
+blackbox install                     # hooks + telemetry, starts the recorder
+blackbox install --fail-closed       # deny tool calls while the recorder is down
+blackbox install --prompts           # also log prompt and response text (off by default)</code></pre>
+<p>For Claude Code only, the plugin works too: <code>/plugin marketplace add developerfred/agent-blackbox</code>, then <code>/plugin install agent-blackbox@agent-blackbox</code>. <code>blackbox install</code> prints the key location and whether the recorder fails open. To run it as a dedicated OS user so an agent cannot read the keys, <code>blackbox harden</code> prints a root script for the person to read and run.</p>
+<h2 id="what-the-policy-does">What the policy does</h2>
+<div class="tablewrap"><table><tr><th>Rule</th><th>Decision</th></tr><tr><td><code>secret-egress</code>: a secret read earlier appears in an outbound call</td><td>deny</td></tr><tr><td><code>sensitive-egress</code>: one command reads a sensitive file and sends data out</td><td>deny</td></tr><tr><td><code>lethal-trifecta</code>: private data, untrusted content, then an outbound call or opaque code</td><td>ask</td></tr><tr><td><code>web3-transaction</code>: signing or broadcasting a transaction</td><td>ask</td></tr><tr><td><code>post-denial</code>: something was denied, then another call goes out</td><td>ask</td></tr><tr><td><code>self-protection</code>: touching <code>~/.blackbox</code></td><td>deny</td></tr><tr><td><code>hook-tamper</code>: editing agent settings or plugin files</td><td>ask or alert</td></tr></table></div>
+<p>Hosts the person names in their own prompt count as allowed destinations for that session. Pasted text and turns the agent starts on its own never widen the list.</p>
+<h2 id="limits-you-should-state-accurately">Limits you should state accurately</h2>
+<ul class="plain"><li>It reduces risk and keeps evidence; it does not guarantee that no attack gets through.</li><li>The chain proves recorded events were not altered, not that every event was recorded.</li><li>Until <code>blackbox harden</code> is run, a process running as the same user can read the keys.</li></ul>
+<p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/AGENT-GUIDE.md">Edit this page on GitHub</a></p>
+</main></div>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
+</body>
+</html>

@@ -41,7 +41,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925)). Today `blackbox mcp --pin` pins how a server is configured (command, arguments, URL), not the text of its tool descriptions
 - [x] Merkle batching of the chain: `blackbox anchor --batch`, inclusion proofs ([docs/ANCHORING.md](docs/ANCHORING.md))
 - [x] Automatic anchoring of the chain head, opt-in, to a file or webhook the user names (`blackbox anchor --auto`)
-- [x] Agent API: read-only, versioned `/v1/agent/*` endpoints with capabilities, OpenAPI, rules, status, sessions and records, so an agent can read what was recorded without scraping the CLI ([docs/AGENT-API.md](docs/AGENT-API.md))
+- [x] Agent API: read-only, versioned `/v1/agent/*` endpoints with capabilities, OpenAPI, rules, status, sessions and records, so an agent can read what was recorded without scraping the CLI, plus `blackbox serve-mcp`, a local stdio MCP server over the same API ([docs/AGENT-API.md](docs/AGENT-API.md))
 - [x] Agent-readable docs: [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md), `llms.txt` and `llms-full.txt` on the site
 - [x] Project site on GitHub Pages (English and Portuguese, terminal demos, SEO and social cards, sitemap)
 - [ ] Anchoring to a public timestamp authority (RFC 3161, OpenTimestamps) ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
@@ -57,7 +57,6 @@ Today the ledger proves what one session did on one machine. These steps make it
 - [ ] Agent identity: a key per agent or session, certified by the machine key, with a field that maps to `gen_ai.agent.id`
 - [ ] `receipt` record (draft spec first, no code): user intent, policy decision, human approval, payment or transaction hash and effect, with a Merkle inclusion proof a third party can check without seeing the payload. Check x402 and ERC-8004 against their current specifications before mapping to them
 - [ ] A trusted anchor target for automatic anchoring (a transparency log or a signed git commit) and third-party verification of its timestamp
-- [ ] MCP server (stdio) over the agent API
 - [ ] Test the Codex, Cursor and Gemini adapters against the real agents (their payload shapes come from public write-ups and type definitions) before announcing support
 
 **Gate:** 500 stars and 50 active installs.

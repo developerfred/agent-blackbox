@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenTelemetry GenAI export for AI agent audit logs</title>
+<meta name="description" content="blackbox export writes the ledger as OTLP/JSON traces and logs following the OpenTelemetry GenAI conventions, metadata only.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/docs/opentelemetry-export.html">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="OpenTelemetry GenAI export for AI agent audit logs">
+<meta property="og:description" content="blackbox export writes the ledger as OTLP/JSON traces and logs following the OpenTelemetry GenAI conventions, metadata only.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/docs/opentelemetry-export.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OpenTelemetry GenAI export for AI agent audit logs">
+<meta name="twitter:description" content="blackbox export writes the ledger as OTLP/JSON traces and logs following the OpenTelemetry GenAI conventions, metadata only.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="stylesheet" href="../style.css">
+<style>.doc{max-width:760px;margin:0 auto;padding-block:40px 24px}.doc h1{margin-bottom:18px}.doc h2{margin-top:36px}.doc h3{margin-top:26px;font-size:1.15rem}.doc ul.plain,.doc ol.plain{margin:0 0 14px;padding-left:1.3em}.doc blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid var(--accent);color:var(--muted)}.doc .tablewrap{margin:0 0 16px}.doc pre{margin:0 0 16px}.docnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;padding-block:12px;border-bottom:1px solid var(--line)}.docnav a{color:var(--muted);text-decoration:none}.docnav a:hover{color:var(--fg)}</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong><a href="../index.html" style="color:inherit;text-decoration:none">agent-blackbox</a></strong>
+<a href="../index.html#install">Install</a><a href="../index.html#policy">Policy</a><a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<div class="wrap"><div class="docnav"><a href="privacy.html">privacy</a><a href="agent-guide.html">agent guide</a><a href="agent-api.html">agent api</a><a href="ledger-spec.html">ledger spec</a><a href="anchoring.html">anchoring</a><a href="opentelemetry-export.html">opentelemetry export</a><a href="agents-supported.html">agents supported</a></div>
+<main class="doc">
+<h1>OpenTelemetry GenAI export</h1>
+<p><code>blackbox export</code> turns the ledger into OTLP/JSON that follows the <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI semantic conventions</a> where one exists, so the record of what an agent did can be read by any OTel tool.</p>
+<p><strong>Local by default.</strong> With no flags it writes <code>traces.json</code> and <code>logs.json</code> to a folder and sends nothing. It sends data only to the URL you pass with <code>--endpoint</code>, and never anywhere else.</p>
+<pre><code>blackbox export [--session ID] [--out dir] [--endpoint URL]</code></pre>
+<p><strong>Metadata only.</strong> Session, tool and rule names, decisions, timestamps and chain hashes. Never prompts, commands, paths, tool arguments, results or summaries; those stay in the ledger, sealed under the session key.</p>
+<h2 id="mapping">Mapping</h2>
+<div class="tablewrap"><table><tr><th>Ledger</th><th>OTel</th></tr><tr><td><code>PreToolUse</code> .. <code>PostToolUse</code> / <code>PostToolUseFailure</code> (same <code>tool_use_id</code>)</td><td>span <code>execute_tool &lt;tool&gt;</code></td></tr><tr><td><code>session_id</code></td><td><code>gen_ai.conversation.id</code>, and the trace id (sha256 of it)</td></tr><tr><td><code>tool_name</code>, <code>tool_use_id</code>, <code>agent_id</code></td><td><code>gen_ai.tool.name</code>, <code>gen_ai.tool.call.id</code>, <code>gen_ai.agent.id</code></td></tr><tr><td>(constant)</td><td><code>gen_ai.operation.name=execute_tool</code>, <code>gen_ai.provider.name=anthropic</code></td></tr><tr><td><code>decision</code> records</td><td>span event and log record <code>blackbox.decision</code>; a deny or ask sets the span status to error</td></tr><tr><td><code>taint</code>, <code>intent</code>, <code>purge</code>, <code>settings</code>, <code>genesis</code></td><td>log records <code>blackbox.&lt;kind&gt;</code></td></tr></table></div>
+<p>Attributes the conventions do not define use the <code>blackbox.*</code> namespace: <code>blackbox.decision</code>, <code>blackbox.rule</code>, <code>blackbox.taint</code>, <code>blackbox.record.seq</code>, <code>blackbox.record.hash</code> (the ledger position, so an exported span can be checked against <code>blackbox verify</code>).</p>
+<p>Trace and span ids are derived from session and tool-call ids, so exporting the same ledger twice gives the same ids.</p>
+<p>The GenAI conventions are still in development; the attribute names live in one table (<code>GENAI</code> in <code>src/otel-genai.js</code>) so they can follow upstream.</p>
+<p>Not covered yet: model-call spans (<code>chat</code>, with model and token usage). They need the telemetry payloads, which are sealed, so they will come as an explicit opt-in.</p>
+<p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/OTEL.md">Edit this page on GitHub</a></p>
+</main></div>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
+</body>
+</html>
