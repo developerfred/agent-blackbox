@@ -30,6 +30,7 @@
     "src/mcp-server.js",
     "bench/run.js",
     "bin/blackbox.js",
+    "src/brief.js",
     "src/daemon.js"
   ]
 }

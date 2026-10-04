@@ -67,6 +67,7 @@ Start a new Claude Code session. It will say it is being recorded. Then:
 
 ```bash
 blackbox timeline --last   # what the agent did, step by step
+blackbox brief --last      # the same session as a Markdown summary, for a PR or a handoff
 blackbox ui                # the same, in the browser (opens with a private access token)
 blackbox verify            # prove nothing was changed
 ```
