@@ -1,21 +1,19 @@
-'use strict';
 // Automatic, opt-in anchoring: when the user configures a target, the daemon
 // commits a Merkle batch now and then and publishes the head and root there.
 // Nothing is sent unless `config.anchor` names a file or a webhook, and what
 // goes out is only the head and root: sequence numbers, hashes, a signature
 // and a key id. No payload, summary, session id or path.
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
+import type { Config } from './types';
 
-const DEFAULTS = { every: 100, minutes: 60 };
+export const DEFAULTS = { every: 100, minutes: 60 };
 
-/**
- * Normalised settings, or null when automatic anchoring is off.
- * @param {import('./types').Config} cfg
- * @returns {{ every: number, minutes: number, file?: string, webhook?: string } | null}
- */
-function settings(cfg) {
-  const a = /** @type {any} */ (cfg.anchor);
+export interface AnchorSettings { every: number; minutes: number; file?: string; webhook?: string }
+
+/** Normalised settings, or null when automatic anchoring is off. */
+export function settings(cfg: Config): AnchorSettings | null {
+  const a = cfg.anchor as any;
   if (!a || typeof a !== 'object' || (!a.file && !a.webhook)) return null;
   const every = Number(a.every);
   const minutes = Number(a.minutes);
@@ -27,12 +25,8 @@ function settings(cfg) {
   };
 }
 
-/**
- * Is a new batch due? Enough new records, or some new records and enough time.
- * @param {{ every: number, minutes: number }} s
- * @param {{ newRecords: number, lastAt: number | null, now: number }} x
- */
-function due(s, { newRecords, lastAt, now }) {
+/** Is a new batch due? Enough new records, or some new records and enough time. */
+export function due(s: { every: number; minutes: number }, { newRecords, lastAt, now }: { newRecords: number; lastAt: number | null; now: number }): boolean {
   if (newRecords < 1) return false;
   if (newRecords >= s.every) return true;
   return lastAt == null || now - lastAt >= s.minutes * 60 * 1000;
@@ -41,17 +35,14 @@ function due(s, { newRecords, lastAt, now }) {
 /**
  * Publish one anchor to the configured targets. Throws when any target fails,
  * so the caller keeps it and tries again.
- * @param {Record<string, unknown>} anchor
- * @param {{ file?: string, webhook?: string }} s
- * @param {typeof fetch} [fetchImpl]
  */
-async function publish(anchor, s, fetchImpl = fetch) {
-  const errors = [];
+export async function publish(anchor: Record<string, unknown>, s: { file?: string; webhook?: string }, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const errors: string[] = [];
   if (s.file) {
     try {
       fs.mkdirSync(path.dirname(s.file), { recursive: true });
       fs.appendFileSync(s.file, JSON.stringify(anchor) + '\n');
-    } catch (e) { errors.push(`file: ${/** @type {Error} */ (e).message}`); }
+    } catch (e) { errors.push(`file: ${(e as Error).message}`); }
   }
   if (s.webhook) {
     try {
@@ -61,9 +52,7 @@ async function publish(anchor, s, fetchImpl = fetch) {
         body: JSON.stringify(anchor), signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (e) { errors.push(`webhook: ${/** @type {Error} */ (e).message}`); }
+    } catch (e) { errors.push(`webhook: ${(e as Error).message}`); }
   }
   if (errors.length) throw new Error(errors.join('; '));
 }
-
-module.exports = { settings, due, publish, DEFAULTS };
