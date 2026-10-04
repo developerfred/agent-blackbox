@@ -232,6 +232,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               check hashes, chain links, signatures, and decrypt-and-check payloads
   blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
+  blackbox anchor --batch     also commit to all records since the last anchor with one Merkle root
+  blackbox anchor --prove <seq> | --verify-proof <file>
+                              inclusion proof for one record; check one offline against a published root
   blackbox export [--session ID] [--out dir] [--endpoint URL]
                               OpenTelemetry GenAI traces and logs (OTLP/JSON, metadata only) from the ledger;
                               writes files by default, sends only to the --endpoint you name
@@ -343,6 +346,37 @@ async function main() {
       return;
     }
     case 'anchor': {
+      const { merkleRoot, merkleProof, verifyProof } = require('../src/merkle');
+      if (flag('--batch')) {
+        // one Merkle root over everything since the last anchor, written to the ledger
+        await start({ quiet: true });
+        const r = await call('POST', '/api/anchor/batch', {});
+        if (r.status !== 200) { console.log('nothing new to anchor'); return; }
+        const a = { anchored_at: new Date().toISOString(), ...r.body };
+        fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+        console.log(JSON.stringify(a, null, 2));
+        console.log(dim('\nPublish seq, hash and root somewhere the agent cannot edit. `blackbox anchor --prove <seq>` then proves one record is in the batch.'));
+        return;
+      }
+      if (opt('--prove')) {
+        const n = Number(opt('--prove'));
+        const recs = await readRecords();
+        const anchor = recs.find((r) => r.kind === 'anchor' && r.from <= n && n <= r.to);
+        if (!anchor) { console.error(red(`record ${n} is not covered by an anchor batch yet (run: blackbox anchor --batch)`)); process.exit(1); }
+        const hs = recs.filter((r) => r.seq >= anchor.from && r.seq <= anchor.to).map((r) => r.hash);
+        const proof = { seq: n, hash: hs[n - anchor.from], index: n - anchor.from, size: hs.length, proof: merkleProof(hs, n - anchor.from), root: anchor.root, anchor_seq: anchor.seq };
+        if (merkleRoot(hs) !== anchor.root) { console.error(red('the ledger does not match its own anchor record; run blackbox verify')); process.exit(1); }
+        console.log(JSON.stringify(proof, null, 2));
+        return;
+      }
+      if (opt('--verify-proof')) {
+        // offline: no ledger needed, only the proof and the root you published
+        const p = JSON.parse(fs.readFileSync(String(opt('--verify-proof')), 'utf8'));
+        const ok = verifyProof(p);
+        console.log(ok ? green(`record ${p.seq} is in the batch with root ${p.root}`) : red('proof does not match the root'));
+        process.exitCode = ok ? 0 : 1;
+        return;
+      }
       let a;
       if (remote()) {
         const r = await call('GET', '/api/anchor');

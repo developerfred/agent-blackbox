@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
+const { merkleRoot, MERKLE_ALG } = require('./merkle');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
 
@@ -459,6 +460,20 @@ class Daemon {
     return { keys: keys.length, erased, bodies };
   }
 
+  // Commit to every record since the last anchor with one Merkle root and
+  // write that as an `anchor` record; the caller publishes the root plus the
+  // chain head somewhere the agent cannot write.
+  anchorBatch() {
+    const recs = readJsonl(P.ledger);
+    let from = 1;
+    for (const r of recs) if (r.kind === 'anchor') from = r.to + 1;
+    const to = this.ledger.seq;
+    if (to < from) return null;
+    const batch = recs.filter((r) => r.seq >= from && r.seq <= to);
+    const rec = this.append('anchor', { alg: MERKLE_ALG, from, to, count: batch.length, root: merkleRoot(batch.map((r) => r.hash)) });
+    return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root };
+  }
+
   // Decrypted payload of one record, for the human reviewing the evidence.
   payload(seq) {
     const rec = this.findRecord(seq);
@@ -661,6 +676,10 @@ class Daemon {
             const cleared = this.policy.clearDocs(body.all ? null : String(body.path || ''));
             if (cleared.length) { this.append('docs', { action: 'clear', paths: cleared }); this.saveState(); }
             return send(200, { cleared });
+          }
+          if (url.pathname === '/api/anchor/batch') {
+            const a = this.anchorBatch();
+            return send(a ? 200 : 204, a || {});
           }
           if (url.pathname === '/purge') return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));
           return send(404, { error: 'not found' });
