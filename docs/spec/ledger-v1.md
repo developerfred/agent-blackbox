@@ -238,6 +238,7 @@ is listed here. Fields marked `?` are optional.
 | `settings` | integrity of the agent's hook wiring | `via`, `fingerprint`, `problems?`, `previous?` |
 | `otel`     | one OpenTelemetry log record from the agent | `event`, `service?`, `session_id?`, `prompt_id?`, `tool_use_id?`, `request_id?`, `summary?`, `payload`, `key?` |
 | `api_body` | one raw model request/response pair | `session_id?`, `request_id?`, `message_uuid?`, `model?`, `query_source?`, `request_blob?`, `request_size?`, `response_blob?`, `response_size?`, `key?`, `summary?`, `orphan?`, `file?` |
+| `anchor`   | a Merkle root over a batch of earlier records | `alg` (`merkle-sha256-rfc6962`), `from`, `to` (`to` < this record's `seq`), `count` (`to - from + 1`), `root` (hex); see [ANCHORING.md](../ANCHORING.md) |
 | `purge`    | crypto-erasure | `erased_keys` (key ids), `erased_blobs`, `erased_raw_bodies`, `purged_session?`, `before?` |
 
 Rules for evolving the registry:
@@ -353,10 +354,12 @@ Where the code in this repository differs from this document today:
 Tracked here because they decide the next versions; none changes v1.
 
 - Key rotation (a signed handover record) and key revocation.
-- Merkle batching and external anchoring formats (batch root, inclusion
-  proofs, anchor targets). Today an anchor is the bare head.
-- Mapping to OpenTelemetry GenAI conventions (attribute names for `hook` and
-  `otel` records).
+- External anchoring targets and their formats. Batch roots and inclusion
+  proofs are defined by the `anchor` kind ([ANCHORING.md](../ANCHORING.md));
+  publishing the head or root is still done by hand.
+- Mapping to OpenTelemetry GenAI conventions: the export is defined in
+  [OTEL.md](../OTEL.md) and adds no field to the ledger. Model-call spans
+  (model, tokens) are not mapped yet.
 - A field that names the agent that produced an event (Claude Code, Codex,
   Cursor, Gemini CLI), for the adapters.
 - Hash and signature agility (algorithm identifiers).

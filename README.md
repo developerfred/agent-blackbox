@@ -133,7 +133,7 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
   anchors.jsonl    chain heads you exported with `blackbox anchor`
 ```
 
-Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
+Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it. `blackbox anchor --batch` also commits to a batch of records with a Merkle root, so one record can be proven to belong to a published anchor without handing over the rest ([docs/ANCHORING.md](docs/ANCHORING.md)). `blackbox export` writes the ledger as OpenTelemetry GenAI traces and logs for any OTel tool; it writes files and sends nothing unless you pass `--endpoint` ([docs/OTEL.md](docs/OTEL.md)).
 
 ## Grounded in research
 
