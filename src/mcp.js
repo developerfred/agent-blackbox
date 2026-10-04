@@ -39,7 +39,7 @@ function codexServers(file) {
   };
   for (const line of text.split(/\r?\n/)) {
     const t = /^\s*\[\s*mcp_servers\.("?)([^".\]]+)\1(?:\.(\w+))?\s*\]\s*$/.exec(line);
-    if (t) { cur = (out[t[2]] ||= {}); sub = t[3] || null; if (sub) cur[sub] ||= {}; continue; }
+    if (t) { const table = (out[t[2]] ||= {}); cur = table; sub = t[3] || null; if (sub) table[sub] ||= {}; continue; }
     if (/^\s*\[/.test(line)) { cur = null; continue; }
     const kv = /^\s*([\w-]+)\s*=\s*(.+)$/.exec(line);
     if (cur && kv) (sub ? cur[sub] : cur)[kv[1]] = val(kv[2]);
@@ -48,7 +48,7 @@ function codexServers(file) {
 }
 
 /**
- * @typedef {{ client: string, scope: string, file: string, toml?: boolean, pick?: (json: any) => Record<string, any> | undefined }} ConfigSource
+ * @typedef {{ client: string, scope: string, file: string, toml?: boolean, plugin?: string, pick?: (json: any) => Record<string, any> | undefined }} ConfigSource
  */
 
 /** @param {string} [home] @param {string} [cwd] @returns {ConfigSource[]} */
@@ -97,14 +97,17 @@ function pluginConfigs(home) {
   return out;
 }
 
-/** @param {{ home?: string, cwd?: string }} [opts] */
+/** @typedef {{ name: string, client: string, scope: string, plugin?: string, file: string, transport: string, command: string | null, args: string[], url: string | null, env: Record<string, any>, headers: Record<string, any>, disabled: boolean }} McpServer */
+
+/** @param {{ home?: string, cwd?: string }} [opts] @returns {McpServer[]} */
 function discoverServers({ home = os.homedir(), cwd = process.cwd() } = {}) {
+  /** @type {McpServer[]} */
   const servers = [];
   for (const c of [...candidateConfigs(home, cwd), ...pluginConfigs(home)]) {
     if (!exists(c.file)) continue;
     let map = null;
     if (c.toml) map = codexServers(c.file);
-    else { const j = readJson(c.file); map = j && c.pick(j); }
+    else { const j = readJson(c.file); map = j && c.pick && c.pick(j); }
     if (!map || typeof map !== 'object') continue;
     for (const [name, def] of Object.entries(map)) {
       if (!def || typeof def !== 'object') continue;
@@ -131,8 +134,9 @@ const isRef = (v) => /^\$\{[^}]+\}$|^\$[A-Z_][A-Z0-9_]*$|^env:|^\{env:/.test(Str
 const mask = (v) => { const s = String(v); return s.length <= 8 ? '•••' : s.slice(0, 4) + '…' + `(${s.length} chars)`; };
 
 /**
- * @param {ReturnType<typeof discoverServers>[number]} s
+ * @param {McpServer} s
  * @param {{ home?: string }} [opts]
+ * @returns {import('./types').McpAudit}
  */
 function auditServer(s, { home: homeDir = os.homedir() } = {}) {
   /** @type {import('./types').Finding[]} */
@@ -180,7 +184,8 @@ function auditServer(s, { home: homeDir = os.homedir() } = {}) {
   }
   if (s.scope === 'project' && s.command && !runner && /^\.{0,2}\//.test(s.command)) add('medium', 'repo-executable', "runs a program from the repository: anyone who can change the repo changes what runs on your machine", s.command);
   const counts = { high: 0, medium: 0, low: 0 };
-  for (const x of f) if (x.severity in counts) counts[x.severity]++;
+  for (const x of f) if (x.severity in counts) counts[/** @type {keyof typeof counts} */ (x.severity)]++;
+  /** @type {import('./types').Severity} */
   const risk = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
   const hash = sha256(JSON.stringify({ c: s.command, a: s.args, u: s.url, e: Object.keys(s.env).sort(), h: Object.keys(s.headers).sort(), t: s.transport }));
   return { ...s, env: Object.keys(s.env), headers: Object.keys(s.headers), findings: f, counts, risk, hash };
@@ -206,7 +211,7 @@ function auditServers({ home, cwd, pinsFile } = {}) {
 /** @param {string} file @param {import('./types').McpAudit[]} audits */
 function saveMcpPins(file, audits) {
   const pins = readJson(file) || {};
-  for (const a of audits) pins[a.pinKey] = a.hash;
+  for (const a of audits) if (a.pinKey) pins[a.pinKey] = a.hash;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, JSON.stringify(pins, null, 2) + '\n', { mode: 0o600 });
 }
