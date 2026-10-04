@@ -16,6 +16,7 @@ const settingsPath = () => path.join(claudeDir(), 'settings.json');
 // Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
 // disappear on upgrade; its stable symlinks live in …/opt/<name>/. Hooks must
 // point at the stable path or they break on the next `brew upgrade`.
+/** @param {string} p */
 function stablePath(p) {
   const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.*)$/.exec(p);
   if (!m) return p;
@@ -25,8 +26,10 @@ function stablePath(p) {
 
 const hookScript = stablePath(path.resolve(__dirname, '..', 'bin', 'hook.js'));
 const nodePath = () => stablePath(process.execPath);
+/** @param {any} h */
 const isOurs = (h) => h && typeof h.command === 'string' && h.command.includes('agent-blackbox-hook');
 
+/** @param {{ raw?: boolean }} opts @returns {Record<string, string>} */
 function desiredEnv({ raw }) {
   const env = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
@@ -45,6 +48,7 @@ function desiredEnv({ raw }) {
 
 // Values an earlier agent-blackbox install wrote (possibly with another port,
 // token or data folder) belong to us and may be replaced.
+/** @param {string} k @param {unknown} v */
 function writtenByUs(k, v) {
   if (typeof v !== 'string') return false;
   if (k === 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT') return /^http:\/\/127\.0\.0\.1:\d+\/v1\/logs$/.test(v);
@@ -53,6 +57,7 @@ function writtenByUs(k, v) {
   return false;
 }
 
+/** @param {string} file @returns {Record<string, any>} */
 function readSettings(file) {
   if (!fs.existsSync(file)) return {};
   const text = fs.readFileSync(file, 'utf8');
@@ -60,6 +65,7 @@ function readSettings(file) {
   return JSON.parse(text); // throws on invalid JSON: never overwrite a file we cannot parse
 }
 
+/** @param {Record<string, any>} settings */
 function stripOurHooks(settings) {
   const hooks = settings.hooks || {};
   for (const ev of Object.keys(hooks)) {

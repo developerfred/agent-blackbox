@@ -1,6 +1,7 @@
 'use strict';
 // Terminal view of `blackbox mcp`: configured servers joined with real usage.
 const { palette } = require('./term');
+const { configFor } = require('./mcp');
 
 /** @typedef {{ name: string, calls: number, outbound?: boolean }} McpTool */
 
@@ -31,7 +32,7 @@ function renderMcp(audits, summary, { color = false, all = false } = {}) {
     out.push('');
     out.push(bold('  used') + dim('   (↗ = tool that sends or changes data)'));
     for (const m of used) {
-      const cfgs = audits.filter((a) => a.name.toLowerCase().replace(/[^a-z0-9]+/g, '_') === m.server.toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+      const cfgs = configFor(audits, m.server);
       const worst = cfgs.sort((a, b) => SEV[b.risk] - SEV[a.risk])[0];
       out.push(`  ${bold(m.server)}${m.plugin ? dim(` (plugin ${m.plugin})`) : ''}  ${worst ? riskTag(worst.risk) : dim('not in a local config: claude.ai connector, managed or removed')}`);
       out.push(`      ${n(m.calls)} ${m.calls === 1 ? "call" : "calls"} · ${n(m.sessions)} ${m.sessions === 1 ? "session" : "sessions"} · last ${String(m.lastUsed || '').slice(0, 10)}${m.outboundCalls ? ' · ' + yellow(`${n(m.outboundCalls)} sent or changed data`) : ' · ' + dim('read-only')}${m.errors ? ' · ' + red(`${n(m.errors)} failed`) : ''}`);

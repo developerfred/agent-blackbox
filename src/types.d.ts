@@ -125,7 +125,12 @@ export interface McpAudit {
   name: string; client: string; scope: string; transport: string;
   command?: string | null; args: string[]; url?: string | null;
   findings: Finding[]; counts: Counts; risk: Severity;
-  pin: 'new' | 'pinned' | 'changed';
+  /** set by auditServers once pins are compared */
+  pin?: 'new' | 'pinned' | 'changed';
+  pinKey?: string;
+  file?: string;
+  plugin?: string;
+  hash?: string;
   [extra: string]: unknown;
 }
 
