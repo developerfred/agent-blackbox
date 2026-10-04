@@ -12,6 +12,8 @@ export interface Config {
   memoryWrites: 'ask' | 'alert' | 'off';
   trustedDocs: string[];
   failMode: 'open' | 'closed';
+  /** for agents that cannot ask the human: what an "ask" becomes */
+  askFallback?: 'deny' | 'allow';
   /** erase sessions older than this many days (crypto-erase); null or 0 keeps everything */
   retainDays?: number | null;
   allowHosts: string[];
@@ -43,7 +45,49 @@ export interface HookEvent {
   tool_use_id?: string;
   command_name?: string;
   command_args?: string;
+  /** which agent sent it; absent for Claude Code */
+  agent?: string;
   [extra: string]: unknown;
+}
+
+/** What the recorder decided about one event, in the agent-neutral form adapters encode. */
+export interface Verdict {
+  /** "ask" and "deny" gate a tool call; null only informs */
+  permission: 'ask' | 'deny' | null;
+  /** the detail for the human */
+  reason: string;
+  /** the (deliberately uninformative) text the model sees on a denial */
+  agentMessage: string;
+  /** a notice for the human that gates nothing */
+  notice: string | null;
+}
+
+/** What an adapter hands the hook process to print and exit with. */
+export interface HookOutput { stdout?: object | null; stderr?: string; exit?: number }
+
+/** What the agent can do at its hook points; documented per adapter in docs/AGENTS.md. */
+export interface AdapterCapabilities {
+  /** a hook can stop a tool call before it runs */
+  preTool: boolean;
+  /** a hook can hand the decision to the human instead of the model */
+  ask: boolean;
+  /** tool results reach a hook (needed to learn what the session has read) */
+  postTool: boolean;
+  prompt: boolean;
+  session: boolean;
+}
+
+/** The one place that knows an agent's own hook format. */
+export interface Adapter {
+  id: string;
+  name: string;
+  capabilities: AdapterCapabilities;
+  /** the agent's payload to a canonical event; null for events nothing is recorded for */
+  decode(native: Record<string, any>): HookEvent | null;
+  /** the recorder's reply to what the agent expects on stdout/exit; res is null when it said nothing */
+  encode(res: { stdout?: object | null; verdict?: Verdict } | null, native: Record<string, any>, opts?: { askFallback?: 'deny' | 'allow' }): HookOutput;
+  /** the reply when the recorder is down and failMode is "closed" */
+  failClosed(ev: HookEvent, reason: string, native: Record<string, any>): HookOutput | null;
 }
 
 export interface Taint { why: string; at: string; tool_use_id?: string }
