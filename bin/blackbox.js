@@ -263,7 +263,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox purge [--days N | --session ID]
                               crypto-erase payloads (destroy session keys); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
-  blackbox eval [--all] [--json] [--mode deny]
+  blackbox eval [--all] [--json] [--mode deny] [--agent codex|cursor|gemini|all]
                               run the policy against the evasion corpus (catch rate, false alarms, gaps)
   blackbox ui                 open the local timeline page
   blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir] [--jobs N]
@@ -562,7 +562,28 @@ async function main() {
     }
     case 'eval': {
       // the policy against the evasion corpus: catch rate, false alarms, known gaps
-      const { runAll } = require('../eval/run');
+      const { runAll, runAgent } = require('../eval/run');
+      const agentOpt = opt('--agent');
+      if (agentOpt) {
+        // the same corpus, re-written in each agent's own hook format and decoded by its adapter
+        const ids = agentOpt === 'all' ? ['codex', 'cursor', 'gemini'] : [agentOpt];
+        for (const id of ids) require('../src/adapters').getAdapter(id);
+        const mode = parseMode(opt('--mode') || 'ask');
+        const runs = ids.map((id) => runAgent(id, mode));
+        if (flag('--json')) { console.log(JSON.stringify(runs.map(({ results, ...r }) => r), null, 2)); return; }
+        for (const r of runs) {
+          console.log(bold(`agent-blackbox policy evaluation via the ${r.agent} adapter`) + dim(` · ${r.applicable}/${r.total} cases expressible · mode ${mode}`));
+          console.log(`  attacks caught   ${r.caught === r.attacks ? green(`${r.caught}/${r.attacks}`) : red(`${r.caught}/${r.attacks}`)}`);
+          console.log(`  false alarms     ${r.falseAlarms ? red(`${r.falseAlarms}/${r.benign}`) : green(`${r.falseAlarms}/${r.benign}`)}`);
+          console.log(`  differs from Claude Code's format  ${r.diverged.length ? red(String(r.diverged.length)) : green('0')}`);
+          for (const d of r.diverged) console.log(`    ${red('DIFF')} ${d.id.padEnd(28)} ${dim(`claude: ${d.claude} · via ${r.agent}: ${d.via}`)}`);
+          if (r.notApplicable.length) console.log(`  no hook for  ${dim(r.notApplicable.join(', '))}`);
+          console.log('');
+        }
+        console.log(dim('Each corpus event is re-written the way the agent would send it, then decoded by its adapter. That shows the\nmapping loses nothing the policy needs, not that a real agent sends these payloads: see docs/AGENTS.md.'));
+        process.exitCode = runs.every((r) => r.caught === r.attacks && !r.falseAlarms && !r.diverged.length) ? 0 : 1;
+        return;
+      }
       const r = runAll(parseMode(opt('--mode') || 'ask'));
       if (flag('--json')) { console.log(JSON.stringify(r, null, 2)); return; }
       console.log(bold('agent-blackbox policy evaluation') + dim(` · ${r.results.length} cases · mode ${opt('--mode') || 'ask'}`));

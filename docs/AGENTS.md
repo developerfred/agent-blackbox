@@ -63,9 +63,17 @@ Limits to know before relying on it:
 - Gemini's model-level hooks (`BeforeModel`, `AfterModel`, `BeforeToolSelection`) are not used; the recorder sees tool calls, prompts and turns, not model traffic, and there is no OpenTelemetry stream like Claude Code's.
 - The event names, tool names and reply shape follow Gemini CLI's hooks reference in its repository. The tool parameter names (`file_path`, `prompt`, `paths`) are from memory of Gemini's tools and have not been run against a real Gemini; check them with your version.
 
+## Measuring an adapter
+
+`blackbox eval --agent codex|cursor|gemini|all` runs the evasion corpus through an adapter. Every corpus event is re-written the way that agent would send it (a Codex session reads files with `cat` and fetches pages with `curl`, since it has no tools for them), decoded by the real adapter, and then judged by the policy. For each agent it prints the attacks caught, the false alarms, the cases that give a different answer than in Claude Code's own format (a loss in translation, which fails the run), and the cases the agent has no hook for.
+
+Today every adapter catches what Claude Code catches on the cases it can express, with no extra false alarms. The cases an agent cannot express are the limits listed above made visible: all three lack PowerShell, and Cursor cannot gate the memory-write and planted-document cases because its edit hook runs after the write.
+
+This measures the mapping, not the agent. The re-writing is ours, built from the same reading of each agent's hooks as the adapter; it shows nothing is lost on the way in, and does not show that a real Codex, Cursor or Gemini sends these payloads. That still needs a run on the real agent.
+
 ## Adding an agent
 
 1. `src/adapters/<id>.js` exporting an `Adapter` (see `src/types.d.ts`), and its id in `src/adapters/index.js`.
 2. Map the agent's events and tool names onto the canonical ones. Keep fields the policy reads (`command`, `file_path`, `url`, `tool_response`) under Claude Code's names.
 3. State only the capabilities you verified against the agent's own documentation, and say where it cannot block.
-4. Test it with `test/adapter-harness.js`, which runs the real hook script against a real recorder.
+4. Test it with `test/adapter-harness.js`, which runs the real hook script against a real recorder, and add an encoder for it to `eval/native.js` so `blackbox eval --agent <id>` can measure it.
