@@ -1,24 +1,23 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.defaults = defaults;
+exports.hardenScript = hardenScript;
+exports.undoScript = undoScript;
+exports.checkHardened = checkHardened;
 // `blackbox harden`: run the recorder as a dedicated OS user, so an agent
 // running as the human can write evidence but not read, rewrite or erase it.
 //
 // This module only builds a shell script. Nothing is changed until a person
 // reads that script and runs it as root. It is plain POSIX sh so it can be
 // reviewed line by line.
-const os = require('os');
-const path = require('path');
-const { defined, stablePath } = require('./util');
-/**
- * @typedef {{ platform?: string, user?: string, data?: string, code?: string, node?: string, port?: number, human?: string, humanHome?: string, pkgRoot?: string }} HardenOptions
- * @typedef {Required<HardenOptions>} Resolved
- */
-/** Single-quote a value for sh. @param {string} s */
+const os = require("os");
+const path = require("path");
+const util_1 = require("./util");
+/** Single-quote a value for sh. */
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
-/** @param {string} s */
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const SERVICE = 'agent-blackbox';
 const LABEL = 'dev.agent-blackbox.recorder';
-/** @param {string} [platform] */
 function defaults(platform = process.platform) {
     const mac = platform === 'darwin';
     return {
@@ -28,7 +27,6 @@ function defaults(platform = process.platform) {
         code: '/usr/local/lib/agent-blackbox',
     };
 }
-/** @param {Pick<Resolved, 'platform' | 'user'>} o */
 function userCreation({ platform, user }) {
     if (platform === 'darwin') {
         return `if ! dscl . -read /Users/${user} >/dev/null 2>&1; then
@@ -52,7 +50,6 @@ GROUP=${user}`;
 fi
 GROUP=${user}`;
 }
-/** @param {Resolved} o */
 function serviceInstall(o) {
     const exec = `${o.node} ${o.code}/dist/bin/blackbox.js daemon`;
     if (o.platform === 'darwin') {
@@ -105,14 +102,12 @@ systemctl enable ${SERVICE}.service
 systemctl restart ${SERVICE}.service`;
 }
 // The script that moves the recorder to its own user.
-/** @param {HardenOptions} [opts] */
 function hardenScript(opts = {}) {
     const d = defaults(opts.platform);
-    /** @type {Resolved} */
     const o = {
         ...d,
-        ...defined(opts),
-        node: opts.node || stablePath(process.execPath),
+        ...(0, util_1.defined)(opts),
+        node: opts.node || (0, util_1.stablePath)(process.execPath),
         port: opts.port || 7071,
         human: opts.human || os.userInfo().username,
         humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox'),
@@ -215,10 +210,9 @@ echo "Now run 'blackbox install' as ${o.human}: the hooks will point at $CODE/di
 echo "The ledger from before stays in $HUMAN_HOME and is readable by the agent: anchor it, then purge what you do not need."
 `;
 }
-/** @param {HardenOptions} [opts] */
 function undoScript(opts = {}) {
     const d = defaults(opts.platform);
-    const o = { ...d, ...defined(opts), humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox') };
+    const o = { ...d, ...(0, util_1.defined)(opts), humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox') };
     if (!['darwin', 'linux'].includes(o.platform))
         throw new Error(`harden supports macOS (launchd) and Linux (systemd), not ${o.platform}`);
     const stop = o.platform === 'darwin'
@@ -238,18 +232,12 @@ fi
 echo "service removed. The user ${o.user} and ${o.data} are kept; remove them by hand when you no longer need the history."
 `;
 }
-// Is the recorder running as someone other than the human? health is the
-// body of GET /health.
-/**
- * @param {{ uid?: number | null } | null} health body of GET /health
- * @param {{ uid?: number | null, cfg?: Partial<import('./types').Config>, legacyKeys?: string[], hookScripts?: string[] }} [opts]
- *   legacyKeys: key files still in the human's own folder; hookScripts: where the installed hooks run from
- */
+// Is the recorder running as someone other than the human? `health` is the body of
+// GET /health. legacyKeys: key files still in the human's own folder;
+// hookScripts: where the installed hooks run from.
 function checkHardened(health, { uid = typeof process.getuid === 'function' ? process.getuid() : null, cfg = {}, legacyKeys = [], hookScripts = [] } = {}) {
-    /** @type {string[]} */
     const lines = [];
     let ok = true;
-    /** @param {string} m */
     const bad = (m) => { ok = false; lines.push(`✘ ${m}`); };
     if (!health) {
         bad('the recorder is not running');
@@ -273,4 +261,3 @@ function checkHardened(health, { uid = typeof process.getuid === 'function' ? pr
         lines.push(`! the hooks still run from ${outside}, which an agent running as you can edit. Run: blackbox install`);
     return { ok, lines };
 }
-module.exports = { hardenScript, undoScript, checkHardened, defaults };
