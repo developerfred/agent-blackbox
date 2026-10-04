@@ -86,6 +86,7 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | `secret-to-code` | A secret read earlier is passed to such code | ask |
 | `web3-transaction` | The agent signs or broadcasts a transaction (`cast send`, `forge script --broadcast`, `solana transfer`, `eth_sendRawTransaction`, a wallet MCP tool) or passes key material on a command line | ask (`web3`: `ask`, `alert`, `off`) |
 | `memory-write` | A session that read untrusted content writes to a file later sessions trust as instructions: `AGENTS.md`, `CLAUDE.md`, `.claude/commands|agents|rules|skills`, Cursor, Windsurf, Cline, Copilot and Continue rules (also through `>>`, `tee`, `sed -i`) | ask (`memoryWrites`: `ask`, `alert`, `off`) |
+| `memory-write` (provenance) | A document a tainted session wrote (see above) is read by a later session, or loaded at its start (`CLAUDE.md`, `AGENTS.md`, `~/.claude/CLAUDE.md`…): that session starts as untrusted content. Declare a reviewed document with `trustedDocs` | marks the session (taint) |
 | `post-denial` | Something was already denied in this session, and a call goes out | ask |
 | `self-protection` | The agent touches `~/.blackbox` (quotes, backslashes and globs undone first) | deny |
 | `hook-tamper` | The agent edits Claude Code settings or plugin files; the daemon also checks the hooks every minute | ask / alert |

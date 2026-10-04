@@ -10,6 +10,7 @@ export interface Config {
   opaqueCode: 'ask' | 'alert';
   web3: 'ask' | 'alert' | 'off';
   memoryWrites: 'ask' | 'alert' | 'off';
+  trustedDocs: string[];
   failMode: 'open' | 'closed';
   /** erase sessions older than this many days (crypto-erase); null or 0 keeps everything */
   retainDays?: number | null;
@@ -93,9 +94,15 @@ export interface LedgerRecord {
   [extra: string]: unknown;
 }
 
-/** What the daemon keeps in state.json. */
-export interface DaemonState {
+/** What the policy remembers across events and sessions. */
+export interface PolicyState {
   sessions: Record<string, SessionState>;
+  /** instruction/memory documents written by a session that had read untrusted content */
+  docs?: Record<string, { session: string; at: string; why: string }>;
+}
+
+/** What the daemon keeps in state.json. */
+export interface DaemonState extends PolicyState {
   salt: string;
   bodyIndexOffset: number;
   integrity?: { fingerprint?: string; via: string | null; problems: string[]; at: string };

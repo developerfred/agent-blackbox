@@ -46,6 +46,9 @@ const DEFAULT_CONFIG = {
   // a session that read untrusted content changing AGENTS.md, CLAUDE.md, editor rules,
   // agent commands or skills (files later sessions trust): 'ask' (default), 'alert' or 'off'
   memoryWrites: 'ask',
+  // instruction/memory documents you reviewed and trust (a path or its tail, e.g. 'docs/AGENTS.md'):
+  // they stop marking sessions that load them as untrusted
+  trustedDocs: [],
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // erase sessions older than this many days, automatically (same as `blackbox purge --days N`); null keeps everything

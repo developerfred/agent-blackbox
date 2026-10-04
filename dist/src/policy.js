@@ -4,6 +4,7 @@
 // send something out. Each condition alone is normal; together they are the
 // shape of a prompt-injection exfiltration.
 const crypto = require('crypto');
+const path = require('path');
 const { baseName, pushCapped } = require('./util');
 const SENSITIVE_PATH = [
     /(^|[\/\s'"=@<])\.env(\.[\w-]+)?(\b|$)/i,
@@ -103,6 +104,21 @@ const MEMORY_DOC = [
 ];
 /** @param {string} p */
 const isMemoryDoc = (p) => MEMORY_DOC.some((re) => re.test(String(p).replace(/\\/g, '/')));
+// Files the agent loads on its own at the start of a session (no Read call involved).
+const AUTOLOADED = /(?:^|\/)(?:AGENTS|CLAUDE|CLAUDE\.local|GEMINI)\.md$|(?:^|\/)\.(?:cursorrules|windsurfrules|clinerules)$|(?:^|\/)\.github\/copilot-instructions\.md$/i;
+/**
+ * A stable key for a file. Home folders collapse to ~ (the recorder may run as another
+ * user, and a write seen as ~/x must match a read of /Users/me/x), relative paths resolve
+ * against the session's folder.
+ * @param {string} file @param {string} [cwd]
+ */
+function docKey(file, cwd) {
+    const home = (/** @type {string} */ p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~').replace(/^\/root(?=\/|$)/, '~');
+    let p = String(file).replace(/\\/g, '/');
+    if (!p.startsWith('/') && !p.startsWith('~'))
+        p = path.posix.join(home(String(cwd || '').replace(/\\/g, '/')), p);
+    return path.posix.normalize(home(p));
+}
 // A copy of a shell command with the usual obfuscations undone, so c''url,
 // "curl", \curl, cu$'r'l, $'\x63url' and curl${IFS}x all read as curl.
 /** @param {unknown} cmd @returns {string} */
@@ -332,7 +348,7 @@ class Policy {
     /**
      * protect: extra paths (the real data folder) the agent may never touch.
      * @param {import('./types').Config} cfg
-     * @param {{ sessions: Record<string, import('./types').SessionState> }} state
+     * @param {import('./types').PolicyState} state
      * @param {string | Buffer} salt
      * @param {{ protect?: string[], readFile?: ((file: string, cwd?: string) => string | null) | null }} [opts]
      */
@@ -348,6 +364,55 @@ class Policy {
     /** Rules that ask: 'alert' (record and tell, no prompt) in monitor mode or when that rule is set to alert. @param {string | undefined} setting @returns {'ask' | 'alert'} */
     softDecision(setting) {
         return this.cfg.mode === 'monitor' || setting === 'alert' ? 'alert' : 'ask';
+    }
+    /** Has the human declared this document reviewed (config trustedDocs: a path, or its tail)? @param {string} key */
+    trustedDoc(key) {
+        return (this.cfg.trustedDocs || []).some((t) => { const k = docKey(t); return key === k || key.endsWith('/' + k.replace(/^~?\//, '')); });
+    }
+    /**
+     * Documents a past tainted session wrote that this session loads at its start:
+     * the agent reads them without a tool call, so the session begins untrusted.
+     * @param {import('./types').HookEvent} ev
+     * @returns {{ taints: { flag: string, why: string }[], secretsSeen: number }}
+     */
+    sessionStart(ev) {
+        const sess = this.session(ev.session_id);
+        if (ev.cwd)
+            sess.cwd = ev.cwd;
+        const cwd = docKey(ev.cwd || '', '');
+        const hit = Object.entries(this.state.docs || {}).find(([key]) => {
+            if (!AUTOLOADED.test(key) || this.trustedDoc(key))
+                return false;
+            const dir = path.posix.dirname(key);
+            return key.startsWith('~/.claude/') || cwd === dir || cwd.startsWith(dir + '/');
+        });
+        if (!hit || sess.untrusted)
+            return { taints: [], secretsSeen: 0 };
+        const why = `${hit[0]} loads at start and was written by a session that had read untrusted content (${hit[1].why})`;
+        sess.untrusted = { why, at: new Date().toISOString() };
+        return { taints: [{ flag: 'untrusted', why }], secretsSeen: 0 };
+    }
+    /**
+     * If this tool call reads a document a tainted session wrote, why that is untrusted (else null).
+     * @param {string} tool @param {Record<string, any>} input @param {import('./types').SessionState} sess
+     */
+    poisonedDocRead(tool, input, sess) {
+        const docs = this.state.docs;
+        if (!docs)
+            return null;
+        /** @type {string[]} */
+        let files = [];
+        if (tool === 'Read' || tool === 'NotebookRead')
+            files = [input.file_path || input.notebook_path || ''];
+        else if ((tool === 'Bash' || tool === 'PowerShell') && FILE_READER_CMD.test(input.command || ''))
+            files = normalizeCmd(shellSkeleton(input.command)).split(/[\s;&|()<>]+/);
+        for (const f of files.filter((x) => x && isMemoryDoc(x))) {
+            const key = docKey(f, sess.cwd);
+            const d = docs[key];
+            if (d && !this.trustedDoc(key))
+                return `${key} was written by a session that had read untrusted content (${d.why})`;
+        }
+        return null;
     }
     /** @param {string} id @returns {import('./types').SessionState} */
     session(id) {
@@ -724,6 +789,8 @@ class Policy {
         const tool = ev.tool_name || '';
         const input = ev.tool_input || {};
         const sess = this.session(ev.session_id);
+        if (ev.cwd)
+            sess.cwd = ev.cwd;
         const taints = [];
         const respText = stringsOf(ev.tool_response).join('\n');
         const inText = inputText(input);
@@ -775,6 +842,24 @@ class Policy {
         if (tool === 'Bash' || tool === 'PowerShell')
             wrote.push(...writtenBy(input.command || ''));
         const body = [input.content, input.new_string, input.new_source, ...((input.edits || []).map((/** @type {{ new_string?: string }} */ e) => e.new_string)), tool === 'Bash' ? input.command : null].filter((x) => typeof x === 'string').join('\n');
+        // a session that had read untrusted content wrote text a later session will trust
+        if (sess.untrusted) {
+            for (const f of writeTargets(tool, input).filter(isMemoryDoc)) {
+                const docs = (this.state.docs ||= {});
+                docs[docKey(f, sess.cwd)] = { session: ev.session_id, at: new Date().toISOString(), why: sess.untrusted.why };
+                const keys = Object.keys(docs);
+                if (keys.length > 500)
+                    delete docs[keys[0]];
+            }
+        }
+        // this session read such a text
+        if (!sess.untrusted) {
+            const why = this.poisonedDocRead(tool, input, sess);
+            if (why) {
+                sess.untrusted = { why, at: new Date().toISOString(), tool_use_id: ev.tool_use_id };
+                taints.push({ flag: 'untrusted', why });
+            }
+        }
         for (const f of wrote.filter(Boolean)) {
             sess.written = pushCapped(sess.written, f);
             if (NET_SOURCE.test(body) || DYNAMIC_SOURCE.test(body) || /\b(?:curl|wget)\b[^;&|]*\s-(?:o|O)\b/.test(input.command || ''))
@@ -814,4 +899,4 @@ function redact(text) {
     out = out.replace(/(?<!\[)((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
     return out;
 }
-module.exports = { Policy, injectionIn, isMemoryDoc, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
+module.exports = { Policy, injectionIn, isMemoryDoc, docKey, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
