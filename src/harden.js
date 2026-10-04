@@ -130,9 +130,25 @@ function hardenScript(opts = {}) {
     if (!/^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(v)) throw new Error(`invalid ${k} name: ${v}`);
   }
   if (o.human === o.user) throw new Error('the recorder user must differ from the human user');
-  const warnNode = /^\/(home|Users)\//.test(o.node)
-    ? `echo "warning: node lives under a home folder (${o.node}); the recorder user may not be able to run it. Install node system-wide." >&2\n`
+  // A node inside a home folder (nvm, fnm, asdf) cannot be run by the recorder user:
+  // stop before anything is created. Overridable for a home folder that is world-readable.
+  const homeNode = /^\/(home|Users)\//.test(o.node)
+    ? `if [ "\${BLACKBOX_ALLOW_HOME_NODE:-}" != 1 ]; then
+  echo "node lives under a home folder (${o.node}), which the recorder user ${o.user} cannot enter." >&2
+  echo "Install node system-wide (macOS: brew install node), then generate the script again with that node:" >&2
+  echo "  /opt/homebrew/bin/node bin/blackbox.js harden --out harden.sh   (or pass --node PATH)" >&2
+  exit 1
+fi
+`
     : '';
+  // After the user exists: it must really be able to run node, or the service would die at start.
+  const runCheck = `# the recorder user must be able to run node (checked now, not discovered when the service fails)
+if command -v sudo >/dev/null 2>&1; then AS="sudo -n -u ${o.user}"; else AS="runuser -u ${o.user} --"; fi
+$AS "$NODE" -e 0 >/dev/null 2>&1 || {
+  echo "the user ${o.user} cannot run $NODE. Use a system-wide node (macOS: brew install node) and generate the script again." >&2
+  exit 1
+}
+`;
 
   return `#!/bin/sh
 # agent-blackbox harden: run the recorder as its own OS user.
@@ -155,10 +171,11 @@ DATA=${q(o.data)}
 HUMAN=${q(o.human)}
 HUMAN_HOME=${q(o.humanHome)}
 
-${warnNode}[ -f "$HUMAN_HOME/keys/token" ] || { echo "no ingest token in $HUMAN_HOME/keys: run 'blackbox install' as ${o.human} first" >&2; exit 1; }
+${homeNode}[ -f "$HUMAN_HOME/keys/token" ] || { echo "no ingest token in $HUMAN_HOME/keys: run 'blackbox install' as ${o.human} first" >&2; exit 1; }
 
 ${userCreation(o)}
 
+${runCheck}
 # 1. code the agent cannot change
 rm -rf "$CODE"
 mkdir -p "$CODE"
