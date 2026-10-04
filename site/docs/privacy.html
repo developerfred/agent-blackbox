@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy: what agent-blackbox records and keeps</title>
+<meta name="description" content="What the agent-blackbox recorder stores, where, for how long, how crypto-erase works and what the defaults do not protect against.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/docs/privacy.html">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="Privacy: what agent-blackbox records and keeps">
+<meta property="og:description" content="What the agent-blackbox recorder stores, where, for how long, how crypto-erase works and what the defaults do not protect against.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/docs/privacy.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Privacy: what agent-blackbox records and keeps">
+<meta name="twitter:description" content="What the agent-blackbox recorder stores, where, for how long, how crypto-erase works and what the defaults do not protect against.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="stylesheet" href="../style.css">
+<style>.doc{max-width:760px;margin:0 auto;padding-block:40px 24px}.doc h1{margin-bottom:18px}.doc h2{margin-top:36px}.doc h3{margin-top:26px;font-size:1.15rem}.doc ul.plain,.doc ol.plain{margin:0 0 14px;padding-left:1.3em}.doc blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid var(--accent);color:var(--muted)}.doc .tablewrap{margin:0 0 16px}.doc pre{margin:0 0 16px}.docnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;padding-block:12px;border-bottom:1px solid var(--line)}.docnav a{color:var(--muted);text-decoration:none}.docnav a:hover{color:var(--fg)}</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong><a href="../index.html" style="color:inherit;text-decoration:none">agent-blackbox</a></strong>
+<a href="../index.html#install">Install</a><a href="../index.html#policy">Policy</a><a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<div class="wrap"><div class="docnav"><a href="privacy.html">privacy</a><a href="agent-guide.html">agent guide</a><a href="agent-api.html">agent api</a><a href="ledger-spec.html">ledger spec</a><a href="anchoring.html">anchoring</a><a href="opentelemetry-export.html">opentelemetry export</a><a href="agents-supported.html">agents supported</a></div>
+<main class="doc">
+<h1>Privacy</h1>
+<p>What agent-blackbox records, where it keeps it, how long, and what leaves your machine.</p>
+<h2 id="what-leaves-your-machine">What leaves your machine</h2>
+<p>Nothing. The code opens no outbound connection: the recorder listens on <code>127.0.0.1</code> only (<code>src/daemon.js</code>), the hook and CLI talk to it over loopback (<code>src/local-http.js</code>), and the local UI loads no external script, font or image. There are no runtime dependencies. <code>blackbox share</code> and <code>scan --card</code> draw images from aggregate numbers and fixed category labels, never from project names, hosts, commands or prompts.</p>
+<p>The one exception is something you do on purpose: a file you publish yourself (a share card, an <code>anchor</code> head).</p>
+<h2 id="what-is-recorded-and-where">What is recorded, and where</h2>
+<p>Everything lives in <code>~/.blackbox/</code> (folders <code>0700</code>, files <code>0600</code>).</p>
+<div class="tablewrap"><table><tr><th>What</th><th>Where</th><th>Protection</th></tr><tr><td>Record metadata: sequence, time, event kind, tool name, session id, working directory of a session start, decisions and rule names</td><td><code>ledger.jsonl</code></td><td>clear text, hash-chained and signed</td></tr><tr><td>One-line summary of each hook record (prompt, command, path text, secrets masked)</td><td><code>ledger.jsonl</code></td><td>sealed with the session key (AES-256-GCM)</td></tr><tr><td>Full payloads: prompt, tool arguments, tool results</td><td><code>blobs/&lt;key&gt;/</code></td><td>sealed with the session key, secrets replaced by fingerprints</td></tr><tr><td>Prompt and response text through telemetry</td><td>blobs</td><td>only with <code>install --prompts</code></td></tr><tr><td>Full model request and response bodies</td><td>blobs</td><td>only with <code>install --raw</code>; Claude Code writes them in clear text to <code>api-bodies/</code> until the recorder scrubs and moves them (about 3 minutes at most)</td></tr><tr><td>Secrets</td><td>never stored</td><td>replaced by <code>[secret:&lt;fingerprint&gt;]</code>; the fingerprint is a truncated HMAC with a per-install salt</td></tr></table></div>
+<p>Session keys are wrapped by a master key. <code>blackbox purge</code> or <code>retainDays</code> destroys a session key: that session's payloads and summaries become unreadable everywhere, backups included. The chain keeps every hash and still verifies.</p>
+<p>Still in clear text after a purge: record metadata, the working directory of session starts, rule names and the reasons of decisions (secrets masked). These are what lets <code>verify</code> and the timeline keep working.</p>
+<h2 id="retention">Retention</h2>
+<p>Nothing is deleted unless you ask. <code>blackbox purge --days N</code> erases on demand; <code>"retainDays": N</code> in <code>~/.blackbox/config.json</code> does it automatically (at start, then hourly). Off by default.</p>
+<h2 id="what-the-defaults-do-not-protect-against">What the defaults do not protect against</h2>
+<ul class="plain"><li>A process running as your user can read the master key and the signing key. <code>blackbox harden</code> runs the recorder as a dedicated user and closes this; <code>blackbox install</code> tells you which case you are in.</li><li>Fingerprints of low-entropy secrets (a short password) can be brute-forced by someone who has the per-install salt, which sits in <code>state.json</code> next to the keys. Long random secrets (API keys, tokens) are not at risk.</li><li>Hosts in <code>allowHosts</code> (github.com, npm, PyPI, crates.io, Anthropic) do not count as outbound for the lethal-trifecta rule. Publishing commands still do.</li><li>By default the recorder fails open: if it is down, tools still run. <code>blackbox install --fail-closed</code> denies instead.</li></ul>
+<h2 id="team-mode">Team mode</h2>
+<p>Not built. The privacy rules it must meet before any code are in <a href="https://github.com/developerfred/agent-blackbox/blob/main/ROADMAP.md">ROADMAP.md</a>.</p>
+<p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/PRIVACY.md">Edit this page on GitHub</a></p>
+</main></div>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
+</body>
+</html>

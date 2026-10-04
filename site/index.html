@@ -3,17 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agent-blackbox: flight recorder and firewall for AI coding agents</title>
-<meta name="description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<title>agent-blackbox: audit log and prompt-injection firewall for Claude Code, Codex, Cursor and Gemini CLI</title>
+<meta name="description" content="Record everything your AI coding agent does in a tamper-evident, signed audit log, and block secret exfiltration and prompt injection before the tool call runs. Local-first, open source, zero dependencies, no telemetry.">
 <link rel="canonical" href="https://developerfred.github.io/agent-blackbox/">
 <link rel="alternate" hreflang="en" href="https://developerfred.github.io/agent-blackbox/">
 <link rel="alternate" hreflang="pt-BR" href="https://developerfred.github.io/agent-blackbox/pt.html">
 <link rel="alternate" hreflang="x-default" href="https://developerfred.github.io/agent-blackbox/">
+<meta name="keywords" content="Claude Code security, Codex CLI audit log, Cursor hooks, Gemini CLI, prompt injection, MCP security, AI agent audit log, secret exfiltration, lethal trifecta, OpenTelemetry GenAI, tamper-evident log">
 <meta name="theme-color" content="#0f1113">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="agent-blackbox">
-<meta property="og:title" content="agent-blackbox: flight recorder and firewall for AI coding agents">
-<meta property="og:description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<meta property="og:title" content="agent-blackbox: audit log and prompt-injection firewall for Claude Code, Codex, Cursor and Gemini CLI">
+<meta property="og:description" content="Record everything your AI coding agent does in a tamper-evident, signed audit log, and block secret exfiltration and prompt injection before the tool call runs. Local-first, open source, zero dependencies, no telemetry.">
 <meta property="og:url" content="https://developerfred.github.io/agent-blackbox/">
 <meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
 <meta property="og:image:width" content="1200">
@@ -22,17 +23,17 @@
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="pt_BR">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="agent-blackbox: flight recorder and firewall for AI coding agents">
-<meta name="twitter:description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<meta name="twitter:title" content="agent-blackbox: audit log and prompt-injection firewall for Claude Code, Codex, Cursor and Gemini CLI">
+<meta name="twitter:description" content="Record everything your AI coding agent does in a tamper-evident, signed audit log, and block secret exfiltration and prompt injection before the tool call runs. Local-first, open source, zero dependencies, no telemetry.">
 <meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
 <link rel="alternate" type="text/plain" href="https://developerfred.github.io/agent-blackbox/llms.txt" title="llms.txt">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "agent-blackbox", "applicationCategory": "SecurityApplication", "operatingSystem": "macOS, Linux", "description": "A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.", "url": "https://developerfred.github.io/agent-blackbox/", "downloadUrl": "https://www.npmjs.com/package/agent-blackbox", "codeRepository": "https://github.com/developerfred/agent-blackbox", "license": "https://www.apache.org/licenses/LICENSE-2.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "isAccessibleForFree": true, "author": {"@type": "Person", "name": "Frederick Silva", "url": "https://github.com/developerfred"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "agent-blackbox", "applicationCategory": "SecurityApplication", "operatingSystem": "macOS, Linux", "description": "Record everything your AI coding agent does in a tamper-evident, signed audit log, and block secret exfiltration and prompt injection before the tool call runs. Local-first, open source, zero dependencies, no telemetry.", "url": "https://developerfred.github.io/agent-blackbox/", "downloadUrl": "https://www.npmjs.com/package/agent-blackbox", "codeRepository": "https://github.com/developerfred/agent-blackbox", "license": "https://www.apache.org/licenses/LICENSE-2.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "isAccessibleForFree": true, "author": {"@type": "Person", "name": "Frederick Silva", "url": "https://github.com/developerfred"}, "keywords": "Claude Code security, Codex CLI audit log, Cursor hooks, Gemini CLI, prompt injection, MCP security, AI agent audit log, secret exfiltration, lethal trifecta, OpenTelemetry GenAI, tamper-evident log", "softwareRequirements": "Node.js 18 or later", "featureList": ["Hash-chained, Ed25519-signed audit log of every prompt, tool call and result", "Deterministic policy against the lethal trifecta, secret exfiltration and opaque code", "Adapters for Claude Code, Codex CLI, Cursor and Gemini CLI", "Open ledger format with Merkle anchoring and a standalone verifier", "OpenTelemetry GenAI export, metadata only", "Read-only agent API and llms.txt"], "sameAs": ["https://github.com/developerfred/agent-blackbox", "https://www.npmjs.com/package/agent-blackbox"]}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top"><div class="wrap"><nav>
 <strong>agent-blackbox</strong>
-<a href="#demo">Demo</a><a href="#scan">Scan</a><a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a>
+<a href="#demo">Demo</a><a href="#scan">Scan</a><a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a><a href="docs/agent-guide.html">Docs</a>
 <a href="pt.html">Português</a>
 <a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
 </nav></div></header>
@@ -72,6 +73,15 @@
 <figure class="clip"><video controls preload="none" playsinline muted poster="media/attack-denied.png"><source src="media/attack-denied.webm" type="video/webm"></video><figcaption>A planted instruction tries to send a secret out. The call is denied before it runs. Recorded from a real <code>blackbox demo</code> run.</figcaption></figure>
 <figure class="clip"><video controls preload="none" playsinline muted poster="media/tamper-detected.png"><source src="media/tamper-detected.webm" type="video/webm"></video><figcaption>Editing one record breaks the chain, and <code>blackbox verify</code> names it. Same run, <code>--tamper</code>.</figcaption></figure>
 </div>
+</div>
+</section>
+
+<section class="block" id="agents">
+<div class="label">Works with</div>
+<div class="content">
+<h2>Claude Code, Codex CLI, Cursor and Gemini CLI</h2>
+<p>One ledger and one policy for every coding agent on your machine. Claude Code is covered end to end, including native OpenTelemetry. Codex CLI and Cursor are supported through hooks; Gemini CLI is in review. Each adapter lists what it cannot gate yet in <a href="docs/agents-supported.html">supported agents</a>.</p>
+<p>It also audits the rest of the attack surface: <code>blackbox mcp</code> checks MCP servers and their configuration for prompt-injection and supply-chain risks, and <code>blackbox skills</code> audits installed skills. The log is an open format (<a href="docs/ledger-spec.html">spec</a>) you can verify with a standalone script and export to any OpenTelemetry backend (<a href="docs/opentelemetry-export.html">GenAI export</a>).</p>
 </div>
 </section>
 
