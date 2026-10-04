@@ -9,6 +9,7 @@ export interface Config {
   encrypt: boolean;
   opaqueCode: 'ask' | 'alert';
   web3: 'ask' | 'alert' | 'off';
+  memoryWrites: 'ask' | 'alert' | 'off';
   failMode: 'open' | 'closed';
   /** erase sessions older than this many days (crypto-erase); null or 0 keeps everything */
   retainDays?: number | null;

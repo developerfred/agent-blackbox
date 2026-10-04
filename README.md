@@ -85,6 +85,7 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | `lethal-trifecta` (code) | Same, but the call runs code the policy cannot inspect: a script the agent wrote or downloaded, inline or heredoc code, `\| sh`, `eval`, a planted git hook, a test runner after risky edits | ask (`opaqueCode`) |
 | `secret-to-code` | A secret read earlier is passed to such code | ask |
 | `web3-transaction` | The agent signs or broadcasts a transaction (`cast send`, `forge script --broadcast`, `solana transfer`, `eth_sendRawTransaction`, a wallet MCP tool) or passes key material on a command line | ask (`web3`: `ask`, `alert`, `off`) |
+| `memory-write` | A session that read untrusted content writes to a file later sessions trust as instructions: `AGENTS.md`, `CLAUDE.md`, `.claude/commands|agents|rules|skills`, Cursor, Windsurf, Cline, Copilot and Continue rules (also through `>>`, `tee`, `sed -i`) | ask (`memoryWrites`: `ask`, `alert`, `off`) |
 | `post-denial` | Something was already denied in this session, and a call goes out | ask |
 | `self-protection` | The agent touches `~/.blackbox` (quotes, backslashes and globs undone first) | deny |
 | `hook-tamper` | The agent edits Claude Code settings or plugin files; the daemon also checks the hooks every minute | ask / alert |
