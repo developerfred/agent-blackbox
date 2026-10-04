@@ -32,3 +32,14 @@ test('cli: --mode is validated for eval and install', () => {
   assert.equal(ok.status, 0, ok.stderr);
   assert.ok(JSON.parse(ok.stdout).attacks > 0);
 });
+
+test('cli status: with the recorder as its own user it shows where the evidence really is', () => {
+  const { spawnSync } = require('child_process');
+  const home = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'bb-status-'));
+  require('fs').writeFileSync(require('path').join(home, 'config.json'), JSON.stringify({ remoteDaemon: true, recorderHome: '/Library/Application Support/agent-blackbox', recorderUser: '_blackbox' }));
+  const bin = require('path').join(__dirname, '..', 'bin', 'blackbox.js');
+  const r = spawnSync(process.execPath, [bin, 'status'], { encoding: 'utf8', env: { ...process.env, BLACKBOX_HOME: home, BLACKBOX_PORT: '39999' } });
+  assert.match(r.stdout, /not running/);
+  assert.match(r.stdout, /data: \/Library\/Application Support\/agent-blackbox/);
+  assert.ok(!r.stdout.includes(home), 'the human folder is not presented as the data folder');
+});
