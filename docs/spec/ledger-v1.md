@@ -231,7 +231,7 @@ is listed here. Fields marked `?` are optional.
 | kind       | written for | fields (besides the common ones) |
 |------------|-------------|----------------------------------|
 | `genesis`  | start of a chain | `key_id`, `public_key` |
-| `hook`     | one agent lifecycle event | `event`, `session_id`, `prompt_id?`, `agent_id?`, `tool_name?`, `tool_use_id?`, `cwd?`, `summary?`, `payload`, `payload_size`, `key?`, `spooled?`, `received_at?` |
+| `hook`     | one agent lifecycle event | `event`, `session_id`, `prompt_id?`, `agent?`, `agent_id?`, `tool_name?`, `tool_use_id?`, `cwd?`, `summary?`, `payload`, `payload_size`, `key?`, `spooled?`, `received_at?` |
 | `decision` | a policy verdict | `decision` (`allow`, `ask`, `deny`, `warn`, `alert`, `note`, `missed`), `rule`, `reason`, `session_id?`, `prompt_id?`, `tool_use_id?`, `tool_name?`, `secret?` |
 | `intent`   | hosts named in a user prompt | `session_id`, `prompt_id?`, `hosts` |
 | `taint`    | a session became tainted | `session_id`, `tool_use_id?`, `tool_name?`, `flag`, `why` |
@@ -240,6 +240,14 @@ is listed here. Fields marked `?` are optional.
 | `api_body` | one raw model request/response pair | `session_id?`, `request_id?`, `message_uuid?`, `model?`, `query_source?`, `request_blob?`, `request_size?`, `response_blob?`, `response_size?`, `key?`, `summary?`, `orphan?`, `file?` |
 | `anchor`   | a Merkle root over a batch of earlier records | `alg` (`merkle-sha256-rfc6962`), `from`, `to` (`to` < this record's `seq`), `count` (`to - from + 1`), `root` (hex); see [ANCHORING.md](../ANCHORING.md) |
 | `purge`    | crypto-erasure | `erased_keys` (key ids), `erased_blobs`, `erased_raw_bodies`, `purged_session?`, `before?` |
+
+`agent` names the coding agent that sent the event: `codex`, `cursor` or
+`gemini`. It is absent for Claude Code, so records written before adapters
+existed stay valid and mean the same thing. It is not `agent_id`, which
+identifies a subagent inside one agent's session. Only `hook` records carry
+it; the `decision`, `intent` and `taint` records of the same session are tied
+to it through `session_id`. New adapters add their identifier here (lowercase,
+`[a-z0-9-]`); see [AGENTS.md](../AGENTS.md).
 
 Rules for evolving the registry:
 
@@ -361,6 +369,4 @@ Tracked here because they decide the next versions; none changes v1.
 - Mapping to OpenTelemetry GenAI conventions: the export is defined in
   [OTEL.md](../OTEL.md) and adds no field to the ledger. Model-call spans
   (model, tokens) are not mapped yet.
-- A field that names the agent that produced an event (Claude Code, Codex,
-  Cursor, Gemini CLI), for the adapters.
 - Hash and signature agility (algorithm identifiers).
