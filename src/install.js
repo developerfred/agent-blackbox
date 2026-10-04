@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('./paths');
-const { claudeDir } = require('./util');
+const { claudeDir, stablePath } = require('./util');
 
 const HOOK_EVENTS = [
   'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
@@ -13,17 +13,6 @@ const HOOK_EVENTS = [
 ];
 
 const settingsPath = () => path.join(claudeDir(), 'settings.json');
-// Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
-// disappear on upgrade; its stable symlinks live in …/opt/<name>/. Hooks must
-// point at the stable path or they break on the next `brew upgrade`.
-/** @param {string} p */
-function stablePath(p) {
-  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.*)$/.exec(p);
-  if (!m) return p;
-  const opt = path.join(m[1], 'opt', m[2], m[3]);
-  return fs.existsSync(opt) ? opt : p;
-}
-
 const hookScript = stablePath(path.resolve(__dirname, '..', 'bin', 'hook.js'));
 const nodePath = () => stablePath(process.execPath);
 /** @param {any} h */

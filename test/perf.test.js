@@ -16,7 +16,7 @@ const { Policy } = require('../src/policy');
 const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../src/paths');
 const { Daemon } = require('../src/daemon');
 const { request } = require('../src/local-http');
-const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists } = require('../src/util');
+const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists, stablePath } = require('../src/util');
 
 test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   const f = path.join(HOME, 'x.jsonl');
@@ -150,4 +150,16 @@ test('cli token: a leftover admin-token is not sent when the recorder runs as it
   } finally {
     if (original == null) fs.rmSync(P.config, { force: true }); else fs.writeFileSync(P.config, original);
   }
+});
+
+test('util: stablePath maps a Homebrew Cellar path to its opt symlink, only when that exists', () => {
+  const prefix = path.join(HOME, 'brew');
+  const cellar = path.join(prefix, 'Cellar', 'node', '26.7.0', 'bin', 'node');
+  fs.mkdirSync(path.dirname(cellar), { recursive: true });
+  fs.writeFileSync(cellar, '');
+  assert.equal(stablePath(cellar), cellar, 'no opt link yet: unchanged');
+  fs.mkdirSync(path.join(prefix, 'opt', 'node', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(prefix, 'opt', 'node', 'bin', 'node'), '');
+  assert.equal(stablePath(cellar), path.join(prefix, 'opt', 'node', 'bin', 'node'));
+  assert.equal(stablePath('/usr/local/bin/node'), '/usr/local/bin/node');
 });

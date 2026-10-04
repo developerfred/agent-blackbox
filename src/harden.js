@@ -7,7 +7,7 @@
 // reviewed line by line.
 const os = require('os');
 const path = require('path');
-const { defined } = require('./util');
+const { defined, stablePath } = require('./util');
 
 /**
  * @typedef {{ platform?: string, user?: string, data?: string, code?: string, node?: string, port?: number, human?: string, humanHome?: string, pkgRoot?: string }} HardenOptions
@@ -119,7 +119,7 @@ function hardenScript(opts = {}) {
   const o = {
     ...d,
     ...defined(opts),
-    node: opts.node || process.execPath,
+    node: opts.node || stablePath(process.execPath),
     port: opts.port || 7071,
     human: opts.human || os.userInfo().username,
     humanHome: opts.humanHome || path.join(os.homedir(), '.blackbox'),
