@@ -29,6 +29,7 @@
     "src/agent-api.js",
     "src/mcp-server.js",
     "bench/run.js",
+    "bin/blackbox.js",
     "src/daemon.js"
   ]
 }
