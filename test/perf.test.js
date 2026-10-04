@@ -163,3 +163,63 @@ test('util: stablePath maps a Homebrew Cellar path to its opt symlink, only when
   assert.equal(stablePath(cellar), path.join(prefix, 'opt', 'node', 'bin', 'node'));
   assert.equal(stablePath('/usr/local/bin/node'), '/usr/local/bin/node');
 });
+
+test('hook integrity: the hook reports its own installation at session start; a recorder that cannot see settings records it', async () => {
+  // 1. the real hook script posts a report with the event
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hb-'));
+  const claude = path.join(dir, 'claude');
+  fs.mkdirSync(claude);
+  fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  fs.mkdirSync(path.join(dir, 'bb'));
+  fs.writeFileSync(path.join(dir, 'bb', 'config.json'), JSON.stringify({ installed: { hooks: true, env: {} } }));
+  const received = [];
+  const server = http.createServer((req, res) => {
+    const c = []; req.on('data', (x) => c.push(x));
+    req.on('end', () => { received.push(JSON.parse(Buffer.concat(c).toString())); res.writeHead(200); res.end('{"stdout":null}'); });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const hookPort = server.address().port;
+  const hook = path.join(__dirname, '..', 'dist', 'bin', 'hook.js');
+  // async: this process serves the fake recorder, so it must not block while the hook runs
+  const run = (event) => new Promise((resolve) => {
+    const c = require('child_process').spawn(process.execPath, [hook], { env: { ...process.env, BLACKBOX_HOME: path.join(dir, 'bb'), BLACKBOX_PORT: String(hookPort), CLAUDE_CONFIG_DIR: claude } });
+    c.on('close', (status) => resolve({ status }));
+    c.stdin.end(JSON.stringify(event));
+  });
+  try {
+    assert.equal((await run({ hook_event_name: 'SessionStart', session_id: 'hb', cwd: '/p' })).status, 0);
+    assert.ok(received[0].blackbox_integrity, 'SessionStart carries the report');
+    assert.ok(received[0].blackbox_integrity.problems.some((p) => /disableAllHooks/.test(p)));
+    assert.equal((await run({ hook_event_name: 'PreToolUse', session_id: 'hb', tool_name: 'Bash', tool_input: { command: 'ls' } })).status, 0);
+    assert.equal(received[1].blackbox_integrity, undefined, 'other events do not pay for the check');
+  } finally { server.close(); }
+
+  // 2. a recorder that runs as its own user records what the hook reported, once per change
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const d = new Daemon();
+  d.cfg.hardened = true;
+  const dserver = await d.listen(port);
+  d.start();
+  const post = (e) => request({ port, method: 'POST', path: '/hook', token: tok, body: { session_id: 'hb2', cwd: '/p', hook_event_name: 'SessionStart', ...e } });
+  const before = readJsonl(P.ledger).length;
+  try {
+    const bad = { via: 'settings', fingerprint: 'fp-bad', problems: ['hooks removed from settings.json for: PreToolUse'] };
+    await post({ blackbox_integrity: bad });
+    await post({ blackbox_integrity: bad });
+    let recs = readJsonl(P.ledger).slice(before);
+    assert.equal(recs.filter((r) => r.kind === 'settings').length, 1, 'an unchanged report is not recorded twice');
+    const alert = recs.find((r) => r.kind === 'decision' && r.rule === 'hook-tamper');
+    assert.ok(alert && /PreToolUse/.test(alert.reason));
+    // fixed: a new fingerprint without problems is a change too
+    await post({ blackbox_integrity: { via: 'settings', fingerprint: 'fp-ok', problems: [] } });
+    recs = readJsonl(P.ledger).slice(before);
+    assert.equal(recs.filter((r) => r.kind === 'settings').length, 2);
+    // junk is bounded, never trusted, never fatal
+    await post({ blackbox_integrity: { problems: 'x'.repeat(10), via: { a: 1 } } });
+    await post({ blackbox_integrity: { via: 's', fingerprint: 'fp-long', problems: Array.from({ length: 50 }, () => 'p'.repeat(1000)) } });
+    const last = readJsonl(P.ledger).filter((r) => r.kind === 'settings').pop();
+    assert.ok(last.problems.length <= 10 && last.problems.every((p) => p.length <= 300));
+  } finally { dserver.closeAllConnections(); dserver.close(); }
+});
