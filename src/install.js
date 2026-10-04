@@ -31,6 +31,7 @@ const isOurs = (h) => h && typeof h.command === 'string' && h.command.includes('
 
 /** @param {{ raw?: boolean }} opts @returns {Record<string, string>} */
 function desiredEnv({ raw }) {
+  /** @type {Record<string, string>} */
   const env = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
     OTEL_LOGS_EXPORTER: 'otlp',
@@ -70,8 +71,8 @@ function stripOurHooks(settings) {
   const hooks = settings.hooks || {};
   for (const ev of Object.keys(hooks)) {
     hooks[ev] = (hooks[ev] || [])
-      .map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurs(h)) }))
-      .filter((g) => g.hooks.length);
+      .map((/** @type {{ hooks?: any[] }} */ g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurs(h)) }))
+      .filter((/** @type {{ hooks: any[] }} */ g) => g.hooks.length);
     if (!hooks[ev].length) delete hooks[ev];
   }
   if (!Object.keys(hooks).length) delete settings.hooks; else settings.hooks = hooks;
