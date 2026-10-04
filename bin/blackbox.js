@@ -236,6 +236,12 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               check hashes, chain links, signatures, and decrypt-and-check payloads
   blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
+  blackbox anchor --batch     also commit to all records since the last anchor with one Merkle root
+  blackbox anchor --prove <seq> | --verify-proof <file>
+                              inclusion proof for one record; check one offline against a published root
+  blackbox export [--session ID] [--out dir] [--endpoint URL]
+                              OpenTelemetry GenAI traces and logs (OTLP/JSON, metadata only) from the ledger;
+                              writes files by default, sends only to the --endpoint you name
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
   blackbox mcp [--days N] [--all] [--json] [--pin] [--fail-on high|medium]
@@ -245,6 +251,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox harden [--out file] [--user NAME] [--node PATH] [--undo | --check]
                               print a reviewable root script that runs the recorder as its own OS user
                               (agent can write evidence but not read or erase it); --check tells if it does
+  blackbox docs [--clear PATH | --clear-all]
+                              instruction/memory files a tainted session wrote (they mark later sessions); clear a reviewed one
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N | --session ID]
@@ -355,6 +363,37 @@ async function main() {
       return;
     }
     case 'anchor': {
+      const { merkleRoot, merkleProof, verifyProof } = require('../src/merkle');
+      if (flag('--batch')) {
+        // one Merkle root over everything since the last anchor, written to the ledger
+        await start({ quiet: true });
+        const r = await call('POST', '/api/anchor/batch', {});
+        if (r.status !== 200) { console.log('nothing new to anchor'); return; }
+        const a = { anchored_at: new Date().toISOString(), ...r.body };
+        fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+        console.log(JSON.stringify(a, null, 2));
+        console.log(dim('\nPublish seq, hash and root somewhere the agent cannot edit. `blackbox anchor --prove <seq>` then proves one record is in the batch.'));
+        return;
+      }
+      if (opt('--prove')) {
+        const n = Number(opt('--prove'));
+        const recs = await readRecords();
+        const anchor = recs.find((r) => r.kind === 'anchor' && r.from <= n && n <= r.to);
+        if (!anchor) { console.error(red(`record ${n} is not covered by an anchor batch yet (run: blackbox anchor --batch)`)); process.exit(1); }
+        const hs = recs.filter((r) => r.seq >= anchor.from && r.seq <= anchor.to).map((r) => r.hash);
+        const proof = { seq: n, hash: hs[n - anchor.from], index: n - anchor.from, size: hs.length, proof: merkleProof(hs, n - anchor.from), root: anchor.root, anchor_seq: anchor.seq };
+        if (merkleRoot(hs) !== anchor.root) { console.error(red('the ledger does not match its own anchor record; run blackbox verify')); process.exit(1); }
+        console.log(JSON.stringify(proof, null, 2));
+        return;
+      }
+      if (opt('--verify-proof')) {
+        // offline: no ledger needed, only the proof and the root you published
+        const p = JSON.parse(fs.readFileSync(String(opt('--verify-proof')), 'utf8'));
+        const ok = verifyProof(p);
+        console.log(ok ? green(`record ${p.seq} is in the batch with root ${p.root}`) : red('proof does not match the root'));
+        process.exitCode = ok ? 0 : 1;
+        return;
+      }
       let a;
       if (remote()) {
         const r = await call('GET', '/api/anchor');
@@ -370,6 +409,30 @@ async function main() {
       console.log(JSON.stringify(a, null, 2));
       console.log(dim('\nPublish this somewhere the agent cannot edit (a git commit, a gist, a transparency log).'));
       console.log(dim('Later, any rewrite of history before this point will no longer match it.'));
+      return;
+    }
+    case 'export': {
+      const { toOtlpTraces, toOtlpLogs } = require('../src/otel-genai');
+      const pkgFile = [path.join(__dirname, '..', 'package.json'), path.join(__dirname, '..', '..', 'package.json')].find((f) => fs.existsSync(f));
+      const version = (pkgFile && require('../src/util').readJson(pkgFile, {}).version) || '0';
+      let recs = await readRecords();
+      const sid = opt('--session');
+      if (sid) recs = recs.filter((r) => r.session_id === sid || r.kind === 'genesis');
+      const out = { traces: toOtlpTraces(recs, { version }), logs: toOtlpLogs(recs, { version }) };
+      const endpoint = opt('--endpoint');
+      if (endpoint) {
+        if (!/^https?:\/\//.test(endpoint)) { console.error(red('--endpoint must be an http(s) URL')); process.exit(1); }
+        for (const [name, body] of Object.entries(out)) {
+          const res = await fetch(endpoint.replace(/\/$/, '') + '/v1/' + name, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+          console.log(`${name}: ${res.status} ${endpoint}`);
+          if (!res.ok) process.exitCode = 1;
+        }
+        return;
+      }
+      const dir = opt('--out') || path.join(process.cwd(), 'blackbox-otlp');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [name, body] of Object.entries(out)) fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(body, null, 2));
+      console.log(`wrote ${path.join(dir, 'traces.json')} and ${path.join(dir, 'logs.json')} (nothing was sent anywhere)`);
       return;
     }
     case 'demo': {
@@ -401,8 +464,9 @@ async function main() {
     case 'harden': {
       const h = require('../src/harden');
       if (flag('--check')) {
-        const r = h.checkHardened(await health(), { cfg: loadConfig() });
-        for (const l of r.lines) console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : dim(l));
+        const legacyKeys = ['ed25519.key', 'master.key'].filter((f) => require('fs').existsSync(path.join(P.keys, f)));
+        const r = h.checkHardened(await health(), { cfg: loadConfig(), legacyKeys, hookScripts: require('../src/install').installedHookScripts() });
+        for (const l of r.lines) console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : l.startsWith('!') ? yellow(l) : dim(l));
         process.exitCode = r.ok ? 0 : 1;
         return;
       }
@@ -413,6 +477,22 @@ async function main() {
         fs.writeFileSync(out, text, { mode: 0o700 });
         console.error(`written to ${out}. Read it, then run: sudo sh ${out}`);
       } else process.stdout.write(text);
+      return;
+    }
+    case 'docs': {
+      // instruction/memory documents a tainted session wrote: list them, or clear a mark you have reviewed
+      const target = opt('--clear');
+      if (target || flag('--clear-all')) {
+        const r = await call('POST', '/docs/clear', flag('--clear-all') ? { all: true } : { path: path.resolve(target || '') });
+        if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
+        console.log(r.body.cleared.length ? r.body.cleared.map((k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
+        return;
+      }
+      const r = await call('GET', '/api/docs');
+      if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
+      if (!r.body.length) { console.log(dim('no marked documents')); return; }
+      for (const d of r.body) console.log(`${yellow(d.path)}\n  ${dim(`written ${d.at} by session ${String(d.session).slice(0, 12)} · ${d.why}`)}`);
+      console.log(dim('\nA session that reads or loads these starts as untrusted. After you review one: blackbox docs --clear PATH (or declare it in trustedDocs).'));
       return;
     }
     case 'managed-settings': {

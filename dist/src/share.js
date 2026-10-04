@@ -14,8 +14,9 @@ const path = require('path');
 const http = require('http');
 const { spawn, spawnSync } = require('child_process');
 const { CATEGORIES } = require('./scan');
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const { escHtml: esc, num: n } = require('./util');
 // The public subset of a scan summary.
+/** @param {import('./types').ScanSummary} S */
 function publicNumbers(S) {
     const skills = S.skills || [];
     return {
@@ -31,6 +32,7 @@ const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#14a114
 const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 // One page that can draw any moment of the story: render(t) for t in seconds.
 // Drawn as SVG so every frame is exact and the layout never depends on fonts loading late.
+/** @param {import('./types').ScanSummary} S */
 function storyHtml(S) {
     const data = JSON.stringify(publicNumbers(S));
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
@@ -94,9 +96,9 @@ else render(DUR);
 </script></body></html>`;
 }
 // Static 1200x675 card for X.
+/** @param {import('./types').ScanSummary} S */
 function xCardHtml(S) {
     const D = publicNumbers(S);
-    const n = (x) => Number(x || 0).toLocaleString('en-US');
     const max = Math.max(1, ...D.categories.map((c) => c.value));
     const total = Math.max(1, D.toolCalls);
     const bars = D.categories.map((c, i) => {
@@ -105,6 +107,7 @@ function xCardHtml(S) {
       <path d="M260 ${y + 6}h${w - 6}a6 6 0 0 1 6 6v12a6 6 0 0 1 -6 6h-${w - 6}z" fill="${PALETTE[c.slot]}"/>
       <text x="${260 + w + 12}" y="${y + 24}" font-size="19" fill="#9da7b3" font-weight="600">${Math.round((100 * c.value) / total)}%</text>`;
     }).join('');
+    /** @param {number} x @param {number} y @param {unknown} v @param {string} l @param {string} col */
     const stat = (x, y, v, l, col) => `<rect x="${x}" y="${y}" width="250" height="150" rx="16" fill="#141922" stroke="#232a35"/>
     <text x="${x + 24}" y="${y + 76}" font-size="54" font-weight="800" fill="${col}">${esc(n(v))}</text>
     <text x="${x + 24}" y="${y + 116}" font-size="18" fill="#9da7b3">${esc(l)}</text>`;
@@ -119,10 +122,12 @@ ${stat(640, 370, D.trifectaSessions, plural(D.trifectaSessions, 'lethal-trifecta
 <text x="70" y="630" font-size="22" fill="#7d8590">npx agent-blackbox scan · scanned locally, nothing uploaded</text>
 </svg></body></html>`;
 }
+/** @param {unknown} x @param {string} one @param {string} many */
 const plural = (x, one, many) => (Number(x) === 1 ? one : many);
+/** @param {import('./types').ScanSummary} S */
 function caption(S) {
     const D = publicNumbers(S);
-    const n = (x) => Number(x || 0).toLocaleString('en-US');
+    /** @param {unknown} x @param {string} one @param {string} many */
     const p = (x, one, many) => `${n(x)} ${plural(x, one, many)}`;
     const lines = [
         `I audited what my AI coding agent did in the last ${D.days} days: ${p(D.toolCalls, 'tool call', 'tool calls')} across ${p(D.sessions, 'session', 'sessions')}.`,
@@ -148,6 +153,11 @@ function findChrome() {
 const rootFlags = () => (typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : []);
 const hasFfmpeg = () => spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 // Minimal Chrome DevTools Protocol client over the global WebSocket (Node 22+).
+/**
+ * @typedef {(method: string, params?: object) => Promise<any>} Send a DevTools protocol call
+ * @typedef {{ send: Send, events: any[] }} Cdp
+ */
+/** @template T @param {string} chrome @param {(cdp: Cdp) => Promise<T>} fn @returns {Promise<T>} */
 async function withChrome(chrome, fn) {
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
     const proc = spawn(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
@@ -167,6 +177,7 @@ async function withChrome(chrome, fn) {
             throw new Error('Chrome did not start');
         const targets = await new Promise((resolve, reject) => {
             http.get({ host: '127.0.0.1', port, path: '/json/list' }, (res) => {
+                /** @type {Buffer[]} */
                 const c = [];
                 res.on('data', (d) => c.push(d));
                 res.on('end', () => { try {
@@ -177,11 +188,12 @@ async function withChrome(chrome, fn) {
                 } });
             }).on('error', reject);
         });
-        const page = targets.find((t) => t.type === 'page');
+        const page = targets.find((/** @type {{ type: string }} */ t) => t.type === 'page');
         const ws = new WebSocket(page.webSocketDebuggerUrl);
         await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
         let id = 0;
         const waiting = new Map();
+        /** @type {any[]} */
         const events = [];
         ws.onmessage = (m) => {
             const msg = JSON.parse(m.data);
@@ -193,6 +205,7 @@ async function withChrome(chrome, fn) {
             else if (msg.method)
                 events.push(msg.method);
         };
+        /** @type {Send} */
         const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; waiting.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
         await send('Page.enable');
         const result = await fn({ send, events });
@@ -207,6 +220,7 @@ async function withChrome(chrome, fn) {
         catch { /* best effort */ }
     }
 }
+/** @param {Send} send @param {any[]} events @param {string} file @param {number} w @param {number} h */
 async function openPage(send, events, file, w, h) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     events.length = 0;
@@ -218,8 +232,10 @@ async function openPage(send, events, file, w, h) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     await send('Runtime.evaluate', { expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))', awaitPromise: true });
 }
+/** @param {Send} send @param {number} w @param {number} h */
 const shot = async (send, w, h) => Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: w, height: h, scale: 1 } })).data, 'base64');
 // Fallback without WebSocket: one headless screenshot per call.
+/** @param {string} chrome @param {string} file @param {number} w @param {number} h @param {string} out */
 function screenshotOnce(chrome, file, w, h, out) {
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
     const r = spawnSync(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, `--window-size=${w},${h}`,

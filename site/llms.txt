@@ -1,0 +1,23 @@
+# agent-blackbox
+
+> A tamper-evident flight recorder and prompt-injection firewall for AI coding agents (Claude Code first; Codex, Cursor and Gemini CLI next). Everything runs locally: no account, no cloud, no telemetry. Node 18+, no runtime dependencies, Apache-2.0.
+
+If a tool call of yours is blocked by the policy, stop, do not retry or work around it, and tell the person what you were trying to do. Do not touch `~/.blackbox`.
+
+## For agents
+
+- [Agent guide](https://developerfred.github.io/agent-blackbox/agent-guide.md): what to do when blocked, safe read-only commands, how to install it for a person
+- [Full documentation in one file](https://developerfred.github.io/agent-blackbox/llms-full.txt): README, agent guide and privacy notes
+
+## Docs
+
+- [README](https://github.com/developerfred/agent-blackbox/blob/main/README.md): install, policy rules, evidence format, limitations
+- [Privacy](https://github.com/developerfred/agent-blackbox/blob/main/docs/PRIVACY.md): what is recorded, where, for how long
+- [Ledger format v1](https://github.com/developerfred/agent-blackbox/blob/main/docs/spec/ledger-v1.md): the open ledger and event format
+- [OpenTelemetry export](https://github.com/developerfred/agent-blackbox/blob/main/docs/OTEL.md): `blackbox export`
+- [Security policy](https://github.com/developerfred/agent-blackbox/blob/main/SECURITY.md): reporting a vulnerability or a policy bypass
+
+## Optional
+
+- [Roadmap](https://github.com/developerfred/agent-blackbox/blob/main/ROADMAP.md)
+- [Project site](https://developerfred.github.io/agent-blackbox/)
