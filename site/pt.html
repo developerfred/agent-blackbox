@@ -43,7 +43,7 @@
 <p class="eyebrow">Caixa-preta para agentes de código</p>
 <h1>Veja o que seu agente de IA fez. Barre antes de vazar.</h1>
 <p class="lead">Cada prompt, chamada de ferramenta e resultado vai para um registro encadeado por hash e assinado com Ed25519, escrito por um processo separado. Um motor de política barra a <em>trifeta letal</em> (dado privado, conteúdo não confiável e chamada externa) antes de a chamada rodar.</p>
-<p class="lead">Claude Code primeiro. Codex, Cursor e Gemini CLI depois.</p>
+<p class="lead">Claude Code primeiro. Codex CLI, Cursor e Gemini CLI têm adaptadores experimentais.</p>
 <ul class="facts"><li>sem conta</li><li>sem nuvem</li><li>sem telemetria</li><li>zero dependências</li><li>Node 18+</li><li>Apache-2.0</li></ul>
 <div class="cta"><a class="btn primary" href="#install">Instalar</a><a class="btn" href="https://github.com/developerfred/agent-blackbox">Ver código</a></div>
 </div>
@@ -77,7 +77,7 @@
 <div class="label">Compatível</div>
 <div class="content">
 <h2>Claude Code, Codex CLI, Cursor e Gemini CLI</h2>
-<p>Um ledger e uma política para todos os agentes de código da sua máquina. O Claude Code é coberto de ponta a ponta, com OpenTelemetry nativo. Codex CLI e Cursor entram por hooks; o Gemini CLI está em revisão. O <code>blackbox mcp</code> audita servidores MCP e o <code>blackbox skills</code> audita skills instaladas, contra prompt injection e risco de cadeia de suprimentos.</p>
+<p>Um ledger e uma política para todos os agentes de código da sua máquina. O Claude Code é coberto de ponta a ponta, com OpenTelemetry nativo. Codex CLI, Cursor e Gemini CLI entram por hooks como adaptadores experimentais: foram feitos a partir da documentação pública e testados com payloads simulados, ainda não validados nos agentes reais. O <code>blackbox mcp</code> audita servidores MCP e o <code>blackbox skills</code> audita skills instaladas, contra prompt injection e risco de cadeia de suprimentos.</p>
 </div>
 </section>
 

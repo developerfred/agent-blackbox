@@ -45,7 +45,7 @@
 <p class="eyebrow">Flight recorder for coding agents</p>
 <h1>See what your AI agent did. Stop it before it leaks.</h1>
 <p class="lead">Every prompt, tool call and result goes into a hash-chained, Ed25519-signed ledger written by a separate process. A small policy engine stops the <em>lethal trifecta</em> (private data, untrusted content and an outbound call) before the call runs.</p>
-<p class="lead">Claude Code first. Codex, Cursor and Gemini CLI next.</p>
+<p class="lead">Claude Code first. Codex CLI, Cursor and Gemini CLI have experimental adapters.</p>
 <ul class="facts"><li>no account</li><li>no cloud</li><li>no telemetry</li><li>zero dependencies</li><li>Node 18+</li><li>Apache-2.0</li></ul>
 <div class="cta"><a class="btn primary" href="#install">Install</a><a class="btn" href="https://github.com/developerfred/agent-blackbox">View source</a></div>
 </div>
@@ -80,7 +80,7 @@
 <div class="label">Works with</div>
 <div class="content">
 <h2>Claude Code, Codex CLI, Cursor and Gemini CLI</h2>
-<p>One ledger and one policy for every coding agent on your machine. Claude Code is covered end to end, including native OpenTelemetry. Codex CLI and Cursor are supported through hooks; Gemini CLI is in review. Each adapter lists what it cannot gate yet in <a href="docs/agents-supported.html">supported agents</a>.</p>
+<p>One ledger and one policy for every coding agent on your machine. Claude Code is covered end to end, including native OpenTelemetry. Codex CLI, Cursor and Gemini CLI are supported through hooks as experimental adapters: they are built from public documentation and tested with simulated agent payloads, not yet validated on the real agents. Each adapter lists what it cannot gate yet in <a href="docs/agents-supported.html">supported agents</a>.</p>
 <p>It also audits the rest of the attack surface: <code>blackbox mcp</code> checks MCP servers and their configuration for prompt-injection and supply-chain risks, and <code>blackbox skills</code> audits installed skills. The log is an open format (<a href="docs/ledger-spec.html">spec</a>) you can verify with a standalone script and export to any OpenTelemetry backend (<a href="docs/opentelemetry-export.html">GenAI export</a>).</p>
 </div>
 </section>
