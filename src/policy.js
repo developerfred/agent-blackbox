@@ -332,7 +332,7 @@ function inputText(toolInput) {
 }
 
 // Where each supported agent keeps the hooks that record it.
-const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml))/;
+const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml)|\.cursor\/hooks\.json)/;
 
 class Policy {
   /**
