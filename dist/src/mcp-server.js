@@ -28,7 +28,7 @@ function listTools({ admin = false } = {}) {
         name: t.name,
         description: t.description,
         inputSchema: { type: 'object', properties: t.props || {}, additionalProperties: false },
-        outputSchema: SCHEMAS[t.schema],
+        outputSchema: /** @type {Record<string, unknown>} */ (SCHEMAS)[t.schema],
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }));
 }
@@ -38,7 +38,9 @@ function listTools({ admin = false } = {}) {
  */
 function createHandler({ admin = false, fetch }) {
     const tools = new Map(TOOLS.filter((t) => admin || !t.admin).map((t) => [t.name, t]));
+    /** @param {unknown} id @param {unknown} result */
     const ok = (id, result) => ({ jsonrpc: '2.0', id, result });
+    /** @param {unknown} id @param {number} code @param {string} message */
     const err = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
     return async (msg) => {
         if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string')
@@ -79,6 +81,7 @@ function createHandler({ admin = false, fetch }) {
 function serve({ admin = false, port, token }) {
     const handle = createHandler({ admin, fetch: (path) => request({ port, path, token }) });
     let buf = '';
+    /** @param {unknown} m */
     const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => {
