@@ -231,14 +231,23 @@ is listed here. Fields marked `?` are optional.
 | kind       | written for | fields (besides the common ones) |
 |------------|-------------|----------------------------------|
 | `genesis`  | start of a chain | `key_id`, `public_key` |
-| `hook`     | one agent lifecycle event | `event`, `session_id`, `prompt_id?`, `agent_id?`, `tool_name?`, `tool_use_id?`, `cwd?`, `summary?`, `payload`, `payload_size`, `key?`, `spooled?`, `received_at?` |
+| `hook`     | one agent lifecycle event | `event`, `session_id`, `prompt_id?`, `agent?`, `agent_id?`, `tool_name?`, `tool_use_id?`, `cwd?`, `summary?`, `payload`, `payload_size`, `key?`, `spooled?`, `received_at?` |
 | `decision` | a policy verdict | `decision` (`allow`, `ask`, `deny`, `warn`, `alert`, `note`, `missed`), `rule`, `reason`, `session_id?`, `prompt_id?`, `tool_use_id?`, `tool_name?`, `secret?` |
 | `intent`   | hosts named in a user prompt | `session_id`, `prompt_id?`, `hosts` |
 | `taint`    | a session became tainted | `session_id`, `tool_use_id?`, `tool_name?`, `flag`, `why` |
 | `settings` | integrity of the agent's hook wiring | `via`, `fingerprint`, `problems?`, `previous?` |
 | `otel`     | one OpenTelemetry log record from the agent | `event`, `service?`, `session_id?`, `prompt_id?`, `tool_use_id?`, `request_id?`, `summary?`, `payload`, `key?` |
 | `api_body` | one raw model request/response pair | `session_id?`, `request_id?`, `message_uuid?`, `model?`, `query_source?`, `request_blob?`, `request_size?`, `response_blob?`, `response_size?`, `key?`, `summary?`, `orphan?`, `file?` |
+| `anchor`   | a Merkle root over a batch of earlier records | `alg` (`merkle-sha256-rfc6962`), `from`, `to` (`to` < this record's `seq`), `count` (`to - from + 1`), `root` (hex); see [ANCHORING.md](../ANCHORING.md) |
 | `purge`    | crypto-erasure | `erased_keys` (key ids), `erased_blobs`, `erased_raw_bodies`, `purged_session?`, `before?` |
+
+`agent` names the coding agent that sent the event: `codex`, `cursor` or
+`gemini`. It is absent for Claude Code, so records written before adapters
+existed stay valid and mean the same thing. It is not `agent_id`, which
+identifies a subagent inside one agent's session. Only `hook` records carry
+it; the `decision`, `intent` and `taint` records of the same session are tied
+to it through `session_id`. New adapters add their identifier here (lowercase,
+`[a-z0-9-]`); see [AGENTS.md](../AGENTS.md).
 
 Rules for evolving the registry:
 
@@ -338,25 +347,26 @@ numbered as drafts and then as 1.x with a changelog at the end.
 
 ## Reference implementation notes
 
-Where the code in this repository differs from this document today:
+`blackbox verify` (`src/ledger.js`) reports the same errors as this document
+for every ledger case in `docs/spec/vectors/` (checked by
+`test/spec-vectors.test.js`); it does not check anchors or the `KEY_MISSING`
+warning, which the standalone verifier (`verifier/bb-verify.js`) does.
+Its error list carries the codes of section 11 in a `code` field next to the
+human-readable `problem`.
 
-- `blackbox verify` accepts a second `genesis` record in the middle of a
-  chain as a key change when no trusted key is given. Section 6 forbids it.
-- `blackbox verify` does not check that `key_id` matches `public_key`, does
-  not reject duplicate keys in a line, and does not check `v`.
-- `canon()` in `src/ledger.js` is RFC 8785 for the values that occur in
-  records, but it also drops keys whose value is `undefined`, which cannot
-  occur in parsed JSON.
+`canon()` in `src/ledger.js` is RFC 8785 for the values that occur in
+records, but it also drops keys whose value is `undefined`, which cannot
+occur in parsed JSON.
 
 ## Open questions
 
 Tracked here because they decide the next versions; none changes v1.
 
 - Key rotation (a signed handover record) and key revocation.
-- Merkle batching and external anchoring formats (batch root, inclusion
-  proofs, anchor targets). Today an anchor is the bare head.
-- Mapping to OpenTelemetry GenAI conventions (attribute names for `hook` and
-  `otel` records).
-- A field that names the agent that produced an event (Claude Code, Codex,
-  Cursor, Gemini CLI), for the adapters.
+- External anchoring targets and their formats. Batch roots and inclusion
+  proofs are defined by the `anchor` kind ([ANCHORING.md](../ANCHORING.md));
+  publishing the head or root is still done by hand.
+- Mapping to OpenTelemetry GenAI conventions: the export is defined in
+  [OTEL.md](../OTEL.md) and adds no field to the ledger. Model-call spans
+  (model, tokens) are not mapped yet.
 - Hash and signature agility (algorithm identifiers).

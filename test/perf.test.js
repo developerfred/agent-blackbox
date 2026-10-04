@@ -292,3 +292,15 @@ test('timeline: records are read from the ledger on demand, so a purged session 
     assert.equal((await call('GET', '/api/events?session=nope', null, adm)).status, 404);
   } finally { server.closeAllConnections(); server.close(); }
 });
+
+test('util: escHtml and num, shared by the HTML report and the share kit', () => {
+  const { escHtml, num } = require('../dist/src/util');
+  assert.equal(escHtml('<a href="x">Tom & \'Jerry\'</a>'), '&lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;');
+  assert.equal(escHtml(null), '');
+  assert.equal(escHtml(undefined), '');
+  assert.equal(escHtml(0), '0');
+  assert.equal(num(1234567), '1,234,567');
+  assert.equal(num(undefined), '0');
+  assert.equal(num(null), '0');
+  assert.equal(num('42'), '42');
+});

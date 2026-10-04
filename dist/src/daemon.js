@@ -9,8 +9,11 @@ const crypto = require('crypto');
 const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
+const { merkleRoot, MERKLE_ALG } = require('./merkle');
+const anchoring = require('./anchor');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
+const agentApi = require('./agent-api');
 const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
 const ORPHAN_AFTER_MS = 3 * 60 * 1000;
@@ -94,6 +97,8 @@ class Daemon {
     /** @type {number[]} */ lineOff = [];
     /** @type {number[]} */ lineLen = [];
     /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+    verifiedAt = 0;
+    /** @type {any} */ verified = null;
     constructor() {
         this.cfg = loadConfig();
         this.token = readToken();
@@ -123,6 +128,53 @@ class Daemon {
         this.enforceRetention();
         this.retentionTimer = setInterval(() => this.enforceRetention(), 60 * 60 * 1000);
         this.retentionTimer.unref();
+        // Automatic anchoring only runs when `config.anchor` names a target.
+        if (anchoring.settings(this.cfg)) {
+            this.anchorTimer = setInterval(() => this.autoAnchor(), 60 * 1000);
+            this.anchorTimer.unref();
+        }
+    }
+    // A batch is committed when enough records or enough time have passed, then
+    // published. A failed publish is kept in state and retried on the next tick.
+    async autoAnchor() {
+        const s = anchoring.settings(this.cfg);
+        if (!s)
+            return;
+        try {
+            const pending = /** @type {any[]} */ (this.state.anchorPending || []);
+            const toPublish = [];
+            const recs = readJsonl(P.ledger);
+            let lastTo = 0;
+            for (const r of recs)
+                if (r.kind === 'anchor')
+                    lastTo = r.to;
+            const lastAt = this.state.anchorLastAt == null ? null : Number(this.state.anchorLastAt);
+            if (anchoring.due(s, { newRecords: this.ledger.seq - lastTo, lastAt, now: Date.now() })) {
+                const a = this.anchorBatch();
+                if (a) {
+                    this.state.anchorLastAt = Date.now();
+                    toPublish.push({ anchored_at: new Date().toISOString(), ...a });
+                }
+            }
+            for (const a of [...pending, ...toPublish]) {
+                try {
+                    await anchoring.publish(a, s);
+                    fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+                    pending.splice(pending.indexOf(a), 1);
+                    this.log(`anchored #${a.to} (root ${a.root.slice(0, 12)}...)`);
+                }
+                catch (e) {
+                    if (!pending.includes(a))
+                        pending.push(a);
+                    this.log('anchor publish failed, will retry:', e.message);
+                }
+            }
+            this.state.anchorPending = pending.slice(-50);
+            this.saveState();
+        }
+        catch (e) {
+            this.log('auto anchor:', e.message);
+        }
     }
     enforceRetention() {
         const days = Number(this.cfg.retainDays);
@@ -209,6 +261,12 @@ class Daemon {
     catch (e) {
         this.log('error', e.stack || String(e));
     } }
+    // What /hook answers: Claude Code's stdout (kept for older hooks) and the neutral verdict.
+    /** @param {import('./types').HookEvent} ev */
+    hookReply(ev) {
+        const r = this.safe(() => this.processHook(ev));
+        return { stdout: (r && r.stdout) || null, verdict: r ? r.verdict : null };
+    }
     /** @param {...unknown} a */
     log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
     loadState() {
@@ -350,7 +408,13 @@ class Daemon {
      * @param {import('./types').HookEvent} ev
      * @param {{ spooled?: boolean, received_at?: string }} [meta]
      */
-    handleHook(ev, meta = {}) {
+    handleHook(ev, meta = {}) { return this.processHook(ev, meta).stdout; }
+    // The same, with the verdict in the agent-neutral form adapters encode.
+    /**
+     * @param {import('./types').HookEvent} ev
+     * @param {{ spooled?: boolean, received_at?: string }} [meta]
+     */
+    processHook(ev, meta = {}) {
         const event = ev.hook_event_name || 'unknown';
         const sid = ev.session_id;
         let decision = null;
@@ -381,6 +445,7 @@ class Daemon {
             agent_id: ev.agent_id,
             tool_name: ev.tool_name,
             tool_use_id: ev.tool_use_id,
+            agent: ev.agent,
             cwd: event === 'SessionStart' ? ev.cwd : undefined,
             summary: this.sealSummary(summarize(clean), sid),
             payload: blob.sha,
@@ -390,6 +455,8 @@ class Daemon {
             received_at: meta.received_at,
         });
         let stdout = null;
+        /** @type {import('./types').Verdict} */
+        const verdict = { permission: null, reason: '', agentMessage: '', notice: null };
         if (decision) {
             this.append('decision', {
                 session_id: sid, prompt_id: ev.prompt_id, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name,
@@ -405,6 +472,7 @@ class Daemon {
                         permissionDecisionReason: `[agent-blackbox] ${redact(decision.reason)}`,
                     },
                 };
+                Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: AGENT_DENY_MESSAGE });
             }
             else if (!meta.spooled && decision.decision === 'deny') {
                 // "deny" reasons go back to the model: keep them uninformative and
@@ -413,6 +481,7 @@ class Daemon {
                     systemMessage: `[agent-blackbox] blocked ${ev.tool_name}: ${redact(decision.reason)}`,
                     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: AGENT_DENY_MESSAGE },
                 };
+                Object.assign(verdict, { permission: 'deny', reason: stdout.systemMessage, agentMessage: AGENT_DENY_MESSAGE });
             }
             if (decision.decision === 'deny')
                 this.saveState();
@@ -447,7 +516,8 @@ class Daemon {
             stdout = { ...(stdout || {}), systemMessage: `[agent-blackbox] ${this.pendingWarning}${stdout && stdout.systemMessage ? '\n' + stdout.systemMessage : ''}` };
             this.pendingWarning = null;
         }
-        return stdout;
+        verdict.notice = stdout && stdout.systemMessage ? stdout.systemMessage : null;
+        return { stdout, verdict };
     }
     // Store a raw API body with its secrets scrubbed, then delete the original.
     /** @param {string} file @param {string | null} sessionId */
@@ -532,6 +602,22 @@ class Daemon {
             before: session ? undefined : days == null ? 'all' : new Date(cutoff).toISOString(),
         });
         return { keys: keys.length, erased, bodies };
+    }
+    // Commit to every record since the last anchor with one Merkle root and
+    // write that as an `anchor` record; the caller publishes the root plus the
+    // chain head somewhere the agent cannot write.
+    anchorBatch() {
+        const recs = readJsonl(P.ledger);
+        let from = 1;
+        for (const r of recs)
+            if (r.kind === 'anchor')
+                from = r.to + 1;
+        const to = this.ledger.seq;
+        if (to < from)
+            return null;
+        const batch = recs.filter((r) => r.seq >= from && r.seq <= to);
+        const rec = this.append('anchor', { alg: MERKLE_ALG, from, to, count: batch.length, root: merkleRoot(batch.map((r) => r.hash)) });
+        return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root };
     }
     // Decrypted payload of one record, for the human reviewing the evidence.
     /** @param {number} seq */
@@ -693,6 +779,15 @@ class Daemon {
             this.append('api_body', { orphan: true, file: name, [`${which}_blob`]: b.sha, [`${which}_size`]: b.size, key: b.key, summary: `unindexed ${which} body ${b.size}B` });
         }
     }
+    /** Chain verification for /v1/agent/status, at most once every 10 seconds. */
+    verifyCached() {
+        const now = Date.now();
+        if (!this.verifiedAt || now - this.verifiedAt > 10_000) {
+            this.verified = verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault });
+            this.verifiedAt = now;
+        }
+        return this.verified;
+    }
     // ---- HTTP ----
     listen(port = P.port, host = '127.0.0.1') {
         const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
@@ -723,10 +818,15 @@ class Daemon {
             const admin = same(this.adminToken);
             if (!admin && !same(this.token))
                 return send(401, { error: 'token' });
-            const INGEST = new Set(['POST /hook', 'POST /v1/logs', 'POST /spool', 'GET /health']);
+            // the public tier of the agent API (what blackbox is, rules, a health line) is for the agent itself
+            const INGEST = new Set(['POST /hook', 'POST /v1/logs', 'POST /spool', 'GET /health',
+                ...agentApi.ENDPOINTS.filter((e) => e.scope === 'public').map((e) => `GET ${e.path}`)]);
             if (!admin && !INGEST.has(`${req.method} ${url.pathname}`))
                 return send(403, { error: 'this token can only add events' });
             if (req.method === 'GET') {
+                const a = agentApi.handle(this, url, admin);
+                if (a)
+                    return send(a.status, a.body);
                 if (url.pathname === '/health') {
                     const base = { ok: true, seq: this.ledger.seq, mode: this.cfg.mode, uid: typeof process.getuid === 'function' ? process.getuid() : null, encrypted: !!this.vault };
                     return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: P.home, integrity: this.state.integrity || null } : base);
@@ -770,7 +870,7 @@ class Daemon {
                         raw = zlib.gunzipSync(raw);
                     const body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
                     if (url.pathname === '/hook')
-                        return send(200, { stdout: this.safe(() => this.handleHook(body)) || null });
+                        return send(200, this.hookReply(body));
                     if (url.pathname === '/v1/logs') {
                         this.safe(() => this.handleOtlp(body));
                         return send(200, {});
@@ -791,6 +891,10 @@ class Daemon {
                             this.saveState();
                         }
                         return send(200, { cleared });
+                    }
+                    if (url.pathname === '/api/anchor/batch') {
+                        const a = this.anchorBatch();
+                        return send(a ? 200 : 204, a || {});
                     }
                     if (url.pathname === '/purge')
                         return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));

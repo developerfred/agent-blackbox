@@ -35,12 +35,29 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 - [ ] Launch: demo GIF, Show HN, X, Farcaster, r/ClaudeAI on the same day
 - [ ] Prompt-injection challenge repo with a canary token
+- [x] Open ledger and event format: versioned spec, test vectors and a standalone verifier ([docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), [verifier/](verifier/README.md)). `blackbox verify` enforces the same rules. Still open: ship `bb-verify` in the npm package, key rotation
 - [x] `blackbox export`: ledger as OpenTelemetry GenAI traces and logs, local by default ([docs/OTEL.md](docs/OTEL.md))
-- [ ] Adapters for Codex CLI and Cursor (one canonical event, OpenTelemetry GenAI conventions)
-- [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
-- [ ] Merkle batching and automatic anchoring of the chain head ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
+- [ ] Adapters for Codex CLI, Cursor and Gemini CLI (one canonical event, OpenTelemetry GenAI conventions): adapter interface, Codex, Cursor and Gemini CLI merged, the evasion corpus runs through each adapter (`blackbox eval --agent all`), none tried on a real agent yet; see [docs/AGENTS.md](docs/AGENTS.md) for what each adapter does not cover yet
+- [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925)). Today `blackbox mcp --pin` pins how a server is configured (command, arguments, URL), not the text of its tool descriptions
+- [x] Merkle batching of the chain: `blackbox anchor --batch`, inclusion proofs ([docs/ANCHORING.md](docs/ANCHORING.md))
+- [x] Automatic anchoring of the chain head, opt-in, to a file or webhook the user names (`blackbox anchor --auto`)
+- [x] Agent API: read-only, versioned `/v1/agent/*` endpoints with capabilities, OpenAPI, rules, status, sessions and records, so an agent can read what was recorded without scraping the CLI, plus `blackbox serve-mcp`, a local stdio MCP server over the same API ([docs/AGENT-API.md](docs/AGENT-API.md))
+- [x] Agent-readable docs: [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md), `llms.txt` and `llms-full.txt` on the site
+- [x] Project site on GitHub Pages (English and Portuguese, terminal demos, SEO and social cards, sitemap)
+- [ ] Anchoring to a public timestamp authority (RFC 3161, OpenTimestamps) ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
 - [ ] Declarative rules file (trigger, predicate, action) ([AgentSpec](https://arxiv.org/abs/2503.18666))
 - [ ] Public evaluation of the policy: attacks that get through and false alarms, measured against defense-aware attacks before any claim ([The Attacker Moves Second](https://arxiv.org/abs/2510.09023))
+
+### Next: the ledger as something other agents and tools can rely on
+
+Today the ledger proves what one session did on one machine. These steps make it checkable by third parties and usable by agents that act for people. Each is a small, separate piece.
+
+- [ ] Spec v1.1: key rotation and revocation, a formal `agent` field, an explicit algorithm field so it can change later. Package `bb-verify` in npm
+- [ ] Conformance suite from the existing test vectors, and a second verifier in another language (a format is a standard only with more than one implementation)
+- [ ] Agent identity: a key per agent or session, certified by the machine key, with a field that maps to `gen_ai.agent.id`
+- [ ] `receipt` record (draft spec first, no code): user intent, policy decision, human approval, payment or transaction hash and effect, with a Merkle inclusion proof a third party can check without seeing the payload. Check x402 and ERC-8004 against their current specifications before mapping to them
+- [ ] A trusted anchor target for automatic anchoring (a transparency log or a signed git commit) and third-party verification of its timestamp
+- [ ] Test the Codex, Cursor and Gemini adapters against the real agents (their payload shapes come from public write-ups and type definitions) before announcing support
 
 **Gate:** 500 stars and 50 active installs.
 
@@ -86,7 +103,7 @@ Privacy rules the team server must meet before any code is written. The promise 
 
 Runs alongside the phases. The rule: no runtime dependencies, and nothing gets slower without a benchmark saying so.
 
-- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). Next: turn on `noImplicitAny` (about 470 untyped parameters, mostly in skills, scan, policy and daemon)
+- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). `noImplicitAny` is on for 18 modules (`tsconfig.strict.json`); left: the daemon and the CLI entry point
 - [x] Build step for the TypeScript move: `npm run build` compiles `src/`, `bin/` and `eval/` (`.js` and `.ts`) into a committed `dist/`, which the plugin hooks, the Homebrew formula and the npm `bin` run, so nothing needs a build at install time. CI fails when `dist/` is stale (`npm run build:check`). Migrating a module is `git mv x.js x.ts`, fix its types, rebuild.
 - [ ] Move to TypeScript module by module (policy, ledger, vault first), compiled to plain JS for npm and the plugin, so users still need only Node
 - [ ] Shared types for the canonical event (hooks, Cursor, Codex, OpenTelemetry GenAI) and for the rules file

@@ -278,7 +278,8 @@ function editedInPlace(cmd) {
 // Paths a tool call writes (the ones the memory guard looks at).
 /** @param {string} tool @param {Record<string, any>} input @returns {string[]} */
 function writeTargets(tool, input) {
-  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) return [input.file_path || input.notebook_path || ''].filter(Boolean);
+  // an adapter may send one call that touches several files (file_paths)
+  if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) return [input.file_path || input.notebook_path || '', ...(Array.isArray(input.file_paths) ? input.file_paths : [])].filter(Boolean);
   if (tool === 'Bash' || tool === 'PowerShell') return [...writtenBy(input.command || ''), ...editedInPlace(input.command || '')];
   return [];
 }
@@ -329,6 +330,9 @@ function inputText(toolInput) {
   return [t.command, t.file_path, t.notebook_path, t.path, t.url, t.pattern, t.glob, t.skill]
     .filter((x) => typeof x === 'string').join('\n');
 }
+
+// Where each supported agent keeps the hooks that record it.
+const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml)|\.cursor\/hooks\.json|\.gemini\/settings\.json)/;
 
 class Policy {
   /**
@@ -604,15 +608,19 @@ class Policy {
       return { yes: false };
     }
     if (tool === 'WebFetch') {
-      let u;
-      try { u = new URL(input.url); } catch { return { yes: false }; }
-      if (allowed(u.hostname, allow)) {
-        const carries = urlCarriesData(input.url);
-        return carries ? { yes: true, why: carries } : { yes: false };
-      }
-      const longSegment = u.pathname.split('/').some((p) => p.length > 40);
-      if (u.search.length > 1 || longSegment) {
-        return { yes: true, intended: allowed(u.hostname.toLowerCase(), sessIntent), why: `URL to ${u.hostname} carries data in its path or query` };
+      // an adapter may send several URLs for one fetch (urls); any of them can carry data out
+      for (const url of [input.url, ...(Array.isArray(input.urls) ? input.urls : [])]) {
+        let u;
+        try { u = new URL(url); } catch { continue; }
+        if (allowed(u.hostname, allow)) {
+          const carries = urlCarriesData(url);
+          if (carries) return { yes: true, why: carries };
+          continue;
+        }
+        const longSegment = u.pathname.split('/').some((p) => p.length > 40);
+        if (u.search.length > 1 || longSegment) {
+          return { yes: true, intended: allowed(u.hostname.toLowerCase(), sessIntent), why: `URL to ${u.hostname} carries data in its path or query` };
+        }
       }
       return { yes: false };
     }
@@ -691,8 +699,8 @@ class Policy {
       sess.denied = { rule: 'self-protection', at: new Date().toISOString() };
       return { decision: 'deny', rule: 'self-protection', reason: 'Access to the agent-blackbox evidence store (~/.blackbox) is blocked for the agent.' };
     }
-    if ((/(^|\/)\.claude\/settings(\.local)?\.json/.test(text) || /(^|\/)\.claude\/settings(\.local)?\.json/.test(normalizeCmd(text)) || /managed-settings\.json|\.claude\/plugins\//.test(normalizeCmd(text))) && /^(Edit|Write|MultiEdit|Bash|PowerShell|NotebookEdit)$/.test(tool)) {
-      return { decision: 'ask', rule: 'hook-tamper', reason: 'The agent wants to change Claude Code settings, where the agent-blackbox hooks live.' };
+    if ((AGENT_HOOK_CONFIG.test(text) || AGENT_HOOK_CONFIG.test(normalizeCmd(text)) || /managed-settings\.json|\.claude\/plugins\//.test(normalizeCmd(text))) && /^(Edit|Write|MultiEdit|Bash|PowerShell|NotebookEdit)$/.test(tool)) {
+      return { decision: 'ask', rule: 'hook-tamper', reason: 'The agent wants to change the settings where the agent-blackbox hooks live.' };
     }
 
     // 1c. A session that read untrusted content must not plant text in files later sessions trust.

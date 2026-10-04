@@ -224,19 +224,31 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                                --fail-closed denies tool calls while the recorder is unreachable;
                                --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
-  blackbox uninstall          remove them (evidence is kept)
-  blackbox start | stop | status
-  blackbox sessions           list recorded sessions
-  blackbox timeline [id|--last] [--otel]
-  blackbox verify [ledger] [--chain-only]
+  blackbox install --agent codex|cursor|gemini
+                              record another agent too: hooks only, in that agent's own settings
+                              (docs/AGENTS.md says what each one can enforce)
+  blackbox uninstall [--agent <id>]
+                              remove them (evidence is kept)
+  blackbox start | stop | status [--json]
+  blackbox sessions [--json]  list recorded sessions
+  blackbox timeline [id|--last] [--otel] [--json]
+  blackbox verify [ledger] [--chain-only] [--json]
                               check hashes, chain links, signatures, and decrypt-and-check payloads
   blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
+  blackbox anchor --batch     also commit to all records since the last anchor with one Merkle root
+  blackbox anchor --auto (--file PATH | --webhook URL) [--every N] [--minutes M] | --auto off
+                              opt in to automatic batches published to a target you name (off by default)
+  blackbox anchor --prove <seq> | --verify-proof <file>
+                              inclusion proof for one record; check one offline against a published root
   blackbox export [--session ID] [--out dir] [--endpoint URL]
                               OpenTelemetry GenAI traces and logs (OTLP/JSON, metadata only) from the ledger;
                               writes files by default, sends only to the --endpoint you name
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
+  blackbox serve-mcp [--admin]
+                              local MCP server (stdio) exposing the read-only agent API as tools
+                              (docs/AGENT-API.md); --admin adds sessions and records
   blackbox mcp [--days N] [--all] [--json] [--pin] [--fail-on high|medium]
                               MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
@@ -244,14 +256,14 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox harden [--out file] [--user NAME] [--node PATH] [--undo | --check]
                               print a reviewable root script that runs the recorder as its own OS user
                               (agent can write evidence but not read or erase it); --check tells if it does
-  blackbox docs [--clear PATH | --clear-all]
+  blackbox docs [--json] [--clear PATH | --clear-all]
                               instruction/memory files a tainted session wrote (they mark later sessions); clear a reviewed one
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
   blackbox purge [--days N | --session ID]
                               crypto-erase payloads (destroy session keys); the chain stays valid
   blackbox demo [--tamper]    simulate an injection attack and a tampering attempt
-  blackbox eval [--all] [--json] [--mode deny]
+  blackbox eval [--all] [--json] [--mode deny] [--agent codex|cursor|gemini|all]
                               run the policy against the evasion corpus (catch rate, false alarms, gaps)
   blackbox ui                 open the local timeline page
   blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir] [--jobs N]
@@ -266,14 +278,23 @@ async function main() {
 
   switch (cmd) {
     case 'daemon': return require('../src/daemon').runDaemon();
+    case 'serve-mcp': {
+      // stdout is the protocol channel: no banners. The ingest token reads the public tier only.
+      require('../src/mcp-server').serve({ admin: flag('--admin'), port: P.port, token: flag('--admin') ? cliToken(true) : require('../src/paths').readToken() });
+      return;
+    }
     case 'start': return start();
     case 'stop': return stop();
     case 'status': {
       const h = await health();
       const cfg = loadConfig();
-      console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       const { checkHooks } = require('../src/integrity');
       const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
+      if (flag('--json')) {
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', recording: !!h, ledger_seq: h ? h.seq : null, mode: h ? h.mode : cfg.mode, encrypted: h ? !!h.encrypted : cfg.encrypt !== false, hooks: { via: ig.via || null, problems: ig.problems }, data: cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home }, null, 2));
+        return;
+      }
+      console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home}`);
       for (const p of ig.problems) console.log(red(`  ✘ ${p}`));
       return;
@@ -281,6 +302,16 @@ async function main() {
     case 'install': {
       const mode = opt('--mode');
       if (mode) parseMode(mode);
+      const agent = opt('--agent') || 'claude';
+      if (agent !== 'claude') {
+        console.log(bold(`Installing agent-blackbox into ${require('../src/adapters').getAdapter(agent).name}`));
+        require('../src/install-agent').installAgent(agent, { mode: mode ? parseMode(mode) : undefined });
+        if (flag('--fail-closed')) saveConfig({ ...loadConfig(), failMode: 'closed' });
+        await stop().catch(() => {});
+        await start();
+        console.log(`\n  Start a new ${agent} session. Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
+        return;
+      }
       console.log(bold('Installing agent-blackbox into Claude Code'));
       require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
       if (flag('--fail-closed')) saveConfig({ ...loadConfig(), failMode: 'closed' });
@@ -293,7 +324,10 @@ async function main() {
       console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
       return;
     }
-    case 'uninstall': return require('../src/install').uninstall();
+    case 'uninstall': {
+      const agent = opt('--agent') || 'claude';
+      return agent === 'claude' ? require('../src/install').uninstall() : require('../src/install-agent').uninstallAgent(agent);
+    }
     case 'mode': {
       const m = args[0];
       if (!MODES.includes(/** @type {any} */ (m))) throw new Error('usage: blackbox mode ask|deny|monitor');
@@ -311,6 +345,10 @@ async function main() {
     }
     case 'sessions': {
       const list = sessionsOf(await readRecords());
+      if (flag('--json')) {
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', sessions: list.slice(0, Number(opt('-n') || 20)).map(({ n, flags, ...s }) => ({ ...s, events: n, taints: [...flags] })) }, null, 2));
+        return;
+      }
       if (!list.length) { console.log('no sessions recorded yet'); return; }
       for (const s of list.slice(0, Number(opt('-n') || 20))) {
         const flags = [...s.flags].map((f) => yellow(f)).join(',');
@@ -323,7 +361,13 @@ async function main() {
       const recs = await readRecords();
       let id = args.find((a) => !a.startsWith('-'));
       if (!id || flag('--last')) id = (sessionsOf(recs)[0] || {}).id;
-      if (!id) { console.log('no sessions recorded yet'); return; }
+      if (!id) { if (flag('--json')) console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: null, records: [] })); else console.log('no sessions recorded yet'); return; }
+      if (flag('--json')) {
+        // metadata only, like the agent API: `blackbox show <seq>` is the way to a payload
+        const { compact } = require('../src/agent-api');
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: id, records: recs.filter((r) => r.session_id === id && (flag('--otel') || r.kind !== 'otel')).map(compact) }, null, 2));
+        return;
+      }
       printTimeline(recs, id, { otel: flag('--otel') });
       return;
     }
@@ -331,18 +375,79 @@ async function main() {
       if (remote() && !args.find((x) => !x.startsWith('-'))) {
         const r = await call('GET', '/api/verify');
         if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
-        report({ ...r.body, sessions: r.body.sessions, warnings: r.body.warnings || [] });
+        if (flag('--json')) console.log(JSON.stringify(r.body, null, 2)); else report({ ...r.body, sessions: r.body.sessions, warnings: r.body.warnings || [] });
         process.exitCode = r.body.ok ? 0 : 1;
         return;
       }
       const ledgerPath = args.find((x) => !x.startsWith('-')) || P.ledger;
       const pubPem = fs.existsSync(P.pubKey) ? fs.readFileSync(P.pubKey, 'utf8') : null;
       const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs, vault: flag('--chain-only') ? null : localVault() });
-      report(r);
+      if (flag('--json')) console.log(JSON.stringify(r, null, 2)); else report(r);
       process.exitCode = r.ok ? 0 : 1;
       return;
     }
     case 'anchor': {
+      const { merkleRoot, merkleProof, verifyProof } = require('../src/merkle');
+      if (flag('--auto')) {
+        // opt-in: the recorder commits a batch now and then and publishes head and root to a target you name
+        if (remote()) {
+          const c = loadConfig();
+          console.log(`The recorder runs as its own user, so set "anchor": { "file": "...", "webhook": "...", "every": 100, "minutes": 60 } in ${c.recorderHome}/config.json as an admin, then restart the service.`);
+          return;
+        }
+        const cfg = loadConfig();
+        const file = opt('--file'); const webhook = opt('--webhook');
+        if (opt('--auto') === 'off' || args[args.indexOf('--auto') + 1] === 'off') {
+          delete cfg.anchor; saveConfig(cfg);
+          if (await health()) { await stop(); await start({ quiet: true }); }
+          console.log('automatic anchoring is off');
+          return;
+        }
+        if (!file && !webhook) {
+          const a = cfg.anchor;
+          console.log(a ? `automatic anchoring is on: ${JSON.stringify(a)}` : 'automatic anchoring is off (nothing is published unless you turn it on)');
+          console.log(dim('usage: blackbox anchor --auto (--file PATH | --webhook URL) [--every N records] [--minutes M] | --auto off'));
+          return;
+        }
+        if (webhook && !/^https?:\/\//.test(webhook)) throw new Error('--webhook must be an http(s) URL');
+        cfg.anchor = { file: file ? path.resolve(file) : undefined, webhook, every: opt('--every') ? Number(opt('--every')) : undefined, minutes: opt('--minutes') ? Number(opt('--minutes')) : undefined };
+        saveConfig(cfg);
+        if (await health()) { await stop(); await start({ quiet: true }); }
+        console.log(`automatic anchoring is on: ${JSON.stringify(cfg.anchor)}`);
+        console.log(dim('Only the chain head and Merkle root leave the recorder: no payloads, summaries, session ids or paths.'));
+        console.log(dim('A target the agent can write to proves nothing: use a remote, a synced folder it cannot reach, or a service you control.'));
+        return;
+      }
+      if (flag('--batch')) {
+        // one Merkle root over everything since the last anchor, written to the ledger
+        await start({ quiet: true });
+        const r = await call('POST', '/api/anchor/batch', {});
+        if (r.status !== 200) { console.log('nothing new to anchor'); return; }
+        const a = { anchored_at: new Date().toISOString(), ...r.body };
+        fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+        console.log(JSON.stringify(a, null, 2));
+        console.log(dim('\nPublish seq, hash and root somewhere the agent cannot edit. `blackbox anchor --prove <seq>` then proves one record is in the batch.'));
+        return;
+      }
+      if (opt('--prove')) {
+        const n = Number(opt('--prove'));
+        const recs = await readRecords();
+        const anchor = recs.find((r) => r.kind === 'anchor' && r.from <= n && n <= r.to);
+        if (!anchor) { console.error(red(`record ${n} is not covered by an anchor batch yet (run: blackbox anchor --batch)`)); process.exit(1); }
+        const hs = recs.filter((r) => r.seq >= anchor.from && r.seq <= anchor.to).map((r) => r.hash);
+        const proof = { seq: n, hash: hs[n - anchor.from], index: n - anchor.from, size: hs.length, proof: merkleProof(hs, n - anchor.from), root: anchor.root, anchor_seq: anchor.seq };
+        if (merkleRoot(hs) !== anchor.root) { console.error(red('the ledger does not match its own anchor record; run blackbox verify')); process.exit(1); }
+        console.log(JSON.stringify(proof, null, 2));
+        return;
+      }
+      if (opt('--verify-proof')) {
+        // offline: no ledger needed, only the proof and the root you published
+        const p = JSON.parse(fs.readFileSync(String(opt('--verify-proof')), 'utf8'));
+        const ok = verifyProof(p);
+        console.log(ok ? green(`record ${p.seq} is in the batch with root ${p.root}`) : red('proof does not match the root'));
+        process.exitCode = ok ? 0 : 1;
+        return;
+      }
       let a;
       if (remote()) {
         const r = await call('GET', '/api/anchor');
@@ -439,6 +544,7 @@ async function main() {
       }
       const r = await call('GET', '/api/docs');
       if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
+      if (flag('--json')) { console.log(JSON.stringify({ schema: 'blackbox.cli/v1', docs: r.body }, null, 2)); return; }
       if (!r.body.length) { console.log(dim('no marked documents')); return; }
       for (const d of r.body) console.log(`${yellow(d.path)}\n  ${dim(`written ${d.at} by session ${String(d.session).slice(0, 12)} · ${d.why}`)}`);
       console.log(dim('\nA session that reads or loads these starts as untrusted. After you review one: blackbox docs --clear PATH (or declare it in trustedDocs).'));
@@ -456,7 +562,28 @@ async function main() {
     }
     case 'eval': {
       // the policy against the evasion corpus: catch rate, false alarms, known gaps
-      const { runAll } = require('../eval/run');
+      const { runAll, runAgent } = require('../eval/run');
+      const agentOpt = opt('--agent');
+      if (agentOpt) {
+        // the same corpus, re-written in each agent's own hook format and decoded by its adapter
+        const ids = agentOpt === 'all' ? ['codex', 'cursor', 'gemini'] : [agentOpt];
+        for (const id of ids) require('../src/adapters').getAdapter(id);
+        const mode = parseMode(opt('--mode') || 'ask');
+        const runs = ids.map((id) => runAgent(id, mode));
+        if (flag('--json')) { console.log(JSON.stringify(runs.map(({ results, ...r }) => r), null, 2)); return; }
+        for (const r of runs) {
+          console.log(bold(`agent-blackbox policy evaluation via the ${r.agent} adapter`) + dim(` · ${r.applicable}/${r.total} cases expressible · mode ${mode}`));
+          console.log(`  attacks caught   ${r.caught === r.attacks ? green(`${r.caught}/${r.attacks}`) : red(`${r.caught}/${r.attacks}`)}`);
+          console.log(`  false alarms     ${r.falseAlarms ? red(`${r.falseAlarms}/${r.benign}`) : green(`${r.falseAlarms}/${r.benign}`)}`);
+          console.log(`  differs from Claude Code's format  ${r.diverged.length ? red(String(r.diverged.length)) : green('0')}`);
+          for (const d of r.diverged) console.log(`    ${red('DIFF')} ${d.id.padEnd(28)} ${dim(`claude: ${d.claude} · via ${r.agent}: ${d.via}`)}`);
+          if (r.notApplicable.length) console.log(`  no hook for  ${dim(r.notApplicable.join(', '))}`);
+          console.log('');
+        }
+        console.log(dim('Each corpus event is re-written the way the agent would send it, then decoded by its adapter. That shows the\nmapping loses nothing the policy needs, not that a real agent sends these payloads: see docs/AGENTS.md.'));
+        process.exitCode = runs.every((r) => r.caught === r.attacks && !r.falseAlarms && !r.diverged.length) ? 0 : 1;
+        return;
+      }
       const r = runAll(parseMode(opt('--mode') || 'ask'));
       if (flag('--json')) { console.log(JSON.stringify(r, null, 2)); return; }
       console.log(bold('agent-blackbox policy evaluation') + dim(` · ${r.results.length} cases · mode ${opt('--mode') || 'ask'}`));

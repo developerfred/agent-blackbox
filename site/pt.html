@@ -3,8 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agent-blackbox (Português)</title>
-<meta name="description" content="Caixa-preta e firewall contra prompt injection para agentes de IA de código. Local, sem telemetria.">
+<title>agent-blackbox: log de auditoria e firewall contra prompt injection para Claude Code, Codex, Cursor e Gemini CLI</title>
+<meta name="description" content="Registre tudo o que seu agente de código com IA faz num log de auditoria assinado e à prova de adulteração, e bloqueie vazamento de segredos e prompt injection antes de a chamada rodar. Local, open source, sem dependências, sem telemetria.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/pt.html">
+<link rel="alternate" hreflang="en" href="https://developerfred.github.io/agent-blackbox/">
+<link rel="alternate" hreflang="pt-BR" href="https://developerfred.github.io/agent-blackbox/pt.html">
+<link rel="alternate" hreflang="x-default" href="https://developerfred.github.io/agent-blackbox/">
+<meta name="keywords" content="Claude Code security, Codex CLI audit log, Cursor hooks, Gemini CLI, prompt injection, MCP security, AI agent audit log, secret exfiltration, lethal trifecta, OpenTelemetry GenAI, tamper-evident log">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="agent-blackbox: log de auditoria e firewall contra prompt injection para Claude Code, Codex, Cursor e Gemini CLI">
+<meta property="og:description" content="Registre tudo o que seu agente de código com IA faz num log de auditoria assinado e à prova de adulteração, e bloqueie vazamento de segredos e prompt injection antes de a chamada rodar. Local, open source, sem dependências, sem telemetria.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/pt.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="agent-blackbox: see what your AI agent did, stop it before it leaks">
+<meta property="og:locale" content="pt_BR">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="agent-blackbox: log de auditoria e firewall contra prompt injection para Claude Code, Codex, Cursor e Gemini CLI">
+<meta name="twitter:description" content="Registre tudo o que seu agente de código com IA faz num log de auditoria assinado e à prova de adulteração, e bloqueie vazamento de segredos e prompt injection antes de a chamada rodar. Local, open source, sem dependências, sem telemetria.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="alternate" type="text/plain" href="https://developerfred.github.io/agent-blackbox/llms.txt" title="llms.txt">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "agent-blackbox", "applicationCategory": "SecurityApplication", "operatingSystem": "macOS, Linux", "description": "Record everything your AI coding agent does in a tamper-evident, signed audit log, and block secret exfiltration and prompt injection before the tool call runs. Local-first, open source, zero dependencies, no telemetry.", "url": "https://developerfred.github.io/agent-blackbox/", "downloadUrl": "https://www.npmjs.com/package/agent-blackbox", "codeRepository": "https://github.com/developerfred/agent-blackbox", "license": "https://www.apache.org/licenses/LICENSE-2.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "isAccessibleForFree": true, "author": {"@type": "Person", "name": "Frederick Silva", "url": "https://github.com/developerfred"}, "keywords": "Claude Code security, Codex CLI audit log, Cursor hooks, Gemini CLI, prompt injection, MCP security, AI agent audit log, secret exfiltration, lethal trifecta, OpenTelemetry GenAI, tamper-evident log", "softwareRequirements": "Node.js 18 or later", "featureList": ["Hash-chained, Ed25519-signed audit log of every prompt, tool call and result", "Deterministic policy against the lethal trifecta, secret exfiltration and opaque code", "Adapters for Claude Code, Codex CLI, Cursor and Gemini CLI", "Open ledger format with Merkle anchoring and a standalone verifier", "OpenTelemetry GenAI export, metadata only", "Read-only agent API and llms.txt"], "sameAs": ["https://github.com/developerfred/agent-blackbox", "https://www.npmjs.com/package/agent-blackbox"]}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,7 +43,7 @@
 <p class="eyebrow">Caixa-preta para agentes de código</p>
 <h1>Veja o que seu agente de IA fez. Barre antes de vazar.</h1>
 <p class="lead">Cada prompt, chamada de ferramenta e resultado vai para um registro encadeado por hash e assinado com Ed25519, escrito por um processo separado. Um motor de política barra a <em>trifeta letal</em> (dado privado, conteúdo não confiável e chamada externa) antes de a chamada rodar.</p>
-<p class="lead">Claude Code primeiro. Codex, Cursor e Gemini CLI depois.</p>
+<p class="lead">Claude Code primeiro. Codex CLI, Cursor e Gemini CLI têm adaptadores experimentais.</p>
 <ul class="facts"><li>sem conta</li><li>sem nuvem</li><li>sem telemetria</li><li>zero dependências</li><li>Node 18+</li><li>Apache-2.0</li></ul>
 <div class="cta"><a class="btn primary" href="#install">Instalar</a><a class="btn" href="https://github.com/developerfred/agent-blackbox">Ver código</a></div>
 </div>
@@ -47,6 +70,14 @@
 <figure class="clip"><video controls preload="none" playsinline muted poster="media/attack-denied.png"><source src="media/attack-denied.webm" type="video/webm"></video><figcaption>Uma instrução plantada tenta enviar um segredo para fora. A chamada é negada antes de rodar. Gravado de uma execução real de <code>blackbox demo</code>.</figcaption></figure>
 <figure class="clip"><video controls preload="none" playsinline muted poster="media/tamper-detected.png"><source src="media/tamper-detected.webm" type="video/webm"></video><figcaption>Alterar um registro quebra a cadeia, e o <code>blackbox verify</code> aponta qual. Mesma execução, com <code>--tamper</code>.</figcaption></figure>
 </div>
+</div>
+</section>
+
+<section class="block" id="agents">
+<div class="label">Compatível</div>
+<div class="content">
+<h2>Claude Code, Codex CLI, Cursor e Gemini CLI</h2>
+<p>Um ledger e uma política para todos os agentes de código da sua máquina. O Claude Code é coberto de ponta a ponta, com OpenTelemetry nativo. Codex CLI, Cursor e Gemini CLI entram por hooks como adaptadores experimentais: foram feitos a partir da documentação pública e testados com payloads simulados, ainda não validados nos agentes reais. O <code>blackbox mcp</code> audita servidores MCP e o <code>blackbox skills</code> audita skills instaladas, contra prompt injection e risco de cadeia de suprimentos.</p>
 </div>
 </section>
 

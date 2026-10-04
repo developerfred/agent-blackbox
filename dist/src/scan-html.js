@@ -4,10 +4,12 @@
 // It contains project names, program names and hosts (never commands,
 // prompts or secrets), so it is meant for you; share the --card instead.
 const { CATEGORIES } = require('./scan');
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
-const n = (x) => Number(x || 0).toLocaleString('en-US');
+const { escHtml: esc, num: n } = require('./util');
+const { SEV } = require('./mcp');
+/** @param {number} a @param {number} b */
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '0%');
 // Bar with a square base and a 4px rounded data end (horizontal).
+/** @param {number} x @param {number} y @param {number} w @param {number} h @param {number} [r] */
 function hbar(x, y, w, h, r = 4) {
     if (w <= 0)
         return '';
@@ -15,26 +17,31 @@ function hbar(x, y, w, h, r = 4) {
     return `M${x} ${y}h${w - rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}v${h - 2 * rr}a${rr} ${rr} 0 0 1 -${rr} ${rr}h-${w - rr}z`;
 }
 // Column with a square base on the baseline and a rounded top.
+/** @param {number} x @param {number} yBase @param {number} w @param {number} h @param {number} [r] */
 function vbar(x, yBase, w, h, r = 4) {
     if (h <= 0)
         return '';
     const rr = Math.min(r, h, w / 2);
     return `M${x} ${yBase}v-${h - rr}a${rr} ${rr} 0 0 1 ${rr} -${rr}h${w - 2 * rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}v${h - rr}z`;
 }
+/** @param {number} i */
 const catVar = (i) => `var(--series-${i + 1})`;
 const catLabel = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.label]));
 function legend() {
     return `<ul class="legend">${CATEGORIES.map((c, i) => `<li><span class="sw" style="background:${catVar(i)}"></span>${esc(c.label)}</li>`).join('')}</ul>`;
 }
+/** @param {string[]} head @param {unknown[][]} rows */
 function table(head, rows) {
     return `<details class="data"><summary>Show data table</summary><div class="tscroll"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td${i ? ' class="num"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
 }
 // 1. One measure across seven categories: horizontal bars, direct labels.
+/** @param {import('./types').ScanSummary} S */
 function categoryChart(S) {
     const total = S.toolCalls || 1;
     const max = Math.max(1, ...CATEGORIES.map((c) => S.categories[c.id] || 0));
     const W = 760, L = 150, R = 110, rowH = 30, barH = 18;
     const H = CATEGORIES.length * rowH + 8;
+    /** @param {number} v */
     const scale = (v) => ((W - L - R) * v) / max;
     const rows = CATEGORIES.map((c, i) => {
         const v = S.categories[c.id] || 0;
@@ -53,6 +60,7 @@ function categoryChart(S) {
 // 2. Projects x categories. Projects differ in size by orders of magnitude,
 // so each bar shows its own composition (100%) and the total is a number:
 // a shared scale would turn small projects into unreadable slivers.
+/** @param {import('./types').ScanSummary} S */
 function projectChart(S) {
     const list = Object.entries(S.projects).sort((a, b) => b[1].toolCalls - a[1].toolCalls).slice(0, 12);
     if (!list.length)
@@ -83,6 +91,7 @@ function projectChart(S) {
     ${table(['Project', 'Sessions', 'Calls', 'Flagged', ...CATEGORIES.map((c) => c.label)], list.map(([name, p]) => [name, p.sessions, n(p.toolCalls), p.flagged, ...CATEGORIES.map((c) => n((p.categories || {})[c.id]))]))}`;
 }
 // 3. Calls per day, stacked by category; every day in the range gets a slot.
+/** @param {import('./types').ScanSummary} S */
 function dayChart(S) {
     if (!S.daily || !S.daily.length)
         return '<p class="muted">No dated activity.</p>';
@@ -105,6 +114,7 @@ function dayChart(S) {
     const plotW = W - L - R, plotH = H - T - B;
     const slot = plotW / dates.length;
     const bw = Math.max(Math.min(slot - 4, 28), 2);
+    /** @param {number} v */
     const y = (v) => T + plotH - (plotH * v) / top;
     const grid = ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" class="tick">${esc(n(v))}</text>`).join('');
     const every = Math.ceil(dates.length / 8);
@@ -142,11 +152,13 @@ function ranked(rows, { dot } = {}) {
     <td class="barcell"><span class="ibar" style="width:${((r.count / max) * 100).toFixed(1)}%"></span></td>
     <td class="num">${esc(n(r.count))}</td></tr>`).join('')}</tbody></table>`;
 }
+/** @param {import('./types').ScanSummary} S */
 function skillsTable(S) {
     const rows = S.skills || [];
     if (!rows.length)
         return '<p class="muted">No skills used in this period.</p>';
     const max = Math.max(1, ...rows.map((r) => r.calls));
+    /** @param {{ risk: string | null }} r */
     const riskTag = (r) => (r.risk == null ? '<span class="tag">not installed here</span>'
         : r.risk === 'high' ? '<span class="rule rule-bad">high risk</span>' : r.risk === 'medium' ? '<span class="rule rule-warn">medium risk</span>'
             : '<span class="tag tag-ok">clean</span>');
@@ -157,15 +169,17 @@ function skillsTable(S) {
     <td>${riskTag(r)}${r.pin === 'changed' ? ' <span class="rule rule-bad">changed since pin</span>' : ''}</td>
     <td class="reason">${esc((r.rules || []).join(', '))}</td></tr>`).join('')}</tbody></table></div>`;
 }
+/** @param {import('./types').ScanSummary} S */
 function mcpTable(S) {
     const used = (S.mcp && S.mcp.used) || [];
     const unused = (S.mcp && S.mcp.unused) || [];
     if (!used.length && !unused.length)
         return '<p class="muted">No MCP servers used or configured.</p>';
     const max = Math.max(1, ...used.map((m) => m.calls));
+    /** @param {string | undefined} r */
     const riskTag = (r) => (r === 'high' ? '<span class="rule rule-bad">high risk</span>' : r === 'medium' ? '<span class="rule rule-warn">medium risk</span>' : r ? '<span class="tag tag-ok">clean</span>' : '');
     const rows = used.map((m) => {
-        const worst = (m.configured || []).sort((a, b) => ({ high: 3, medium: 2, low: 1, none: 0 }[b.risk] - { high: 3, medium: 2, low: 1, none: 0 }[a.risk]))[0];
+        const worst = (m.configured || []).sort((a, b) => (SEV[b.risk] - SEV[a.risk]))[0];
         const where = (m.configured || []).length ? m.configured.map((c) => `${c.client} ${c.scope}`).join(', ') : 'connector / managed';
         const tools = m.tools.slice(0, 5).map((t) => `${esc(t.name)}${t.outbound ? ' ↗' : ''} <span class="muted">${esc(n(t.calls))}</span>`).join(' · ');
         return `<tr><td class="name">${esc(m.server)}${m.plugin ? ` <span class="muted">· plugin ${esc(m.plugin)}</span>` : ''}<div class="muted" style="font-size:11.5px">${esc(where)}</div></td>
@@ -178,6 +192,7 @@ function mcpTable(S) {
     const unusedRows = unused.map((u) => `<tr><td class="name">${esc(u.server)}<div class="muted" style="font-size:11.5px">${esc(u.client)} ${esc(u.scope)}</div></td><td></td><td class="num muted">0</td><td></td><td></td><td>${riskTag(u.risk)}${u.rules.length ? `<div class="reason" style="font-size:11.5px">${esc(u.rules.join(', '))}</div>` : ''}</td><td class="muted">configured, not used: candidate to remove</td></tr>`).join('');
     return `<div class="tscroll"><table><thead><tr><th>Server</th><th></th><th class="num">Calls</th><th class="num">Sent / changed</th><th class="num">Failed</th><th>Config audit</th><th>Tools</th></tr></thead><tbody>${rows}${unusedRows}</tbody></table></div>`;
 }
+/** @param {import('./types').ScanSummary} S */
 function renderHtml(S) {
     const range = S.range && S.range.first ? `${String(S.range.first).slice(0, 10)} → ${String(S.range.last).slice(0, 10)}` : `last ${S.days} days`;
     const catIndex = Object.fromEntries(CATEGORIES.map((c, i) => [c.id, i]));
@@ -187,6 +202,7 @@ function renderHtml(S) {
         ['Lethal-trifecta sessions', S.trifectaSessions, 'bad'], ['Calls that would be denied', S.wouldDenyCalls, 'bad'],
     ];
     const flagged = (S.flagged || []).map((f) => `<tr><td>${esc(String(f.date || '').slice(0, 10))}</td><td>${esc(f.project || '')}</td><td><span class="rule rule-${/egress/.test(f.rule) && f.rule !== 'lethal-trifecta' ? 'bad' : 'warn'}">${esc(f.rule)}</span></td><td class="reason">${esc(f.reason || '')}</td></tr>`).join('');
+    /** @type {Record<string, string>} */
     const hostKind = { allowlisted: 'ok', 'named by you': 'ok', external: 'warn' };
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

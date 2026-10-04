@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent API: read-only JSON endpoints for AI agents</title>
+<meta name="description" content="Versioned, read-only /v1/agent endpoints with OpenAPI that let an agent read what agent-blackbox recorded.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/docs/agent-api.html">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="Agent API: read-only JSON endpoints for AI agents">
+<meta property="og:description" content="Versioned, read-only /v1/agent endpoints with OpenAPI that let an agent read what agent-blackbox recorded.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/docs/agent-api.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent API: read-only JSON endpoints for AI agents">
+<meta name="twitter:description" content="Versioned, read-only /v1/agent endpoints with OpenAPI that let an agent read what agent-blackbox recorded.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="stylesheet" href="../style.css">
+<style>.doc{max-width:760px;margin:0 auto;padding-block:40px 24px}.doc h1{margin-bottom:18px}.doc h2{margin-top:36px}.doc h3{margin-top:26px;font-size:1.15rem}.doc ul.plain,.doc ol.plain{margin:0 0 14px;padding-left:1.3em}.doc blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid var(--accent);color:var(--muted)}.doc .tablewrap{margin:0 0 16px}.doc pre{margin:0 0 16px}.docnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;padding-block:12px;border-bottom:1px solid var(--line)}.docnav a{color:var(--muted);text-decoration:none}.docnav a:hover{color:var(--fg)}</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong><a href="../index.html" style="color:inherit;text-decoration:none">agent-blackbox</a></strong>
+<a href="../index.html#install">Install</a><a href="../index.html#policy">Policy</a><a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<div class="wrap"><div class="docnav"><a href="privacy.html">privacy</a><a href="agent-guide.html">agent guide</a><a href="agent-api.html">agent api</a><a href="ledger-spec.html">ledger spec</a><a href="anchoring.html">anchoring</a><a href="opentelemetry-export.html">opentelemetry export</a><a href="agents-supported.html">agents supported</a></div>
+<main class="doc">
+<h1>Agent API</h1>
+<p>A read-only, versioned JSON API for AI agents (or an MCP server acting for one) to learn what agent-blackbox is and to read back what it recorded, without scraping the CLI or the UI. It is served by the recorder on <code>127.0.0.1</code> (default port 7071, <code>BLACKBOX_PORT</code> overrides it) under <code>/v1/agent/</code>.</p>
+<p>Start with <code>GET /v1/agent/capabilities</code>: it lists every endpoint, the rule names, the record kinds and what the API never returns. <code>GET /v1/agent/openapi.json</code> describes the same API as OpenAPI 3.1, generated from the same table, so the two cannot drift apart.</p>
+<h2 id="authentication-and-scopes">Authentication and scopes</h2>
+<p>Send the token in the <code>x-blackbox-token</code> header, like every other recorder endpoint. Two tiers, using the two tokens that already exist:</p>
+<div class="tablewrap"><table><tr><th>Tier</th><th>Token</th><th>Endpoints</th></tr><tr><td>public</td><td>ingest token (the one hooks hold) or admin token</td><td><code>capabilities</code>, <code>openapi.json</code>, <code>status</code>, <code>rules</code></td></tr><tr><td>admin</td><td>admin token</td><td><code>sessions</code>, <code>records</code></td></tr></table></div>
+<p>The public tier is what the agent itself may read, so it says nothing about enforcement: no mode, no findings, no reasons for a denial (see "Denials stay quiet" in the README). Records and sessions are for the human, or for an agent the human delegates the admin token to.</p>
+<p>With the recorder as a dedicated user (<code>blackbox harden</code>) the admin token is not readable by the agent's OS user; with the default same-user install every token is readable by any process running as you, as described in <a href="privacy.html">PRIVACY.md</a>.</p>
+<h2 id="endpoints">Endpoints</h2>
+<p>All responses are JSON with a <code>schema</code> field (<code>blackbox.agent/v1</code>). New optional fields may appear; existing fields keep their meaning within <code>v1</code>.</p>
+<div class="tablewrap"><table><tr><th>Endpoint</th><th>Scope</th><th>Returns</th></tr><tr><td><code>GET /v1/agent/capabilities</code></td><td>public</td><td>name, version, endpoints, rule ids, record kinds, guarantees</td></tr><tr><td><code>GET /v1/agent/openapi.json</code></td><td>public</td><td>OpenAPI 3.1 document</td></tr><tr><td><code>GET /v1/agent/status</code></td><td>public</td><td><code>recording</code>, <code>ledger_seq</code>, <code>chain_ok</code>, <code>encrypted</code></td></tr><tr><td><code>GET /v1/agent/rules</code></td><td>public</td><td>rule catalogue: <code>id</code>, usual <code>decision</code>, one-line <code>summary</code></td></tr><tr><td><code>GET /v1/agent/sessions</code></td><td>admin</td><td>sessions, newest first: id, first/last time, cwd, event/tool/decision counts, taint flag names</td></tr><tr><td><code>GET /v1/agent/records</code></td><td>admin</td><td>compact records; query <code>session</code>, <code>kind</code> (default <code>decision,taint</code>), <code>after</code> (cursor), <code>limit</code> (1 to 500, default 100); <code>next_after</code> is the cursor for the next page or <code>null</code></td></tr></table></div>
+<h2 id="what-is-never-returned">What is never returned</h2>
+<ul class="plain"><li>Payloads (prompts, tool arguments, tool results) and hook summaries. Only record metadata, rule names and the already-masked <code>reason</code> and <code>why</code> text that the ledger stores in clear (see <a href="privacy.html">PRIVACY.md</a>).</li><li>Signatures, keys and tokens.</li><li>Anything from another machine: the recorder rejects requests that are not addressed to loopback.</li></ul>
+<p>Record fields follow <a href="ledger-spec.html">spec/ledger-v1.md</a>; <code>records</code> returns the subset <code>seq</code>, <code>ts</code>, <code>kind</code>, <code>hash</code>, <code>event</code>, <code>session_id</code>, <code>prompt_id</code>, <code>tool_name</code>, <code>tool_use_id</code>, <code>decision</code>, <code>rule</code>, <code>reason</code>, <code>flag</code>, <code>why</code>, <code>hosts</code>, and the settings/anchor fields.</p>
+<h2 id="example">Example</h2>
+<pre><code>TOKEN=$(cat ~/.blackbox/keys/token)
+curl -s -H "x-blackbox-token: $TOKEN" http://127.0.0.1:7071/v1/agent/capabilities
+curl -s -H "x-blackbox-token: $(cat ~/.blackbox/keys/admin-token)" \
+  "http://127.0.0.1:7071/v1/agent/records?kind=decision&amp;limit=20"</code></pre>
+<h2 id="mcp-server">MCP server</h2>
+<p><code>blackbox serve-mcp</code> is a local MCP server (stdio, newline-delimited JSON-RPC, protocol 2025-06-18, no dependencies) that exposes the same API as read-only tools, so a coding agent can use it like any other tool:</p>
+<pre><code>{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }</code></pre>
+<div class="tablewrap"><table><tr><th>Tool</th><th>Endpoint</th><th>Offered</th></tr><tr><td><code>blackbox_capabilities</code></td><td><code>/v1/agent/capabilities</code></td><td>always</td></tr><tr><td><code>blackbox_status</code></td><td><code>/v1/agent/status</code></td><td>always</td></tr><tr><td><code>blackbox_rules</code></td><td><code>/v1/agent/rules</code></td><td>always</td></tr><tr><td><code>blackbox_sessions</code></td><td><code>/v1/agent/sessions</code></td><td>only with <code>--admin</code></td></tr><tr><td><code>blackbox_records</code></td><td><code>/v1/agent/records</code></td><td>only with <code>--admin</code></td></tr></table></div>
+<p>Without <code>--admin</code> the server uses the ingest token and can only reach the public tier. <code>--admin</code> is for a person who wants to give an agent the decision trail; with the default same-user install the agent could read that token anyway (see <a href="privacy.html">PRIVACY.md</a>). Every tool is annotated <code>readOnlyHint</code>, returns the JSON as <code>structuredContent</code> and declares its <code>outputSchema</code>. Note that <code>serve-mcp</code> is separate from <code>blackbox mcp</code>, which audits the MCP servers you have configured.</p>
+<h2 id="cli---json">CLI <code>--json</code></h2>
+<p>For scripts and agents that prefer a command: <code>blackbox status|sessions|timeline|verify|docs --json</code> print one JSON document (<code>schema: blackbox.cli/v1</code>, except <code>verify</code>, which prints the verifier's own result). <code>timeline --json</code> has the same metadata-only records as the API; use <code>blackbox show &lt;n&gt;</code> to open a payload. <code>scan</code>, <code>mcp</code>, <code>skills</code> and <code>eval</code> already had <code>--json</code>.</p>
+<p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/AGENT-API.md">Edit this page on GitHub</a></p>
+</main></div>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anchoring: Merkle roots and inclusion proofs for the audit log</title>
+<meta name="description" content="How agent-blackbox commits to batches of ledger records with an RFC 6962 Merkle root and how to prove one record belongs to it.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/docs/anchoring.html">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="Anchoring: Merkle roots and inclusion proofs for the audit log">
+<meta property="og:description" content="How agent-blackbox commits to batches of ledger records with an RFC 6962 Merkle root and how to prove one record belongs to it.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/docs/anchoring.html">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Anchoring: Merkle roots and inclusion proofs for the audit log">
+<meta name="twitter:description" content="How agent-blackbox commits to batches of ledger records with an RFC 6962 Merkle root and how to prove one record belongs to it.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<link rel="stylesheet" href="../style.css">
+<style>.doc{max-width:760px;margin:0 auto;padding-block:40px 24px}.doc h1{margin-bottom:18px}.doc h2{margin-top:36px}.doc h3{margin-top:26px;font-size:1.15rem}.doc ul.plain,.doc ol.plain{margin:0 0 14px;padding-left:1.3em}.doc blockquote{margin:0 0 14px;padding:2px 16px;border-left:3px solid var(--accent);color:var(--muted)}.doc .tablewrap{margin:0 0 16px}.doc pre{margin:0 0 16px}.docnav{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;padding-block:12px;border-bottom:1px solid var(--line)}.docnav a{color:var(--muted);text-decoration:none}.docnav a:hover{color:var(--fg)}</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong><a href="../index.html" style="color:inherit;text-decoration:none">agent-blackbox</a></strong>
+<a href="../index.html#install">Install</a><a href="../index.html#policy">Policy</a><a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<div class="wrap"><div class="docnav"><a href="privacy.html">privacy</a><a href="agent-guide.html">agent guide</a><a href="agent-api.html">agent api</a><a href="ledger-spec.html">ledger spec</a><a href="anchoring.html">anchoring</a><a href="opentelemetry-export.html">opentelemetry export</a><a href="agents-supported.html">agents supported</a></div>
+<main class="doc">
+<h1>Anchoring the chain head</h1>
+<p>A hash chain proves nothing was changed <em>inside</em> the ledger. It cannot show that the last records were cut off, or that someone with the signing key re-signed the whole chain. For that you publish the chain head somewhere the agent cannot write (a git commit, a gist, a transparency log). Anyone can then compare it with the ledger.</p>
+<h2 id="batches-and-merkle-roots">Batches and Merkle roots</h2>
+<p><code>blackbox anchor --batch</code> commits to every record since the previous anchor with one Merkle root and writes it into the ledger as an <code>anchor</code> record. Publish the printed <code>seq</code>, <code>hash</code> and <code>root</code>.</p>
+<p>The tree is the one from RFC 6962 (Certificate Transparency): leaf = SHA-256(<code>0x00</code> || record hash bytes), node = SHA-256(<code>0x01</code> || left || right). The same code is in <code>src/merkle.js</code>, with no dependencies.</p>
+<p>Why a root and not only the head: a single record can be proven to belong to the batch with about log2(n) hashes, without handing over the other records.</p>
+<pre><code>blackbox anchor --prove 42 &gt; proof.json     # needs the ledger
+blackbox anchor --verify-proof proof.json   # needs only proof.json and the root you published</code></pre>
+<h2 id="the-anchor-record-optional-addition-v-stays-1">The <code>anchor</code> record (optional addition, <code>v</code> stays 1)</h2>
+<div class="tablewrap"><table><tr><th>field</th><th>meaning</th></tr><tr><td><code>alg</code></td><td><code>merkle-sha256-rfc6962</code></td></tr><tr><td><code>from</code>, <code>to</code></td><td>first and last record covered; <code>to</code> is below this record's <code>seq</code></td></tr><tr><td><code>count</code></td><td><code>to - from + 1</code></td></tr><tr><td><code>root</code></td><td>hex Merkle root over the <code>hash</code> of records <code>from..to</code></td></tr></table></div>
+<p><code>blackbox verify</code> recomputes the root and fails on a mismatch, an unknown <code>alg</code>, or a range that does not fit. A proof does not bind the batch size, so a verifier takes <code>from</code>, <code>to</code> and <code>count</code> from the signed anchor record, never from the proof.</p>
+<h2 id="automatic-anchoring-opt-in">Automatic anchoring (opt-in)</h2>
+<p>Off by default. Turn it on by naming a target:</p>
+<pre><code>blackbox anchor --auto --file ~/synced/anchors.jsonl          # append a line per batch
+blackbox anchor --auto --webhook https://example.org/anchors  # POST the same JSON
+blackbox anchor --auto --file ... --every 100 --minutes 60    # when a batch is due
+blackbox anchor --auto            # show the setting
+blackbox anchor --auto off</code></pre>
+<p>The recorder then commits a batch when <code>every</code> new records have piled up (default 100), or when there is at least one new record and <code>minutes</code> have passed since the last batch (default 60), and publishes it. A failed publish is kept and retried each minute. The setting lives in <code>config.anchor</code> (<code>file</code>, <code>webhook</code>, <code>every</code>, <code>minutes</code>); with the recorder as its own user, an admin sets it in the recorder's <code>config.json</code>.</p>
+<p>What leaves the machine: <code>seq</code>, <code>hash</code>, <code>sig</code> and <code>key_id</code> of the anchor record, its <code>from</code>, <code>to</code>, <code>count</code>, <code>root</code>, and the time. No payload, summary, session id, path or prompt. Nothing is sent when <code>anchor</code> is not configured.</p>
+<p>Choose the target with care: an anchor only protects you if the agent cannot rewrite where it was published. A file in a folder the agent can write is no better than the ledger itself; a git remote, a synced folder the agent cannot reach, or a service you control is.</p>
+<h2 id="what-this-does-not-do">What this does not do</h2>
+<p>It does not pick a public transparency log or timestamp authority for you, and it does not prove that everything was recorded (see the spec, section 11). RFC 3161 timestamping and OpenTimestamps targets are possible later targets.</p>
+<p style="margin-top:32px"><a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/ANCHORING.md">Edit this page on GitHub</a></p>
+</main></div>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>
+</body>
+</html>

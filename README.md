@@ -1,6 +1,6 @@
 # agent-blackbox
 
-**A tamper-evident flight recorder and prompt-injection firewall for AI coding agents.** Claude Code first; Codex, Cursor and Gemini CLI next.
+**A tamper-evident flight recorder and prompt-injection firewall for AI coding agents.** Claude Code first; Codex, Cursor and Gemini CLI through adapters (`blackbox install --agent codex|cursor|gemini`; see [docs/AGENTS.md](docs/AGENTS.md) for what each can enforce).
 
 > Everything runs on your machine. No account, no cloud, no telemetry: nothing is ever uploaded.
 
@@ -133,7 +133,11 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
   anchors.jsonl    chain heads you exported with `blackbox anchor`
 ```
 
-Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
+The format is specified in [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md) (draft, with test vectors), so a verifier does not need this code. `blackbox export` writes the ledger as [OpenTelemetry GenAI](docs/OTEL.md) traces and logs: metadata only, to a local folder unless you pass `--endpoint`.
+
+Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it. `blackbox anchor --batch` also commits to a batch of records with a Merkle root, so one record can be proven to belong to a published anchor without handing over the rest ([docs/ANCHORING.md](docs/ANCHORING.md)).
+
+The format is an open, versioned specification: [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), with [test vectors](docs/spec/vectors/) and a standalone verifier with no dependencies, [verifier/bb-verify.js](verifier/README.md), so anyone can check a ledger without trusting or installing the recorder.
 
 ## Grounded in research
 
@@ -167,6 +171,8 @@ Closed since earlier versions: payloads and summaries are now encrypted per sess
 
 - [Project site](https://developerfred.github.io/agent-blackbox/): overview, install, policy and privacy in one page
 - [docs/PRIVACY.md](docs/PRIVACY.md): what is recorded, where, for how long
+- [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md): the open ledger and event format
+- [docs/OTEL.md](docs/OTEL.md): OpenTelemetry GenAI export
 - [SECURITY.md](SECURITY.md): reporting a vulnerability or a policy bypass
 - [ROADMAP.md](ROADMAP.md): phases and gates
 
