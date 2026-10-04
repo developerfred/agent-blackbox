@@ -35,7 +35,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 - [ ] Launch: demo GIF, Show HN, X, Farcaster, r/ClaudeAI on the same day
 - [ ] Prompt-injection challenge repo with a canary token
-- [x] Open ledger and event format: versioned spec, test vectors and a standalone verifier ([docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), [verifier/](verifier/README.md)). Still open: make `blackbox verify` enforce the same rules (second genesis, `key_id`, duplicate keys, `v`), ship `bb-verify` in the npm package, key rotation, Merkle batching
+- [x] Open ledger and event format: versioned spec, test vectors and a standalone verifier ([docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), [verifier/](verifier/README.md)). `blackbox verify` enforces the same rules. Still open: ship `bb-verify` in the npm package, key rotation, Merkle batching
 - [x] `blackbox export`: ledger as OpenTelemetry GenAI traces and logs, local by default ([docs/OTEL.md](docs/OTEL.md))
 - [ ] Adapters for Codex CLI and Cursor (one canonical event, OpenTelemetry GenAI conventions)
 - [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
