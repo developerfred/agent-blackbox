@@ -1,6 +1,6 @@
 # agent-blackbox
 
-**A tamper-evident flight recorder and prompt-injection firewall for AI coding agents.** Claude Code first; Codex, Cursor and Gemini CLI next.
+**A tamper-evident flight recorder and prompt-injection firewall for AI coding agents.** Claude Code first; Codex, Cursor and Gemini CLI through adapters (`blackbox install --agent codex|cursor|gemini`; see [docs/AGENTS.md](docs/AGENTS.md) for what each can enforce).
 
 > Everything runs on your machine. No account, no cloud, no telemetry: nothing is ever uploaded.
 
