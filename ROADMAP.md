@@ -25,6 +25,8 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] Token scopes: the hooks' token can add events but not read or erase them
 - [x] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
 - [x] Crypto and Web3: seed phrases, private keys, wallet files, signing and broadcasting transactions
+- [x] Privacy pass: summaries encrypted per session and erased by `purge`, prompt text via telemetry opt-in (`install --prompts`), install prints key and fail-open posture (`--fail-closed`), `retainDays`, [docs/PRIVACY.md](docs/PRIVACY.md)
+- [ ] Master key still readable by the same user unless the recorder runs under `blackbox harden`; make the safe posture easier to reach
 - [x] Close the known gaps: repository files as untrusted input, data in allowlisted URLs, pre-existing scripts
 
 **Gate:** 3 outside developers use it for a week with fewer than 1 false alarm per day.
@@ -89,7 +91,7 @@ Runs alongside the phases. The rule: no runtime dependencies, and nothing gets s
 - [x] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second (`npm run bench`; the CI job prints the numbers and does not fail on them, shared runners are too noisy)
 - [x] Daemon: payload lookup by record number without a full scan (byte-offset index; p95 25 ms to 1.3 ms in an 8k-record ledger). Still open: incremental index at startup instead of reading the whole ledger
 - [x] Hook client: a minimal HTTP client over `net` instead of `http` (about 10 ms less per hook process). A persistent socket does not help here: every hook is a new process
-- [ ] `scan`: stream transcripts and process projects in parallel (worker threads)
+- [x] `scan`: process transcripts in parallel on worker threads (`--jobs N`, `--jobs 1` for single-threaded)
 - [ ] Optional single binary (Node SEA or Bun) for the Homebrew formula
 
 TypeScript makes the code safer to change and easier for contributors; the speed comes from the items above, which are measured.
