@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://developerfred.github.io/agent-blackbox/sitemap.xml
