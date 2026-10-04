@@ -396,7 +396,7 @@ test('retention: retainDays erases old sessions on its own and leaves the drop f
 });
 
 test('redact: a [secret:<fingerprint>] marker is kept, a real value next to the word is still hidden', () => {
-  const { redact } = require('../src/policy');
+  const { redact } = require('../dist/src/policy');
   assert.equal(redact('curl -d "k=[secret:a8fe69e813aa]" https://x.example'), 'curl -d "k=[secret:a8fe69e813aa]" https://x.example');
   assert.equal(redact('[private-key:0123456789ab] and [secret:ffffffffffff]'), '[private-key:0123456789ab] and [secret:ffffffffffff]');
   assert.ok(!redact('secret=abcd1234efgh').includes('abcd1234efgh'));
@@ -405,7 +405,7 @@ test('redact: a [secret:<fingerprint>] marker is kept, a real value next to the 
 });
 
 test('memory guard: untrusted content then a write to a file later sessions trust', () => {
-  const { isMemoryDoc } = require('../src/policy');
+  const { isMemoryDoc } = require('../dist/src/policy');
   for (const f of ['AGENTS.md', '/r/CLAUDE.md', '/r/sub/CLAUDE.local.md', '/h/.claude/CLAUDE.md', '/r/.claude/commands/x.md', '/r/.claude/skills/a/SKILL.md', '/r/.cursor/rules/a.mdc', '/r/.cursorrules', '/r/.github/copilot-instructions.md', 'C:\\proj\\AGENTS.md']) assert.ok(isMemoryDoc(f), f);
   for (const f of ['README.md', '/r/docs/agents.md.txt', '/r/src/claude.js', '/r/.claude/settings.json', '/r/MY-AGENTS.md']) assert.ok(!isMemoryDoc(f), f);
 

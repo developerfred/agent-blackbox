@@ -40,6 +40,9 @@ const DEFAULT_CONFIG = {
     // signing or broadcasting a transaction (cast send, forge script --broadcast,
     // solana transfer, key material on a command line): 'ask' (default), 'alert' or 'off'
     web3: 'ask',
+    // a session that read untrusted content changing AGENTS.md, CLAUDE.md, editor rules,
+    // agent commands or skills (files later sessions trust): 'ask' (default), 'alert' or 'off'
+    memoryWrites: 'ask',
     // what the hook does for PreToolUse when the daemon is unreachable
     failMode: 'open',
     // erase sessions older than this many days, automatically (same as `blackbox purge --days N`); null keeps everything
@@ -60,7 +63,8 @@ function ensureDirs() {
         fs.mkdirSync(d, { recursive: true, mode: 0o700 });
     for (const d of [P.blobs, P.bodies])
         fs.mkdirSync(d, { recursive: true, mode: 0o700 });
-    for (const f of [P.token, P.adminToken]) {
+    // with the recorder as its own user, the admin token lives with the recorder, not here
+    for (const f of loadConfig().remoteDaemon ? [P.token] : [P.token, P.adminToken]) {
         if (!fs.existsSync(f))
             fs.writeFileSync(f, crypto.randomBytes(24).toString('hex'), { mode: 0o600 });
     }
@@ -102,6 +106,19 @@ function readAdminTokenViaSudo() {
     }
 }
 /** @returns {import('./types').Config} */
+/**
+ * The token the CLI presents to the recorder. Recorder as the same user: the
+ * admin token if there is one, else the ingest token. Recorder as its own user:
+ * a leftover admin-token file in this folder belongs to a recorder that is gone
+ * and would be refused, so reads use the admin token fetched through sudo and
+ * everything else the ingest token.
+ * @param {boolean} [admin] does this call read, verify or erase?
+ */
+function cliToken(admin = true) {
+    if (loadConfig().remoteDaemon)
+        return (admin ? readAdminTokenViaSudo() : '') || readToken();
+    return readAdminToken() || readToken();
+}
 function loadConfig() {
     let user = {};
     try {
@@ -114,4 +131,4 @@ function loadConfig() {
 function saveConfig(cfg) {
     fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig };
+module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, cliToken, loadConfig, saveConfig };

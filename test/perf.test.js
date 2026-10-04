@@ -126,7 +126,7 @@ test('daemon: payload lookup by record number, across restarts; state is flushed
 });
 
 test('cli token: a leftover admin-token is not sent when the recorder runs as its own user', () => {
-  const { cliToken } = require('../src/paths');
+  const { cliToken } = require('../dist/src/paths');
   ensureDirs();
   fs.writeFileSync(P.token, 'ingest-token');
   fs.writeFileSync(P.adminToken, 'stale-admin-token');

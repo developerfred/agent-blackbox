@@ -89,6 +89,20 @@ const DIRECT_EXEC = /(?:^|[;&|(]\s*)((?:\.{1,2}|~)?\/[^\s;&|<>]+)/g;
 const NET_SOURCE = /\b(?:fetch\(|XMLHttpRequest|axios|requests\.|urllib|http\.client|httpx|aiohttp|socket\.|net\/http|Net::HTTP|https?\.request|require\(\s*['"](?:node:)?(?:https?|net|dgram|tls)['"]|from\s+['"]node:(?:https?|net|dgram|tls)['"]|curl\s|wget\s|Invoke-WebRequest|WebSocket\(|\/dev\/tcp\/)/;
 // Source code that can reach the network or the shell indirectly.
 const DYNAMIC_SOURCE = /\b(?:child_process|execSync|spawnSync|exec\(|spawn\(|subprocess|os\.system|os\.popen|Runtime\.getRuntime|eval\(|new Function\(|ProcessBuilder|system\(|`[^`]*\$\()/;
+// Files that tell an agent how to behave in LATER sessions: project instructions,
+// agent memory, editor rules, commands and skills. A session that read untrusted
+// content must not be able to plant text there: the next session would trust it.
+/** @type {RegExp[]} */
+const MEMORY_DOC = [
+    /(^|\/)(?:AGENTS|CLAUDE|CLAUDE\.local|GEMINI|CONVENTIONS)\.md$/i,
+    /(^|\/)\.claude\/(?:CLAUDE\.md|commands\/|agents\/|rules\/|memory\/|output-styles\/|skills\/)/,
+    /(^|\/)\.(?:cursorrules|windsurfrules|clinerules)$/,
+    /(^|\/)\.cursor\/rules\//,
+    /(^|\/)\.github\/(?:copilot-instructions\.md|instructions\/)/,
+    /(^|\/)\.continue\/rules\//,
+];
+/** @param {string} p */
+const isMemoryDoc = (p) => MEMORY_DOC.some((re) => re.test(String(p).replace(/\\/g, '/')));
 // A copy of a shell command with the usual obfuscations undone, so c''url,
 // "curl", \curl, cu$'r'l, $'\x63url' and curl${IFS}x all read as curl.
 /** @param {unknown} cmd @returns {string} */
@@ -243,6 +257,23 @@ function hostsIn(text) {
         hosts.push(m[1].toLowerCase());
     return hosts;
 }
+// Files edited in place by sed -i or perl -i (writtenBy covers redirects, tee, cp, mv).
+/** @param {string} cmd @returns {string[]} */
+function editedInPlace(cmd) {
+    const n = normalizeCmd(shellSkeleton(cmd));
+    if (!/\b(?:sed|perl)\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*i/.test(n))
+        return [];
+    return n.split(/[\s;&|()<>]+/).filter((t) => t && !t.startsWith('-'));
+}
+// Paths a tool call writes (the ones the memory guard looks at).
+/** @param {string} tool @param {Record<string, any>} input @returns {string[]} */
+function writeTargets(tool, input) {
+    if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool))
+        return [input.file_path || input.notebook_path || ''].filter(Boolean);
+    if (tool === 'Bash' || tool === 'PowerShell')
+        return [...writtenBy(input.command || ''), ...editedInPlace(input.command || '')];
+    return [];
+}
 // Files written or downloaded by a shell command (redirects, tee, curl -o).
 /** Files written or downloaded by a shell command.
  * @param {string} cmd @returns {string[]} */
@@ -313,6 +344,10 @@ class Policy {
         this.protect = protect.filter(Boolean);
         this.state = state; // { sessions: { id: { private, untrusted, secrets: [] } } }
         this.salt = salt;
+    }
+    /** Rules that ask: 'alert' (record and tell, no prompt) in monitor mode or when that rule is set to alert. @param {string | undefined} setting @returns {'ask' | 'alert'} */
+    softDecision(setting) {
+        return this.cfg.mode === 'monitor' || setting === 'alert' ? 'alert' : 'ask';
     }
     /** @param {string} id @returns {import('./types').SessionState} */
     session(id) {
@@ -624,6 +659,13 @@ class Policy {
         if ((/(^|\/)\.claude\/settings(\.local)?\.json/.test(text) || /(^|\/)\.claude\/settings(\.local)?\.json/.test(normalizeCmd(text)) || /managed-settings\.json|\.claude\/plugins\//.test(normalizeCmd(text))) && /^(Edit|Write|MultiEdit|Bash|PowerShell|NotebookEdit)$/.test(tool)) {
             return { decision: 'ask', rule: 'hook-tamper', reason: 'The agent wants to change Claude Code settings, where the agent-blackbox hooks live.' };
         }
+        // 1c. A session that read untrusted content must not plant text in files later sessions trust.
+        if (sess.untrusted && this.cfg.memoryWrites !== 'off') {
+            const doc = writeTargets(tool, input).find(isMemoryDoc);
+            if (doc) {
+                return { decision: this.softDecision(this.cfg.memoryWrites), rule: 'memory-write', reason: `This session read untrusted content (${sess.untrusted.why}) and now wants to change ${doc}, a file later sessions will trust as instructions.` };
+            }
+        }
         const out = this.egress(tool, input, sess);
         const secretOut = this.containsKnownSecret(sess, stringsOf(input).join('\n'));
         const readsSensitive = SENSITIVE_PATH.some((re) => re.test(text));
@@ -666,7 +708,7 @@ class Policy {
         // 4b. Signing or broadcasting a transaction moves value and cannot be undone.
         if (out.web3 && this.cfg.web3 !== 'off') {
             const reason = `${out.why}. Transactions cannot be undone.`;
-            return { decision: this.cfg.mode === 'monitor' || this.cfg.web3 === 'alert' ? 'alert' : 'ask', rule: 'web3-transaction', reason };
+            return { decision: this.softDecision(this.cfg.web3), rule: 'web3-transaction', reason };
         }
         // 5. After a denial, any outbound call needs the human.
         if (out.yes && sess.denied && this.cfg.mode !== 'monitor') {
@@ -768,7 +810,8 @@ function redact(text) {
         out = out.replace(re, (m, v) => m.replace(v, '[redacted]'));
     out = out.replace(ENV_SECRET_LINE, (m, k, v) => m.replace(v, '[redacted]'));
     out = out.replace(/\b([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["'`]?)([^\s"'`#]{6,})/g, '$1[redacted]');
-    out = out.replace(/((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
+    // (?<!\[) keeps our own [secret:<fingerprint>] markers: the fingerprint is how a ledger line is tied to an event
+    out = out.replace(/(?<!\[)((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
     return out;
 }
-module.exports = { Policy, injectionIn, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
+module.exports = { Policy, injectionIn, isMemoryDoc, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };

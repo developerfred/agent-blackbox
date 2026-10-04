@@ -4,14 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { P, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig } = require('../src/paths');
+const { P, ensureDirs, cliToken, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
 const { readJsonl } = require('../src/util');
 const tty = process.stdout.isTTY;
 const { red, green, yellow, dim, bold, cyan } = require('../src/term').palette(!!tty);
 // admin: this call reads, verifies or erases, so it needs the admin token
 function call(method, p, body, admin = true) {
-    const token = readAdminToken() || (admin ? readAdminTokenViaSudo() : '') || readToken();
+    const token = cliToken(admin);
     return require('../src/local-http').request({ port: P.port, method, path: p, token, body });
 }
 const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
@@ -305,10 +305,10 @@ async function main() {
         case 'status': {
             const h = await health();
             const cfg = loadConfig();
-            console.log(h ? `${green('●')} recording · pid ${h.pid || '?'} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
+            console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
             const { checkHooks } = require('../src/integrity');
             const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
-            console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${P.home}`);
+            console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home}`);
             for (const p of ig.problems)
                 console.log(red(`  ✘ ${p}`));
             return;
@@ -502,7 +502,7 @@ async function main() {
         case 'ui': {
             await start({ quiet: true });
             // The token travels in the URL fragment, which the browser never sends to a server.
-            const url = `http://127.0.0.1:${P.port}/#token=${readAdminToken() || readToken()}`;
+            const url = `http://127.0.0.1:${P.port}/#token=${cliToken(true)}`;
             const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
             try {
                 spawn(opener, [url], { stdio: 'ignore', detached: true }).unref();
