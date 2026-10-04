@@ -1,53 +1,44 @@
-'use strict';
 // `blackbox scan --html`: a local, self-contained report of what the agent
 // did, built from the scan summary. No external scripts, fonts or requests.
 // It contains project names, program names and hosts (never commands,
 // prompts or secrets), so it is meant for you; share the --card instead.
-const { CATEGORIES } = require('./scan');
+import { CATEGORIES } from './scan';
+import { escHtml as esc, num as n } from './util';
+import { SEV } from './mcp';
+import type { ScanSummary } from './types';
 
-const { escHtml: esc, num: n } = require('./util');
-const { SEV } = require('./mcp');
-/** @param {number} a @param {number} b */
-const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '0%');
+const pct = (a: number, b: number): string => (b ? `${Math.round((a / b) * 100)}%` : '0%');
 
 // Bar with a square base and a 4px rounded data end (horizontal).
-/** @param {number} x @param {number} y @param {number} w @param {number} h @param {number} [r] */
-function hbar(x, y, w, h, r = 4) {
+function hbar(x: number, y: number, w: number, h: number, r = 4): string {
   if (w <= 0) return '';
   const rr = Math.min(r, w, h / 2);
   return `M${x} ${y}h${w - rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}v${h - 2 * rr}a${rr} ${rr} 0 0 1 -${rr} ${rr}h-${w - rr}z`;
 }
 // Column with a square base on the baseline and a rounded top.
-/** @param {number} x @param {number} yBase @param {number} w @param {number} h @param {number} [r] */
-function vbar(x, yBase, w, h, r = 4) {
+function vbar(x: number, yBase: number, w: number, h: number, r = 4): string {
   if (h <= 0) return '';
   const rr = Math.min(r, h, w / 2);
   return `M${x} ${yBase}v-${h - rr}a${rr} ${rr} 0 0 1 ${rr} -${rr}h${w - 2 * rr}a${rr} ${rr} 0 0 1 ${rr} ${rr}v${h - rr}z`;
 }
 
-/** @param {number} i */
-const catVar = (i) => `var(--series-${i + 1})`;
-const catLabel = Object.fromEntries(CATEGORIES.map((c) => [c.id, c.label]));
-
+const catVar = (i: number): string => `var(--series-${i + 1})`;
 function legend() {
   return `<ul class="legend">${CATEGORIES.map((c, i) => `<li><span class="sw" style="background:${catVar(i)}"></span>${esc(c.label)}</li>`).join('')}</ul>`;
 }
 
-/** @param {string[]} head @param {unknown[][]} rows */
-function table(head, rows) {
+function table(head: string[], rows: unknown[][]): string {
   return `<details class="data"><summary>Show data table</summary><div class="tscroll"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${
     rows.map((r) => `<tr>${r.map((c, i) => `<td${i ? ' class="num"' : ''}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details>`;
 }
 
 // 1. One measure across seven categories: horizontal bars, direct labels.
-/** @param {import('./types').ScanSummary} S */
-function categoryChart(S) {
+function categoryChart(S: ScanSummary): string {
   const total = S.toolCalls || 1;
   const max = Math.max(1, ...CATEGORIES.map((c) => S.categories[c.id] || 0));
   const W = 760, L = 150, R = 110, rowH = 30, barH = 18;
   const H = CATEGORIES.length * rowH + 8;
-  /** @param {number} v */
-  const scale = (v) => ((W - L - R) * v) / max;
+  const scale = (v: number): number => ((W - L - R) * v) / max;
   const rows = CATEGORIES.map((c, i) => {
     const v = S.categories[c.id] || 0;
     const y = 4 + i * rowH;
@@ -66,9 +57,8 @@ function categoryChart(S) {
 // 2. Projects x categories. Projects differ in size by orders of magnitude,
 // so each bar shows its own composition (100%) and the total is a number:
 // a shared scale would turn small projects into unreadable slivers.
-/** @param {import('./types').ScanSummary} S */
-function projectChart(S) {
-  const list = Object.entries(S.projects).sort((a, b) => b[1].toolCalls - a[1].toolCalls).slice(0, 12);
+function projectChart(S: ScanSummary): string {
+  const list = Object.entries(S.projects as Record<string, any>).sort((a, b) => b[1].toolCalls - a[1].toolCalls).slice(0, 12);
   if (!list.length) return '<p class="muted">No projects.</p>';
   const W = 760, L = 190, R = 150, rowH = 32, barH = 18, gap = 2;
   const H = list.length * rowH + 8;
@@ -98,12 +88,11 @@ function projectChart(S) {
 }
 
 // 3. Calls per day, stacked by category; every day in the range gets a slot.
-/** @param {import('./types').ScanSummary} S */
-function dayChart(S) {
+function dayChart(S: ScanSummary): string {
   if (!S.daily || !S.daily.length) return '<p class="muted">No dated activity.</p>';
   const byDate = Object.fromEntries(S.daily.map((d) => [d.date, d]));
   const start = Date.parse(S.daily[0].date), end = Date.parse(S.daily[S.daily.length - 1].date);
-  const dates = [];
+  const dates: string[] = [];
   for (let t = start; t <= end; t += 864e5) dates.push(new Date(t).toISOString().slice(0, 10));
   const totals = dates.map((d) => CATEGORIES.reduce((a, c) => a + ((byDate[d] || {})[c.id] || 0), 0));
   const max = Math.max(1, ...totals);
@@ -112,14 +101,13 @@ function dayChart(S) {
   const mag = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
   const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= raw) ?? 10 * mag);
   const top = Math.ceil(max / step) * step;
-  const ticks = [];
+  const ticks: number[] = [];
   for (let v = 0; v <= top; v += step) ticks.push(v);
   const W = 760, L = 44, R = 12, T = 10, B = 34, H = 240;
   const plotW = W - L - R, plotH = H - T - B;
   const slot = plotW / dates.length;
   const bw = Math.max(Math.min(slot - 4, 28), 2);
-  /** @param {number} v */
-  const y = (v) => T + plotH - (plotH * v) / top;
+  const y = (v: number): number => T + plotH - (plotH * v) / top;
   const grid = ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" class="tick">${esc(n(v))}</text>`).join('');
   const every = Math.ceil(dates.length / 8);
   const cols = dates.map((d, i) => {
@@ -143,12 +131,8 @@ function dayChart(S) {
     ${table(['Date', 'Total', ...CATEGORIES.map((c) => c.label)], dates.map((d, i) => [d, n(totals[i]), ...CATEGORIES.map((c) => n((byDate[d] || {})[c.id]))]))}`;
 }
 
-/**
- * Ranked lists: name, inline bar, count. Bars share one neutral ink.
- * @param {{ name: string, count: number, tag?: string, tagClass?: string }[]} rows
- * @param {{ dot?: (row: any) => string }} [opts]
- */
-function ranked(rows, { dot } = {}) {
+/** Ranked lists: name, inline bar, count. Bars share one neutral ink. */
+function ranked(rows: { name: string; count: number; tag?: string; tagClass?: string; cat?: string }[], { dot }: { dot?: (row: any) => string } = {}): string {
   if (!rows.length) return '<p class="muted">None.</p>';
   const max = Math.max(1, ...rows.map((r) => r.count));
   return `<table class="ranked"><tbody>${rows.map((r) => `<tr>
@@ -157,13 +141,11 @@ function ranked(rows, { dot } = {}) {
     <td class="num">${esc(n(r.count))}</td></tr>`).join('')}</tbody></table>`;
 }
 
-/** @param {import('./types').ScanSummary} S */
-function skillsTable(S) {
+function skillsTable(S: ScanSummary): string {
   const rows = S.skills || [];
   if (!rows.length) return '<p class="muted">No skills used in this period.</p>';
   const max = Math.max(1, ...rows.map((r) => r.calls));
-  /** @param {{ risk: string | null }} r */
-  const riskTag = (r) => (r.risk == null ? '<span class="tag">not installed here</span>'
+  const riskTag = (r: { risk: string | null }): string => (r.risk == null ? '<span class="tag">not installed here</span>'
     : r.risk === 'high' ? '<span class="rule rule-bad">high risk</span>' : r.risk === 'medium' ? '<span class="rule rule-warn">medium risk</span>'
       : '<span class="tag tag-ok">clean</span>');
   return `<div class="tscroll"><table><thead><tr><th>Skill</th><th></th><th class="num">Calls</th><th class="num">Model / you</th><th>Audit</th><th>Findings</th></tr></thead><tbody>${rows.map((r) => `<tr>
@@ -174,14 +156,12 @@ function skillsTable(S) {
     <td class="reason">${esc((r.rules || []).join(', '))}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
-/** @param {import('./types').ScanSummary} S */
-function mcpTable(S) {
+function mcpTable(S: ScanSummary): string {
   const used = (S.mcp && S.mcp.used) || [];
   const unused = (S.mcp && S.mcp.unused) || [];
   if (!used.length && !unused.length) return '<p class="muted">No MCP servers used or configured.</p>';
   const max = Math.max(1, ...used.map((m) => m.calls));
-  /** @param {string | undefined} r */
-  const riskTag = (r) => (r === 'high' ? '<span class="rule rule-bad">high risk</span>' : r === 'medium' ? '<span class="rule rule-warn">medium risk</span>' : r ? '<span class="tag tag-ok">clean</span>' : '');
+  const riskTag = (r: string | undefined): string => (r === 'high' ? '<span class="rule rule-bad">high risk</span>' : r === 'medium' ? '<span class="rule rule-warn">medium risk</span>' : r ? '<span class="tag tag-ok">clean</span>' : '');
   const rows = used.map((m) => {
     const worst = (m.configured || []).sort((a, b) => (SEV[b.risk] - SEV[a.risk]))[0];
     const where = (m.configured || []).length ? m.configured.map((c) => `${c.client} ${c.scope}`).join(', ') : 'connector / managed';
@@ -197,8 +177,7 @@ function mcpTable(S) {
   return `<div class="tscroll"><table><thead><tr><th>Server</th><th></th><th class="num">Calls</th><th class="num">Sent / changed</th><th class="num">Failed</th><th>Config audit</th><th>Tools</th></tr></thead><tbody>${rows}${unusedRows}</tbody></table></div>`;
 }
 
-/** @param {import('./types').ScanSummary} S */
-function renderHtml(S) {
+export function renderHtml(S: ScanSummary): string {
   const range = S.range && S.range.first ? `${String(S.range.first).slice(0, 10)} → ${String(S.range.last).slice(0, 10)}` : `last ${S.days} days`;
   const catIndex = Object.fromEntries(CATEGORIES.map((c, i) => [c.id, i]));
   const tiles = [
@@ -207,8 +186,7 @@ function renderHtml(S) {
     ['Lethal-trifecta sessions', S.trifectaSessions, 'bad'], ['Calls that would be denied', S.wouldDenyCalls, 'bad'],
   ];
   const flagged = (S.flagged || []).map((f) => `<tr><td>${esc(String(f.date || '').slice(0, 10))}</td><td>${esc(f.project || '')}</td><td><span class="rule rule-${/egress/.test(f.rule) && f.rule !== 'lethal-trifecta' ? 'bad' : 'warn'}">${esc(f.rule)}</span></td><td class="reason">${esc(f.reason || '')}</td></tr>`).join('');
-  /** @type {Record<string, string>} */
-const hostKind = { allowlisted: 'ok', 'named by you': 'ok', external: 'warn' };
+  const hostKind: Record<string, string> = { allowlisted: 'ok', 'named by you': 'ok', external: 'warn' };
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent activity report</title>
@@ -277,5 +255,3 @@ el.addEventListener('focus',function(){var r=el.getBoundingClientRect();show(el,
 </body></html>
 `;
 }
-
-module.exports = { renderHtml };
