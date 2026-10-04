@@ -253,26 +253,44 @@ Rules for evolving the registry:
 
 ## 11. Verification and what it proves
 
-A conforming verifier performs, for each non-empty line, in order:
+A conforming verifier performs, for each non-empty line, in order. Each
+failed check is reported with the line number (1-based, counting empty lines)
+and the code in brackets:
 
-1. parse it as a JSON object with no duplicate keys, else error;
-2. `v` is `1`, else report the record as unsupported (it cannot be verified);
-3. `seq` equals the expected value (1, then previous + 1);
-4. `prev` equals the previous record's `hash` (64 zeros for `seq` 1);
-5. the hash recomputed from the record (section 4) equals `hash`;
-6. the signature (section 5) verifies against the chain key;
-7. for `genesis`: it is `seq` 1, `key_id` matches `public_key`, and if a
-   trusted key was supplied the genesis key equals it.
+1. parse it as a JSON object [`INVALID_JSON`], with no duplicate keys
+   [`DUPLICATE_KEY`]. A line that is not valid JSON is skipped and does not
+   change the expected `seq` or `prev` of the next one;
+2. `v` is `1` [`UNSUPPORTED_VERSION`]. A record of another version is
+   reported and only checked for steps 3 and 4: the verifier cannot know how
+   to hash or sign it, so it MUST NOT report the ledger as valid;
+3. `seq` equals the expected value, 1 then previous + 1 [`SEQ_GAP`];
+4. `prev` equals the previous record's `hash`, 64 zeros for the first
+   [`PREV_MISMATCH`];
+5. the hash recomputed from the record (section 4) equals `hash`
+   [`HASH_MISMATCH`];
+6. the signature (section 5) verifies against the chain key
+   [`BAD_SIGNATURE`], including a signature that is not valid base64 or not
+   64 bytes long;
+7. genesis rules (section 6): the first record is `genesis`
+   [`GENESIS_REQUIRED`], no later record is [`GENESIS_DUPLICATE`], `key_id`
+   matches `public_key` [`KEY_ID_MISMATCH`], and if a trusted key was
+   supplied the genesis key equals it [`TRUSTED_KEY_MISMATCH`].
 
-A ledger passes if every record passes and it is not empty. The result SHOULD
-include the number of records and the head (`seq`, `hash`) so it can be
-compared with an anchor.
+A failed check does not stop the run. After each record the expected `seq`
+becomes that record's `seq` + 1 and the expected `prev` becomes that record's
+`hash`, as read, so one removed record gives one pair of errors and not an
+avalanche, and two verifiers report the same list. When a trusted key is
+supplied it is the chain key even if the genesis record carries another;
+otherwise the chain key is the genesis key; with neither, step 6 is skipped. An empty ledger fails
+[`EMPTY_LEDGER`, line 0]; a ledger passes if it has records and no errors.
+The result SHOULD include the number of records and the head (`seq`, `hash`)
+so it can be compared with an anchor.
 
 **Anchors.** A chain head `{ seq, hash, sig, key_id }` published somewhere the
 recorder cannot write is an *anchor*. A verifier given an anchor MUST check
 that the ledger has a record with that `seq` and that its `hash` equals the
-anchored one. This is the only defence against truncation (cutting the last
-records) and against a rewrite by someone who holds the signing key. A
+anchored one [`ANCHOR_MISMATCH`, line 0]. This is the only defence against
+truncation (cutting the last records) and against a rewrite by someone who holds the signing key. A
 ledger with no anchor can be shortened or fully re-signed without detection.
 
 **What a pass does not prove:**
@@ -296,12 +314,14 @@ exists and why the recorder is meant to run as a separate OS user.
   ledger file (and optionally a trusted key or anchor).
 - **Level 2, blobs.** Level 1 plus, for every blob digest in a record:
   unencrypted blobs are present and hash to the digest; sealed blobs are
-  decrypted with the session key and hash to the digest; erased keys are
-  recognized from `purge` records (section 8). Needs the blob directory and
-  the key material.
+  decrypted with the session key and hash to the digest [`BLOB_CHANGED`,
+  reported on the line of the record that names the blob; decryption failing
+  counts as changed]; a missing blob is a warning [`BLOB_MISSING`]; erased keys
+  are recognized from `purge` records (section 8). Needs the blob directory
+  and the key material.
 
 A verifier states which level it implemented. Test vectors for both levels
-are kept with this specification (see `docs/spec/vectors/`).
+are kept with this specification (see `docs/spec/vectors/`, which also fixes the error codes above).
 
 ## 13. Versioning
 
