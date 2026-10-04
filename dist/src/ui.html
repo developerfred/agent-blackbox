@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-blackbox</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --quiet: #6b6b66; --line: #e4e3df;
+    --accent: #2f6fdb; --warn: #b26a00; --warn-bg: #fff4e0; --bad: #c4321f; --bad-bg: #fdecea; --ok: #217a4b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --panel: #1e1e1c; --ink: #ecebe6; --quiet: #9a9993; --line: #2e2e2b;
+      --accent: #7aa7ff; --warn: #f0b04a; --warn-bg: #3a2c12; --bad: #ff7a66; --bad-bg: #3d1b17; --ok: #5fcf8f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+  header .meta { color: var(--quiet); font-family: var(--mono); font-size: 12px; }
+  #verify { margin-left: auto; font-size: 12px; font-family: var(--mono); }
+  main { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; min-height: calc(100vh - 56px); }
+  aside { border-right: 1px solid var(--line); overflow: auto; background: var(--panel); }
+  .sess { padding: 12px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .sess:hover { background: var(--bg); }
+  .sess.on { box-shadow: inset 3px 0 0 var(--accent); background: var(--bg); }
+  .sess .id { font-family: var(--mono); font-size: 12px; }
+  .sess .sub { color: var(--quiet); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; margin-right: 4px; }
+  .b-warn { background: var(--warn-bg); color: var(--warn); }
+  .b-bad { background: var(--bad-bg); color: var(--bad); }
+  section { overflow: auto; padding: 16px 24px 48px; }
+  .flags { display: flex; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+  .flag { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; background: var(--panel); }
+  .flag.lit { border-color: var(--warn); color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.t, td.s { font-family: var(--mono); font-size: 11.5px; color: var(--quiet); white-space: nowrap; }
+  td.k { white-space: nowrap; font-weight: 550; }
+  td.x { word-break: break-word; }
+  tr.post td.x, tr.otel td { color: var(--quiet); }
+  tr.taint td { background: var(--warn-bg); color: var(--warn); }
+  tr.ask td { background: var(--warn-bg); color: var(--warn); font-weight: 550; }
+  tr.deny td { background: var(--bad-bg); color: var(--bad); font-weight: 550; }
+  tr.prompt td.x { font-weight: 550; }
+  .empty { color: var(--quiet); padding: 48px 0; text-align: center; }
+  label.tog { font-size: 12px; color: var(--quiet); margin-left: 8px; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } aside { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); } section { padding: 16px; } td.s { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>agent-blackbox</h1>
+  <span class="meta" id="head">loading…</span>
+  <label class="tog"><input type="checkbox" id="otel"> telemetry events</label>
+  <span id="verify"></span>
+</header>
+<main>
+  <aside id="list"></aside>
+  <section id="detail"><div class="empty">Select a session</div></section>
+</main>
+<script>
+  const $ = (s) => document.querySelector(s);
+  // The token arrives in the URL fragment (never sent to the server), is kept
+  // for this tab only, and is removed from the address bar.
+  const m = /token=([0-9a-f]+)/.exec(location.hash);
+  if (m) { try { sessionStorage.setItem('bb-token', m[1]); } catch {} history.replaceState(null, '', location.pathname); }
+  let TOKEN = m ? m[1] : '';
+  try { TOKEN = TOKEN || sessionStorage.getItem('bb-token') || ''; } catch {}
+  const api = async (p) => {
+    const r = await fetch(p, { headers: { 'x-blackbox-token': TOKEN } });
+    if (r.status === 401) {
+      document.querySelector('main').innerHTML = '<div class="empty" style="grid-column:1/-1">This page needs an access token. Open it with <code>blackbox ui</code>.</div>';
+      throw new Error('token');
+    }
+    return r.json();
+  };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const t = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+  let current = null;
+
+  async function sessions() {
+    const r = await api('/api/sessions');
+    $('#head').textContent = `ledger #${r.head.seq} · head ${r.head.hash.slice(0, 12)}…`;
+    $('#list').innerHTML = r.sessions.length ? r.sessions.map((s) => `
+      <div class="sess ${s.id === current ? 'on' : ''}" data-id="${esc(s.id)}">
+        <div class="id">${esc(s.id.slice(0, 18))}</div>
+        <div class="sub">${new Date(s.last).toLocaleString()} · ${s.tools} tools</div>
+        <div class="sub">${esc(s.cwd || '')}</div>
+        <div>${Object.keys(s.flags).map((f) => `<span class="badge b-warn">${esc(f)}</span>`).join('')}${s.decisions ? `<span class="badge b-bad">${s.decisions} flagged</span>` : ''}</div>
+      </div>`).join('') : '<div class="empty">No sessions yet</div>';
+    document.querySelectorAll('.sess').forEach((el) => el.onclick = () => { current = el.dataset.id; sessions(); events(); });
+    if (!current && r.sessions[0]) { current = r.sessions[0].id; sessions(); events(); }
+  }
+
+  function row(r) {
+    if (r.kind === 'taint') return ['taint', `▲ ${r.flag}`, r.why];
+    if (r.kind === 'decision') return [r.decision === 'deny' ? 'deny' : (r.decision === 'note' ? 'post' : 'ask'), `■ ${r.decision} · ${r.rule}`, r.reason];
+    if (r.kind === 'api_body') return ['otel', '◆ model call', r.summary];
+    if (r.kind === 'otel') return ['otel', `· ${r.event}`, r.summary];
+    const e = r.event;
+    if (e === 'UserPromptSubmit') return ['prompt', '» prompt', r.summary];
+    if (e === 'PreToolUse') return ['pre', '→ tool', r.summary];
+    if (e === 'PostToolUse') return ['post', '← result', r.summary];
+    return ['post', e, r.summary];
+  }
+
+  async function events() {
+    if (!current) return;
+    const recs = await api('/api/events?session=' + encodeURIComponent(current));
+    const showOtel = $('#otel').checked;
+    const flags = {};
+    recs.filter((r) => r.kind === 'taint').forEach((r) => flags[r.flag] = r.why);
+    const lit = (f, label) => `<div class="flag ${flags[f] ? 'lit' : ''}">${label}: ${esc(flags[f] || 'no')}</div>`;
+    const egress = recs.some((r) => r.kind === 'decision');
+    const rows = recs.filter((r) => showOtel || (r.kind !== 'otel' && r.kind !== 'api_body')).map((r) => {
+      const [cls, k, x] = row(r);
+      return `<tr class="${cls}"><td class="t">${t(r.ts)}</td><td class="s">#${r.seq}</td><td class="k">${esc(k)}</td><td class="x">${esc(x)}</td></tr>`;
+    }).join('');
+    $('#detail').innerHTML = `
+      <div class="flags">${lit('private', 'Private data')}${lit('untrusted', 'Untrusted input')}<div class="flag ${egress ? 'lit' : ''}">Outbound attempts: ${egress ? 'yes' : 'no'}</div></div>
+      <table>${rows}</table>`;
+  }
+
+  async function check() {
+    const r = await api('/api/verify');
+    $('#verify').innerHTML = r.ok ? `<span style="color:var(--ok)">✔ chain intact · ${r.records} records</span>` : `<span style="color:var(--bad)">✘ chain broken: ${esc(r.errors[0].problem)}</span>`;
+  }
+
+  $('#otel').onchange = events;
+  sessions(); check();
+  setInterval(() => { sessions(); events(); }, 3000);
+  setInterval(check, 15000);
+</script>
+</body>
+</html>

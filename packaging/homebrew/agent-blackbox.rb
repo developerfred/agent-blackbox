@@ -13,8 +13,8 @@ class AgentBlackbox < Formula
   depends_on "node"
 
   def install
-    libexec.install "bin", "src", "package.json", "README.md", "LICENSE"
-    (bin/"blackbox").write_env_script libexec/"bin/blackbox.js",
+    libexec.install "dist", "package.json", "README.md", "LICENSE"
+    (bin/"blackbox").write_env_script libexec/"dist/bin/blackbox.js",
       PATH: "#{Formula["node"].opt_bin}:$PATH"
   end
 

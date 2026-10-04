@@ -9,7 +9,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-skills-'));
 process.env.BLACKBOX_HOME = path.join(HOME, 'bb');
 process.env.BLACKBOX_PORT = String(19000 + Math.floor(Math.random() * 900));
 
-const { discoverSkills, auditAll, auditSkill, savePins, riskFor } = require('../src/skills');
+const { discoverSkills, auditAll, auditSkill, savePins, riskFor } = require('../dist/src/skills');
 
 function write(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -98,9 +98,9 @@ test('skills: names the agent uses resolve to the installed skill', () => {
 
 test('skills: the daemon asks before loading a high-risk skill', () => {
   const { home, cwd } = fixture();
-  const { ensureDirs } = require('../src/paths');
+  const { ensureDirs } = require('../dist/src/paths');
   ensureDirs();
-  const { Daemon } = require('../src/daemon');
+  const { Daemon } = require('../dist/src/daemon');
   const d = new Daemon();
   d.start();
   d.skillAudits = auditAll({ home, cwd });
@@ -113,7 +113,7 @@ test('skills: the daemon asks before loading a high-risk skill', () => {
 });
 
 test('scan: counts skills used by the model and by slash commands', () => {
-  const { scan } = require('../src/scan');
+  const { scan } = require('../dist/src/scan');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-skscan-'));
   const lines = [
     { type: 'user', sessionId: 's1', cwd: '/w/a', timestamp: '2026-10-01T10:00:00Z', message: { content: '<command-name>/deploy</command-name><command-args></command-args>' } },

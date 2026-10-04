@@ -4,8 +4,8 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Vault, KeyErased, scopeOf } = require('../src/vault');
-const { Ledger, verify } = require('../src/ledger');
+const { Vault, KeyErased, scopeOf } = require('../dist/src/vault');
+const { Ledger, verify } = require('../dist/src/ledger');
 
 function tmpHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-vault-'));

@@ -10,11 +10,11 @@ const { execFileSync } = require('child_process');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-scan-'));
 process.env.BLACKBOX_HOME = path.join(TMP, 'bb'); // keep loadConfig away from the real ~/.blackbox
 
-const { scan, scanParallel, renderReport, renderCard } = require('../src/scan');
-const { DEFAULT_CONFIG } = require('../src/paths');
+const { scan, scanParallel, renderReport, renderCard } = require('../dist/src/scan');
+const { DEFAULT_CONFIG } = require('../dist/src/paths');
 
 const SECRET = 'Zq8vR3mT6wY1pL4sK7nB2xC5';
-const BIN = path.join(__dirname, '..', 'bin', 'blackbox.js');
+const BIN = path.join(__dirname, '..', 'dist', 'bin', 'blackbox.js');
 const cfg = { ...DEFAULT_CONFIG };
 
 // Builds one session file from a list of steps.
@@ -162,15 +162,15 @@ test('cli: blackbox scan --json and --card', () => {
 });
 
 test('scan: shell programs ignore inline scripts and heredocs', () => {
-  const { programsOf } = require('../src/scan');
+  const { programsOf } = require('../dist/src/scan');
   assert.deepEqual(programsOf("cd /x && FOO=1 npm test | tee out; sudo git push"), ['cd', 'npm', 'tee', 'git']);
   assert.deepEqual(programsOf("node -e 'const a = 1; if (a) return' && grep -n x y"), ['node', 'grep']);
   assert.deepEqual(programsOf("python3 - <<'EOF'\nconst x = 1\nif x\nEOF"), ['python3']);
 });
 
 test('scan: the HTML report has charts and never holds commands or secrets', () => {
-  const { scan } = require('../src/scan');
-  const { renderHtml } = require('../src/scan-html');
+  const { scan } = require('../dist/src/scan');
+  const { renderHtml } = require('../dist/src/scan-html');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-html-'));
   const secret = 'zz9yy8xx7ww6vv5uu4';
   fs.mkdirSync(path.join(dir, 'p'), { recursive: true });
@@ -191,7 +191,7 @@ test('scan: the HTML report has charts and never holds commands or secrets', () 
 });
 
 test('share: social assets carry numbers and categories only', () => {
-  const { storyHtml, xCardHtml, caption } = require('../src/share');
+  const { storyHtml, xCardHtml, caption } = require('../dist/src/share');
   const S = {
     days: 30, sessions: 1, toolCalls: 12, privateSessions: 1, outboundCalls: 2, trifectaSessions: 1, wouldDenyCalls: 1,
     categories: { shell: 6, read: 3, edit: 1, web: 2, mcp: 0, agents: 0, other: 0 },

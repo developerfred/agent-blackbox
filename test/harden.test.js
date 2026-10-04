@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { hardenScript, undoScript, checkHardened } = require('../src/harden');
+const { hardenScript, undoScript, checkHardened } = require('../dist/src/harden');
 
 const base = { node: '/usr/bin/node', human: 'alice', humanHome: '/home/alice/.blackbox', pkgRoot: '/opt/pkg', port: 7071 };
 

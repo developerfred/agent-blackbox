@@ -25,7 +25,7 @@ No dependencies. Node 18+.
 Audit your existing Claude Code history in seconds, without installing anything:
 
 ```bash
-npx agent-blackbox scan                 # or: node bin/blackbox.js scan
+npx agent-blackbox scan                 # or: node dist/bin/blackbox.js scan
 npx agent-blackbox scan --card me.svg   # a shareable card with numbers only
 ```
 

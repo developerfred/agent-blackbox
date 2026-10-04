@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "checkJs": false,
+    "declaration": false,
+    "sourceMap": false,
+    "removeComments": false,
+    "newLine": "lf"
+  },
+  "include": [
+    "src/**/*.js",
+    "src/**/*.ts",
+    "bin/**/*.js",
+    "bin/**/*.ts",
+    "eval/**/*.js",
+    "eval/**/*.ts"
+  ]
+}

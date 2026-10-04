@@ -12,11 +12,11 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-perf-'));
 process.env.BLACKBOX_HOME = path.join(HOME, 'bb');
 process.env.BLACKBOX_PORT = String(30000 + Math.floor(Math.random() * 20000));
 
-const { Policy } = require('../src/policy');
-const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../src/paths');
-const { Daemon } = require('../src/daemon');
-const { request } = require('../src/local-http');
-const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists, stablePath } = require('../src/util');
+const { Policy } = require('../dist/src/policy');
+const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../dist/src/paths');
+const { Daemon } = require('../dist/src/daemon');
+const { request } = require('../dist/src/local-http');
+const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists, stablePath } = require('../dist/src/util');
 
 test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   const f = path.join(HOME, 'x.jsonl');
@@ -126,7 +126,7 @@ test('daemon: payload lookup by record number, across restarts; state is flushed
 });
 
 test('cli token: a leftover admin-token is not sent when the recorder runs as its own user', () => {
-  const { cliToken } = require('../src/paths');
+  const { cliToken } = require('../dist/src/paths');
   ensureDirs();
   fs.writeFileSync(P.token, 'ingest-token');
   fs.writeFileSync(P.adminToken, 'stale-admin-token');

@@ -5,14 +5,12 @@
   "license": "Apache-2.0",
   "author": "Frederick Silva (codingsh)",
   "bin": {
-    "blackbox": "bin/blackbox.js"
+    "blackbox": "dist/bin/blackbox.js"
   },
   "files": [
-    "bin",
-    "src",
-    "eval",
-    "hooks",
+    "dist",
     ".claude-plugin",
+    "hooks",
     "README.md",
     "LICENSE"
   ],
@@ -22,7 +20,11 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "bench": "node bench/run.js",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.strict.json"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.strict.json",
+    "build": "node scripts/build.js",
+    "build:check": "node scripts/build.js --check",
+    "pretest": "npm run build",
+    "prepack": "npm run build"
   },
   "keywords": [
     "ai-agents",
