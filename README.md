@@ -135,6 +135,8 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
 
 Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
 
+The format is an open, versioned specification: [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), with [test vectors](docs/spec/vectors/) and a standalone verifier with no dependencies, [verifier/bb-verify.js](verifier/README.md), so anyone can check a ledger without trusting or installing the recorder.
+
 ## Grounded in research
 
 The design follows what recent work recommends: deterministic policy on actions, outside the model. Most relevant:
