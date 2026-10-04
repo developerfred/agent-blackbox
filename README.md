@@ -133,6 +133,8 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
   anchors.jsonl    chain heads you exported with `blackbox anchor`
 ```
 
+The format is specified in [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md) (draft, with test vectors), so a verifier does not need this code. `blackbox export` writes the ledger as [OpenTelemetry GenAI](docs/OTEL.md) traces and logs: metadata only, to a local folder unless you pass `--endpoint`.
+
 Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
 
 ## Grounded in research
@@ -167,6 +169,8 @@ Closed since earlier versions: payloads and summaries are now encrypted per sess
 
 - [Project site](https://developerfred.github.io/agent-blackbox/): overview, install, policy and privacy in one page
 - [docs/PRIVACY.md](docs/PRIVACY.md): what is recorded, where, for how long
+- [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md): the open ledger and event format
+- [docs/OTEL.md](docs/OTEL.md): OpenTelemetry GenAI export
 - [SECURITY.md](SECURITY.md): reporting a vulnerability or a policy bypass
 - [ROADMAP.md](ROADMAP.md): phases and gates
 
