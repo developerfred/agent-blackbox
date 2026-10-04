@@ -1,21 +1,22 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.baseName = exports.num = exports.escHtml = exports.exists = exports.isFile = exports.isDir = exports.pushCapped = exports.defined = exports.claudeDir = exports.sha256 = void 0;
+exports.readJson = readJson;
+exports.parseLine = parseLine;
+exports.readJsonl = readJsonl;
+exports.stablePath = stablePath;
 // Small helpers shared by several modules.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-/** @param {crypto.BinaryLike} data */
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
 const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
+exports.sha256 = sha256;
 /** Claude Code's config folder (CLAUDE_CONFIG_DIR or ~/.claude). */
 const claudeDir = () => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-/**
- * Parsed JSON file, or `fallback` when it is missing or invalid.
- * @template T
- * @param {string} file
- * @param {T} [fallback]
- * @returns {any | T}
- */
-function readJson(file, fallback = /** @type {any} */ (null)) {
+exports.claudeDir = claudeDir;
+/** Parsed JSON file, or `fallback` when it is missing or invalid. */
+function readJson(file, fallback = null) {
     try {
         return JSON.parse(fs.readFileSync(file, 'utf8'));
     }
@@ -23,11 +24,7 @@ function readJson(file, fallback = /** @type {any} */ (null)) {
         return fallback;
     }
 }
-/**
- * Parse one JSON line; null when it is not valid JSON.
- * @param {string} line
- * @returns {any}
- */
+/** Parse one JSON line; null when it is not valid JSON. */
 function parseLine(line) {
     try {
         return JSON.parse(line);
@@ -36,11 +33,7 @@ function parseLine(line) {
         return null;
     }
 }
-/**
- * Every valid JSON line of a file, in order (missing file: empty list).
- * @param {string} file
- * @returns {any[]}
- */
+/** Every valid JSON line of a file, in order (missing file: empty list). */
 function readJsonl(file) {
     let text;
     try {
@@ -60,32 +53,23 @@ function readJsonl(file) {
 /**
  * A copy of `obj` without keys whose value is null or undefined, so options
  * can be spread over defaults without overwriting them.
- * @template {object} T
- * @param {T} obj
- * @returns {Partial<T>}
  */
-const defined = (obj) => /** @type {Partial<T>} */ (Object.fromEntries(Object.entries(/** @type {Record<string, unknown>} */ (obj)).filter(([, v]) => v != null)));
-/**
- * `list` plus `item` (once), keeping only the newest `max`.
- * @template T
- * @param {T[]} list
- * @param {T} item
- * @param {number} [max]
- * @returns {T[]}
- */
+const defined = (obj) => Object.fromEntries(Object.entries(obj).filter(([, v]) => v != null));
+exports.defined = defined;
+/** `list` plus `item` (once), keeping only the newest `max`. */
 const pushCapped = (list, item, max = 500) => (list.includes(item) ? list : [...list, item].slice(-max));
-/** @param {string} p */
+exports.pushCapped = pushCapped;
 const statOf = (p) => { try {
     return fs.statSync(p);
 }
 catch {
     return null;
 } };
-/** @param {string} p */
 const isDir = (p) => !!statOf(p)?.isDirectory();
-/** @param {string} p */
+exports.isDir = isDir;
 const isFile = (p) => !!statOf(p)?.isFile();
-/** Does anything exist at this path? @param {string} p */
+exports.isFile = isFile;
+/** Does anything exist at this path? */
 const exists = (p) => { try {
     fs.accessSync(p);
     return true;
@@ -93,10 +77,10 @@ const exists = (p) => { try {
 catch {
     return false;
 } };
+exports.exists = exists;
 // Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
 // disappear on upgrade; its stable symlinks live in …/opt/<name>/. Anything that
 // must survive `brew upgrade` (hooks, the recorder service) points at the stable path.
-/** @param {string} p */
 function stablePath(p) {
     const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.*)$/.exec(p);
     if (!m)
@@ -104,14 +88,13 @@ function stablePath(p) {
     const opt = path.join(m[1], 'opt', m[2], m[3]);
     return fs.existsSync(opt) ? opt : p;
 }
-/** HTML-escape any value (null and undefined become the empty string). @param {unknown} s */
-const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => /** @type {Record<string, string>} */ ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
-/** A count with thousands separators ("1,234"); nothing becomes 0. @param {unknown} x */
+const HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+/** HTML-escape any value (null and undefined become the empty string). */
+const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => HTML_ESC[ch]);
+exports.escHtml = escHtml;
+/** A count with thousands separators ("1,234"); nothing becomes 0. */
 const num = (x) => Number(x || 0).toLocaleString('en-US');
-/**
- * Last path segment (POSIX or ~/ style), or `fallback` for an empty path.
- * @param {string} p
- * @param {string} [fallback]
- */
+exports.num = num;
+/** Last path segment (POSIX or ~/ style), or `fallback` for an empty path. */
 const baseName = (p, fallback = '') => p.split('/').filter(Boolean).pop() || fallback;
-module.exports = { escHtml, num, stablePath, baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };
+exports.baseName = baseName;

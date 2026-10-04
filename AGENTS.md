@@ -14,8 +14,8 @@ A tamper-evident flight recorder and prompt-injection firewall for AI coding age
 | `npm run typecheck` | `tsc -p tsconfig.json` (lenient) and `tsc -p tsconfig.strict.json` (`noImplicitAny`) |
 | `npm run build` | compiles `src/`, `bin/`, `eval/` into `dist/` |
 | `npm run build:check` | fails if the committed `dist/` is stale |
-| `npm run bench` | latency budgets (hook, policy, ledger) |
-| `node eval/run.js` | replays the attack corpus; reports attacks caught and false alarms |
+| `npm run bench` | latency budgets (hook, policy, ledger); runs the compiled copy, so build first |
+| `npm run eval` | replays the attack corpus; reports attacks caught and false alarms |
 
 ## Rules of the repository
 
@@ -44,5 +44,5 @@ See the module map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Rules and th
 
 ```sh
 npm run build && npm run typecheck && npm test && npm run build:check
-node eval/run.js
+npm run eval
 ```
