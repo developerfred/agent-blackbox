@@ -38,6 +38,7 @@
     "src/otel-genai.js",
     "src/paths.js",
     "src/scan-worker.js",
-    "scripts/build.js"
+    "scripts/build.js",
+    "src/brief.js"
   ]
 }

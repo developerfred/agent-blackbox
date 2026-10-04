@@ -252,6 +252,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               opt in to automatic batches published to a target you name (off by default)
   blackbox anchor --prove <seq> | --verify-proof <file>
                               inclusion proof for one record; check one offline against a published root
+  blackbox brief [SESSION | --last]
+                              Markdown summary of a session: prompts, tools, files changed, decisions
   blackbox export [--session ID] [--out dir] [--endpoint URL]
                               OpenTelemetry GenAI traces and logs (OTLP/JSON, metadata only) from the ledger;
                               writes files by default, sends only to the --endpoint you name
@@ -382,6 +384,20 @@ async function main() {
         return;
       }
       printTimeline(recs, id, { otel: flag('--otel') });
+      return;
+    }
+    case 'brief': {
+      // a deterministic Markdown summary of one session, for a PR, a ticket or a handoff
+      const recs = await readRecords();
+      let id = args.find((a) => !a.startsWith('-'));
+      if (!id || flag('--last')) id = (sessionsOf(recs)[0] || {}).id;
+      if (!id) { console.log('no sessions recorded yet'); return; }
+      let rows = recs;
+      // the recorder opens sealed summaries; the ledger file alone cannot
+      try { const e = await call('GET', `/api/events?session=${encodeURIComponent(id)}`); if (e.status === 200) rows = e.body; } catch { /* daemon down: use the file */ }
+      const md = require('../src/brief').brief(rows, id);
+      if (!md) { console.log(`no records for session ${id}`); process.exitCode = 1; return; }
+      process.stdout.write(md);
       return;
     }
     case 'verify': {
