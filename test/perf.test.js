@@ -163,3 +163,132 @@ test('util: stablePath maps a Homebrew Cellar path to its opt symlink, only when
   assert.equal(stablePath(cellar), path.join(prefix, 'opt', 'node', 'bin', 'node'));
   assert.equal(stablePath('/usr/local/bin/node'), '/usr/local/bin/node');
 });
+
+test('hook integrity: the hook reports its own installation at session start; a recorder that cannot see settings records it', async () => {
+  // 1. the real hook script posts a report with the event
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hb-'));
+  const claude = path.join(dir, 'claude');
+  fs.mkdirSync(claude);
+  fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ disableAllHooks: true }));
+  fs.mkdirSync(path.join(dir, 'bb'));
+  fs.writeFileSync(path.join(dir, 'bb', 'config.json'), JSON.stringify({ installed: { hooks: true, env: {} } }));
+  const received = [];
+  const server = http.createServer((req, res) => {
+    const c = []; req.on('data', (x) => c.push(x));
+    req.on('end', () => { received.push(JSON.parse(Buffer.concat(c).toString())); res.writeHead(200); res.end('{"stdout":null}'); });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const hookPort = server.address().port;
+  const hook = path.join(__dirname, '..', 'dist', 'bin', 'hook.js');
+  // async: this process serves the fake recorder, so it must not block while the hook runs
+  const run = (event) => new Promise((resolve) => {
+    const c = require('child_process').spawn(process.execPath, [hook], { env: { ...process.env, BLACKBOX_HOME: path.join(dir, 'bb'), BLACKBOX_PORT: String(hookPort), CLAUDE_CONFIG_DIR: claude } });
+    c.on('close', (status) => resolve({ status }));
+    c.stdin.end(JSON.stringify(event));
+  });
+  try {
+    assert.equal((await run({ hook_event_name: 'SessionStart', session_id: 'hb', cwd: '/p' })).status, 0);
+    assert.ok(received[0].blackbox_integrity, 'SessionStart carries the report');
+    assert.ok(received[0].blackbox_integrity.problems.some((p) => /disableAllHooks/.test(p)));
+    assert.equal((await run({ hook_event_name: 'PreToolUse', session_id: 'hb', tool_name: 'Bash', tool_input: { command: 'ls' } })).status, 0);
+    assert.equal(received[1].blackbox_integrity, undefined, 'other events do not pay for the check');
+  } finally { server.close(); }
+
+  // 2. a recorder that runs as its own user records what the hook reported, once per change
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const d = new Daemon();
+  d.cfg.hardened = true;
+  const dserver = await d.listen(port);
+  d.start();
+  const post = (e) => request({ port, method: 'POST', path: '/hook', token: tok, body: { session_id: 'hb2', cwd: '/p', hook_event_name: 'SessionStart', ...e } });
+  const before = readJsonl(P.ledger).length;
+  try {
+    const bad = { via: 'settings', fingerprint: 'fp-bad', problems: ['hooks removed from settings.json for: PreToolUse'] };
+    await post({ blackbox_integrity: bad });
+    await post({ blackbox_integrity: bad });
+    let recs = readJsonl(P.ledger).slice(before);
+    assert.equal(recs.filter((r) => r.kind === 'settings').length, 1, 'an unchanged report is not recorded twice');
+    const alert = recs.find((r) => r.kind === 'decision' && r.rule === 'hook-tamper');
+    assert.ok(alert && /PreToolUse/.test(alert.reason));
+    // fixed: a new fingerprint without problems is a change too
+    await post({ blackbox_integrity: { via: 'settings', fingerprint: 'fp-ok', problems: [] } });
+    recs = readJsonl(P.ledger).slice(before);
+    assert.equal(recs.filter((r) => r.kind === 'settings').length, 2);
+    // junk is bounded, never trusted, never fatal
+    await post({ blackbox_integrity: { problems: 'x'.repeat(10), via: { a: 1 } } });
+    await post({ blackbox_integrity: { via: 's', fingerprint: 'fp-long', problems: Array.from({ length: 50 }, () => 'p'.repeat(1000)) } });
+    const last = readJsonl(P.ledger).filter((r) => r.kind === 'settings').pop();
+    assert.ok(last.problems.length <= 10 && last.problems.every((p) => p.length <= 300));
+  } finally { dserver.closeAllConnections(); dserver.close(); }
+});
+
+test('docs: marked documents are listed and cleared through the recorder, with the clearing on the ledger', async () => {
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const call = (method, p, body, token) => request({ port, method, path: p, token, body });
+  const d = new Daemon();
+  const server = await d.listen(port);
+  d.start();
+  try {
+    const ev = (e) => call('POST', '/hook', { session_id: 'docs-a', cwd: '/proj', ...e }, tok);
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'WebFetch', tool_input: { url: 'https://x.example/p' }, tool_response: 'hi' });
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: '/proj/AGENTS.md', content: 'x' }, tool_response: '' });
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo y >> ~/.claude/CLAUDE.md' }, tool_response: '' });
+
+    assert.equal((await call('GET', '/api/docs', null, tok)).status, 403, 'the ingest token cannot read the marks');
+    const list = (await call('GET', '/api/docs', null, adm)).body;
+    assert.deepEqual(list.map((x) => x.path).sort(), ['/proj/AGENTS.md', '~/.claude/CLAUDE.md']);
+    assert.equal(list[0].session, 'docs-a');
+    assert.match(list[0].why, /WebFetch/);
+
+    assert.equal((await call('POST', '/docs/clear', { path: '/proj/AGENTS.md' }, tok)).status, 403, 'nor clear them');
+    // any spelling of the path: a different home, relative to the global file
+    const one = await call('POST', '/docs/clear', { path: '/Users/someone/.claude/CLAUDE.md' }, adm);
+    assert.deepEqual(one.body.cleared, ['~/.claude/CLAUDE.md']);
+    assert.deepEqual((await call('POST', '/docs/clear', { path: '/nowhere/AGENTS.md' }, adm)).body.cleared, []);
+    assert.deepEqual((await call('GET', '/api/docs', null, adm)).body.map((x) => x.path), ['/proj/AGENTS.md']);
+    assert.deepEqual((await call('POST', '/docs/clear', { all: true }, adm)).body.cleared, ['/proj/AGENTS.md']);
+    assert.deepEqual((await call('GET', '/api/docs', null, adm)).body, []);
+
+    // the clearing is evidence: it is on the chain
+    const recs = readJsonl(P.ledger).filter((r) => r.kind === 'docs');
+    assert.equal(recs.length, 2);
+    assert.deepEqual(recs[1].paths, ['/proj/AGENTS.md']);
+  } finally { server.closeAllConnections(); server.close(); }
+});
+
+test('timeline: records are read from the ledger on demand, so a purged session shows [erased] right away', async () => {
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const call = (method, p, body, token) => request({ port, method, path: p, token, body });
+  const d = new Daemon();
+  const server = await d.listen(port);
+  d.start();
+  try {
+    const sid = 'tl-purge';
+    for (const c of ['echo first-visible', 'echo second-visible']) {
+      await call('POST', '/hook', { hook_event_name: 'PostToolUse', session_id: sid, tool_name: 'Bash', tool_input: { command: c }, tool_response: 'ok' }, tok);
+    }
+    const events = (await call('GET', `/api/events?session=${sid}`, null, adm)).body;
+    assert.equal(events.length, 2);
+    assert.ok(events.every((r) => !('sig' in r)), 'no signature in the timeline');
+    assert.ok(events.every((r) => r.seq > 0 && r.session_id === sid));
+    assert.match(events[0].summary, /first-visible/);
+    assert.deepEqual(events.map((r) => r.seq), [...events.map((r) => r.seq)].sort((a, b) => a - b), 'in ledger order');
+    const sessions = (await call('GET', '/api/sessions', null, adm)).body.sessions;
+    const mine = sessions.find((s) => s.id === sid);
+    assert.equal(mine.events, 2);
+    assert.ok(!('seqs' in mine) && !('records' in mine), 'the session list does not carry records');
+
+    assert.equal((await call('POST', '/purge', { session: sid }, adm)).status, 200);
+    const after = (await call('GET', `/api/events?session=${sid}`, null, adm)).body;
+    assert.equal(after.length, 2, 'the chain still holds the records');
+    assert.ok(after.every((r) => !/visible/.test(r.summary)), 'but their text is gone as soon as the key is');
+    assert.ok(after.some((r) => r.summary === '[erased]'));
+    assert.equal((await call('GET', '/api/events?session=nope', null, adm)).status, 404);
+  } finally { server.closeAllConnections(); server.close(); }
+});

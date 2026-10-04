@@ -365,6 +365,21 @@ class Policy {
     softDecision(setting) {
         return this.cfg.mode === 'monitor' || setting === 'alert' ? 'alert' : 'ask';
     }
+    /** Documents marked as written by a tainted session, oldest first. */
+    listDocs() {
+        return Object.entries(this.state.docs || {}).map(([path, d]) => ({ path, ...d })).sort((a, b) => a.at.localeCompare(b.at));
+    }
+    /**
+     * Remove the mark of one document (any spelling of its path), or of all of them when path is null.
+     * @param {string | null} file @returns {string[]} the keys removed
+     */
+    clearDocs(file) {
+        const docs = this.state.docs || {};
+        const keys = file == null ? Object.keys(docs) : [docKey(file)].filter((k) => k in docs);
+        for (const k of keys)
+            delete docs[k];
+        return keys;
+    }
     /** Has the human declared this document reviewed (config trustedDocs: a path, or its tail)? @param {string} key */
     trustedDoc(key) {
         return (this.cfg.trustedDocs || []).some((t) => { const k = docKey(t); return key === k || key.endsWith('/' + k.replace(/^~?\//, '')); });

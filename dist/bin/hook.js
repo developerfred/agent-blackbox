@@ -70,6 +70,17 @@ process.stdin.on('end', () => {
         return done(adapter.encode(null, native, { askFallback: cfg.askFallback }));
     if (adapter.id !== 'claude')
         raw = JSON.stringify(ev);
+    // The recorder may run as another user and not see our settings: at the start of a Claude Code
+    // session we look at our own installation and report what we found with the event.
+    else if (ev.hook_event_name === 'SessionStart') {
+        try {
+            const { checkHooks } = require('../src/integrity');
+            const { HOOK_EVENTS } = require('../src/install');
+            const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null });
+            raw = JSON.stringify({ ...ev, blackbox_integrity: { via: r.via, fingerprint: r.fingerprint, problems: r.problems } });
+        }
+        catch { /* never block the event on a failed self-check */ }
+    }
     const fallback = () => {
         try {
             fs.mkdirSync(P.home, { recursive: true, mode: 0o700 });

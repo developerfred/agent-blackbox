@@ -163,4 +163,18 @@ function uninstall({ log = console.log } = {}) {
     log(`  removed agent-blackbox hooks and telemetry settings from ${file}`);
     log(`  evidence kept in ${P.home}`);
 }
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand };
+/** Hook scripts the installed hooks run, as written in settings.json. */
+function installedHookScripts() {
+    /** @type {Set<string>} */
+    const out = new Set();
+    for (const groups of Object.values(readSettings(settingsPath()).hooks || {})) {
+        for (const g of /** @type {any[]} */ (groups))
+            for (const h of g.hooks || []) {
+                const m = isOurs(h) && /^"[^"]*" "([^"]+)"/.exec(h.command);
+                if (m)
+                    out.add(m[1]);
+            }
+    }
+    return [...out];
+}
+module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, installedHookScripts };
