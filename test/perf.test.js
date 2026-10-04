@@ -223,3 +223,39 @@ test('hook integrity: the hook reports its own installation at session start; a 
     assert.ok(last.problems.length <= 10 && last.problems.every((p) => p.length <= 300));
   } finally { dserver.closeAllConnections(); dserver.close(); }
 });
+
+test('docs: marked documents are listed and cleared through the recorder, with the clearing on the ledger', async () => {
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const call = (method, p, body, token) => request({ port, method, path: p, token, body });
+  const d = new Daemon();
+  const server = await d.listen(port);
+  d.start();
+  try {
+    const ev = (e) => call('POST', '/hook', { session_id: 'docs-a', cwd: '/proj', ...e }, tok);
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'WebFetch', tool_input: { url: 'https://x.example/p' }, tool_response: 'hi' });
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path: '/proj/AGENTS.md', content: 'x' }, tool_response: '' });
+    await ev({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'echo y >> ~/.claude/CLAUDE.md' }, tool_response: '' });
+
+    assert.equal((await call('GET', '/api/docs', null, tok)).status, 403, 'the ingest token cannot read the marks');
+    const list = (await call('GET', '/api/docs', null, adm)).body;
+    assert.deepEqual(list.map((x) => x.path).sort(), ['/proj/AGENTS.md', '~/.claude/CLAUDE.md']);
+    assert.equal(list[0].session, 'docs-a');
+    assert.match(list[0].why, /WebFetch/);
+
+    assert.equal((await call('POST', '/docs/clear', { path: '/proj/AGENTS.md' }, tok)).status, 403, 'nor clear them');
+    // any spelling of the path: a different home, relative to the global file
+    const one = await call('POST', '/docs/clear', { path: '/Users/someone/.claude/CLAUDE.md' }, adm);
+    assert.deepEqual(one.body.cleared, ['~/.claude/CLAUDE.md']);
+    assert.deepEqual((await call('POST', '/docs/clear', { path: '/nowhere/AGENTS.md' }, adm)).body.cleared, []);
+    assert.deepEqual((await call('GET', '/api/docs', null, adm)).body.map((x) => x.path), ['/proj/AGENTS.md']);
+    assert.deepEqual((await call('POST', '/docs/clear', { all: true }, adm)).body.cleared, ['/proj/AGENTS.md']);
+    assert.deepEqual((await call('GET', '/api/docs', null, adm)).body, []);
+
+    // the clearing is evidence: it is on the chain
+    const recs = readJsonl(P.ledger).filter((r) => r.kind === 'docs');
+    assert.equal(recs.length, 2);
+    assert.deepEqual(recs[1].paths, ['/proj/AGENTS.md']);
+  } finally { server.closeAllConnections(); server.close(); }
+});
