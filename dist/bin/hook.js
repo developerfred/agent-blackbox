@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 // Claude Code command hook. Forwards the event to the daemon and prints its
 // decision. Never exits non-zero: if the daemon is down, the event is spooled
 // to disk (so the record has no gap) and the daemon is started in the background.
-const fs = require('fs');
-const path = require('path');
-const { request } = require('../src/local-http');
-const { P, readToken, loadConfig } = require('../src/paths');
+const fs = require("fs");
+const path = require("path");
+const local_http_1 = require("../src/local-http");
+const paths_1 = require("../src/paths");
 // Installed both as a plugin and with `blackbox install`? Record once: the
 // settings.json install wins and the plugin's copy of the hook steps aside.
 function pluginStepsAside() {
@@ -22,7 +23,6 @@ function pluginStepsAside() {
 // Which agent is calling: `--agent <id>` (default claude). The adapter owns the
 // agent's payload and reply formats; everything after it is agent-neutral.
 const agentArg = process.argv.indexOf('--agent');
-/** @type {import('../src/types').Adapter} */
 let adapter;
 try {
     adapter = require('../src/adapters').getAdapter(agentArg > 0 ? process.argv[agentArg + 1] || 'claude' : 'claude');
@@ -31,14 +31,12 @@ catch {
     process.exit(0); /* a hook never exits non-zero */
 }
 const shadowed = pluginStepsAside();
-/** @type {Buffer[]} */
 const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
     if (shadowed)
         process.exit(0);
     let raw = Buffer.concat(chunks).toString('utf8');
-    /** @type {Record<string, any>} */
     let native = {};
     try {
         native = JSON.parse(raw);
@@ -46,19 +44,17 @@ process.stdin.on('end', () => {
     catch {
         process.exit(0);
     }
-    /** @type {Partial<import('../src/types').HookEvent> | null} */
     let ev = null;
     try {
         ev = adapter.decode(native);
     }
     catch { /* an unreadable payload is not worth breaking the agent for */ }
-    /** @type {Partial<import('../src/types').Config>} */
     let cfg = {};
     try {
-        cfg = loadConfig();
+        cfg = (0, paths_1.loadConfig)();
     }
     catch { /* defaults */ }
-    /** @param {import('../src/types').HookOutput | null} out what the agent reads from the hook's stdout, stderr and exit code */
+    /** `out`: what the agent reads from the hook's stdout, stderr and exit code. */
     const done = (out) => {
         if (out && out.stdout)
             process.stdout.write(JSON.stringify(out.stdout));
@@ -76,22 +72,22 @@ process.stdin.on('end', () => {
         try {
             const { checkHooks } = require('../src/integrity');
             const { HOOK_EVENTS } = require('../src/install');
-            const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null });
+            const r = checkHooks({ expected: HOOK_EVENTS, installedVia: (0, paths_1.loadConfig)().installed?.hooks === true ? 'settings' : null });
             raw = JSON.stringify({ ...ev, blackbox_integrity: { via: r.via, fingerprint: r.fingerprint, problems: r.problems } });
         }
         catch { /* never block the event on a failed self-check */ }
     }
     const fallback = () => {
         try {
-            fs.mkdirSync(P.home, { recursive: true, mode: 0o700 });
-            fs.appendFileSync(P.spool, JSON.stringify({ received_at: new Date().toISOString(), payload: ev }) + '\n', { mode: 0o600 });
+            fs.mkdirSync(paths_1.P.home, { recursive: true, mode: 0o700 });
+            fs.appendFileSync(paths_1.P.spool, JSON.stringify({ received_at: new Date().toISOString(), payload: ev }) + '\n', { mode: 0o600 });
         }
         catch { /* nothing else we can do */ }
         // With the recorder running as a dedicated user, the system service
         // restarts it; this user must not start a second recorder of its own.
         if (!cfg.remoteDaemon) {
             try {
-                const log = fs.openSync(P.log, 'a');
+                const log = fs.openSync(paths_1.P.log, 'a');
                 require('child_process').spawn(process.execPath, [path.join(__dirname, 'blackbox.js'), 'daemon'], {
                     detached: true, stdio: ['ignore', log, log],
                 }).unref();
@@ -99,13 +95,13 @@ process.stdin.on('end', () => {
             catch { /* ignore */ }
         }
         if (ev.hook_event_name === 'PreToolUse' && cfg.failMode === 'closed') {
-            const out = adapter.failClosed(/** @type {import('../src/types').HookEvent} */ (ev), '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start', native);
+            const out = adapter.failClosed(ev, '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start', native);
             if (out)
                 return done(out);
         }
         done(adapter.encode(null, native, { askFallback: cfg.askFallback }));
     };
-    request({ port: P.port, method: 'POST', path: '/hook', token: readToken(), body: raw, timeout: 4000 }).then((res) => {
+    (0, local_http_1.request)({ port: paths_1.P.port, method: 'POST', path: '/hook', token: (0, paths_1.readToken)(), body: raw, timeout: 4000 }).then((res) => {
         if (res.status !== 200 || !res.body)
             return fallback();
         // The recorder is up: hand over anything queued while it was down. A
@@ -113,30 +109,28 @@ process.stdin.on('end', () => {
         drainSpool(() => done(adapter.encode(res.body, native, { askFallback: cfg.askFallback })));
     }).catch(fallback); // a hook never exits non-zero
 });
-/** @param {() => void} next */
 function drainSpool(next) {
-    /** @type {Partial<import('../src/types').Config>} */
     let cfg = {};
     try {
-        cfg = loadConfig();
+        cfg = (0, paths_1.loadConfig)();
     }
     catch { /* defaults */ }
-    if (!cfg.remoteDaemon || !fs.existsSync(P.spool))
+    if (!cfg.remoteDaemon || !fs.existsSync(paths_1.P.spool))
         return next();
-    const work = `${P.spool}.${process.pid}.sending`;
+    const work = `${paths_1.P.spool}.${process.pid}.sending`;
     try {
-        fs.renameSync(P.spool, work);
+        fs.renameSync(paths_1.P.spool, work);
     }
     catch {
         return next();
     }
     const events = require('../src/util').readJsonl(work);
     const putBack = () => { try {
-        fs.appendFileSync(P.spool, fs.readFileSync(work));
+        fs.appendFileSync(paths_1.P.spool, fs.readFileSync(work));
         fs.unlinkSync(work);
     }
     catch { /* keep */ } next(); };
-    request({ port: P.port, method: 'POST', path: '/spool', token: readToken(), body: { events }, timeout: 4000 }).then((res) => {
+    (0, local_http_1.request)({ port: paths_1.P.port, method: 'POST', path: '/spool', token: (0, paths_1.readToken)(), body: { events }, timeout: 4000 }).then((res) => {
         if (res.status !== 200)
             return putBack();
         fs.unlinkSync(work);

@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-'use strict';
 // Claude Code command hook. Forwards the event to the daemon and prints its
 // decision. Never exits non-zero: if the daemon is down, the event is spooled
 // to disk (so the record has no gap) and the daemon is started in the background.
-const fs = require('fs');
-const path = require('path');
-const { request } = require('../src/local-http');
-const { P, readToken, loadConfig } = require('../src/paths');
+import * as fs from 'fs';
+import * as path from 'path';
+import { request } from '../src/local-http';
+import { P, readToken, loadConfig } from '../src/paths';
+import type { Adapter, HookEvent, HookOutput, Config } from '../src/types';
 
 // Installed both as a plugin and with `blackbox install`? Record once: the
 // settings.json install wins and the plugin's copy of the hook steps aside.
-function pluginStepsAside() {
+function pluginStepsAside(): boolean {
   if (!process.argv.includes('--plugin')) return false;
   try { return fs.readFileSync(path.join(require('../src/util').claudeDir(), 'settings.json'), 'utf8').includes('agent-blackbox-hook'); } catch { return false; /* no settings: the plugin records */ }
 }
@@ -18,28 +18,23 @@ function pluginStepsAside() {
 // Which agent is calling: `--agent <id>` (default claude). The adapter owns the
 // agent's payload and reply formats; everything after it is agent-neutral.
 const agentArg = process.argv.indexOf('--agent');
-/** @type {import('../src/types').Adapter} */
-let adapter;
-try { adapter = require('../src/adapters').getAdapter(agentArg > 0 ? process.argv[agentArg + 1] || 'claude' : 'claude'); } catch { process.exit(0); /* a hook never exits non-zero */ }
+let adapter: Adapter;
+try { adapter = (require('../src/adapters') as typeof import('../src/adapters')).getAdapter(agentArg > 0 ? process.argv[agentArg + 1] || 'claude' : 'claude'); } catch { process.exit(0); /* a hook never exits non-zero */ }
 const shadowed = pluginStepsAside();
-/** @type {Buffer[]} */
-const chunks = [];
+const chunks: Buffer[] = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
   if (shadowed) process.exit(0);
   let raw = Buffer.concat(chunks).toString('utf8');
-  /** @type {Record<string, any>} */
-  let native = {};
+  let native: Record<string, any> = {};
   try { native = JSON.parse(raw); } catch { process.exit(0); }
-  /** @type {Partial<import('../src/types').HookEvent> | null} */
-  let ev = null;
+  let ev: Partial<HookEvent> | null = null;
   try { ev = adapter.decode(native); } catch { /* an unreadable payload is not worth breaking the agent for */ }
-  /** @type {Partial<import('../src/types').Config>} */
-  let cfg = {};
+  let cfg: Partial<Config> = {};
   try { cfg = loadConfig(); } catch { /* defaults */ }
 
-  /** @param {import('../src/types').HookOutput | null} out what the agent reads from the hook's stdout, stderr and exit code */
-  const done = (out) => {
+  /** `out`: what the agent reads from the hook's stdout, stderr and exit code. */
+  const done = (out: HookOutput | null): never => {
     if (out && out.stdout) process.stdout.write(JSON.stringify(out.stdout));
     if (out && out.stderr) process.stderr.write(out.stderr);
     process.exit(out && out.exit ? out.exit : 0);
@@ -73,7 +68,7 @@ process.stdin.on('end', () => {
       } catch { /* ignore */ }
     }
     if (ev.hook_event_name === 'PreToolUse' && cfg.failMode === 'closed') {
-      const out = adapter.failClosed(/** @type {import('../src/types').HookEvent} */ (ev), '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start', native);
+      const out = adapter.failClosed(ev as HookEvent, '[agent-blackbox] The recorder is not running and failMode is "closed". Start it with: blackbox start', native);
       if (out) return done(out);
     }
     done(adapter.encode(null, native, { askFallback: cfg.askFallback }));
@@ -87,10 +82,8 @@ process.stdin.on('end', () => {
   }).catch(fallback); // a hook never exits non-zero
 });
 
-/** @param {() => void} next */
-function drainSpool(next) {
-  /** @type {Partial<import('../src/types').Config>} */
-  let cfg = {};
+function drainSpool(next: () => void): void {
+  let cfg: Partial<Config> = {};
   try { cfg = loadConfig(); } catch { /* defaults */ }
   if (!cfg.remoteDaemon || !fs.existsSync(P.spool)) return next();
   const work = `${P.spool}.${process.pid}.sending`;
