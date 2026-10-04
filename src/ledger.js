@@ -21,6 +21,7 @@ function canon(v) {
 }
 
 const { sha256, parseLine } = require('./util');
+const { merkleRoot, MERKLE_ALG } = require('./merkle');
 
 /** @param {import('./types').Paths} P */
 function loadOrCreateKeys(P) {
@@ -170,6 +171,8 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
   let prev = GENESIS;
   let expectSeq = 1;
   let chainPub = pub;
+  /** record hashes by position, for checking anchor batches @type {string[]} */
+  const hashes = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line) continue;
@@ -212,6 +215,14 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
         if (sha256(plain) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
       } else if (sha256(fs.readFileSync(file)) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
     }
+    if (rec.kind === 'anchor') {
+      // a batch root must cover exactly the records it names
+      const ok = rec.alg === MERKLE_ALG && Number.isInteger(rec.from) && Number.isInteger(rec.to)
+        && rec.from >= 1 && rec.to >= rec.from && rec.to < rec.seq && rec.count === rec.to - rec.from + 1;
+      if (!ok) fail(`seq ${rec.seq}: anchor record is malformed or uses an unknown algorithm`);
+      else if (merkleRoot(hashes.slice(rec.from - 1, rec.to)) !== rec.root) fail(`seq ${rec.seq}: anchor root does not match records ${rec.from}..${rec.to}`);
+    }
+    hashes.push(hash);
     if (rec.session_id) sessions.add(rec.session_id);
     prev = hash;
     expectSeq = rec.seq + 1;
