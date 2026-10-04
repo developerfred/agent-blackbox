@@ -24,6 +24,7 @@
     "src/share.js",
     "src/scan.js",
     "src/adapters/*.js",
+    "eval/native.js",
     "src/install-agent.js"
   ]
 }
