@@ -12,6 +12,7 @@ const { Ledger, verify } = require('./ledger');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
 
+const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
 const ORPHAN_AFTER_MS = 3 * 60 * 1000;
 const clip = (s, n = 160) => {
@@ -195,6 +196,19 @@ class Daemon {
     }
   }
 
+  // The one-line summary holds prompt, command and path text, so it is sealed
+  // under the session key like the payload: `purge` erases it too. The hash
+  // chain covers the sealed form.
+  sealSummary(text, sid) {
+    if (!this.vault || !text) return text;
+    return SEALED_PREFIX + this.vault.seal(scopeOf(sid), Buffer.from(text, 'utf8')).data.toString('base64');
+  }
+
+  openSummary(text) {
+    if (!text.startsWith(SEALED_PREFIX)) return text;
+    try { return this.vault.open(Buffer.from(text.slice(SEALED_PREFIX.length), 'base64')).toString('utf8'); } catch { return '[erased]'; }
+  }
+
   index(rec) {
     if (!rec.session_id) return;
     let s = this.sessions.get(rec.session_id);
@@ -209,6 +223,7 @@ class Daemon {
     if (rec.kind === 'taint') s.flags[rec.flag] = rec.why;
     if (rec.kind === 'decision' && rec.decision !== 'note') s.decisions++;
     const { sig, ...lite } = rec;
+    if (typeof lite.summary === 'string') lite.summary = this.openSummary(lite.summary);
     s.records.push(lite);
     if (s.records.length > 5000) s.records.shift();
   }
@@ -250,7 +265,7 @@ class Daemon {
       tool_name: ev.tool_name,
       tool_use_id: ev.tool_use_id,
       cwd: event === 'SessionStart' ? ev.cwd : undefined,
-      summary: summarize(clean),
+      summary: this.sealSummary(summarize(clean), sid),
       payload: blob.sha,
       payload_size: blob.size,
       key: blob.key,
