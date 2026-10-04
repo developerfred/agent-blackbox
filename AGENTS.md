@@ -22,7 +22,7 @@ A tamper-evident flight recorder and prompt-injection firewall for AI coding age
 1. **`dist/` is committed.** The plugin, the Homebrew formula and `npx` run it without a build. After any change under `src/`, `bin/` or `eval/`, run `npm run build` and commit `dist/` in the same change. Never resolve a `dist/` merge conflict by hand: take either side, then rebuild.
 2. **Tests run against `dist/`**, so `npm test` rebuilds first.
 3. **No runtime dependencies.** `typescript` is a dev dependency only. Do not add a package to `dependencies`.
-4. **New code is typed.** Add JSDoc (`@param`, `@type`) and put the file in `tsconfig.strict.json`. Shared shapes live in `src/types.d.ts`.
+4. **New code is typed.** `tsconfig.strict.json` (`noImplicitAny`) covers everything under `src/`, `bin/`, `eval/` and `bench/` by glob, so a new file is checked from the start. Write new modules in TypeScript (`.ts`); shared shapes live in `src/types.d.ts`.
 5. **A change ships with its test**, in the same PR. A policy rule also ships with attack and benign cases in `eval/corpus.js`; the eval must keep 0 false alarms on the benign set.
 6. **Small PRs, one concern each**, on a new branch. Merge only when CI is green on Node 18, 20 and 22.
 7. **Docs, comments, commit messages and PR bodies are in English.**
