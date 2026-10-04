@@ -197,7 +197,7 @@ if [ -f "$HUMAN_HOME/config.json" ] && [ ! -f "$DATA/config.json" ]; then
 fi
 
 # 5. the human's hooks now forward to the service and never start a recorder of their own
-"$NODE" -e 'const fs=require("fs");const f=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}c.remoteDaemon=true;c.recorderHome=process.argv[2];c.recorderUser=process.argv[3];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\\n")' "$HUMAN_HOME/config.json" "$DATA" ${o.user}
+"$NODE" -e 'const fs=require("fs");const f=process.argv[1];let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}c.remoteDaemon=true;c.recorderHome=process.argv[2];c.recorderUser=process.argv[3];c.recorderCode=process.argv[4];fs.writeFileSync(f,JSON.stringify(c,null,2)+"\\n")' "$HUMAN_HOME/config.json" "$DATA" ${o.user} "$CODE"
 chown "$HUMAN" "$HUMAN_HOME/config.json"
 
 # the human's own recorder must not keep running next to the service
@@ -211,6 +211,7 @@ echo "recorder now runs as ${o.user}. Check it as ${o.human}:"
 echo "  blackbox status        (shows the recorder's user id, which must not be yours)"
 echo "  blackbox harden --check"
 echo "Reading, verifying and purging now ask for sudo: the agent cannot type your password."
+echo "Now run 'blackbox install' as ${o.human}: the hooks will point at $CODE/dist/bin/hook.js, which the agent cannot edit."
 echo "The ledger from before stays in $HUMAN_HOME and is readable by the agent: anchor it, then purge what you do not need."
 `;
 }
@@ -232,7 +233,7 @@ ${stop}
 rm -rf ${q(o.code)}
 HUMAN_CONFIG=${q(path.join(o.humanHome, 'config.json'))}
 if [ -f "$HUMAN_CONFIG" ]; then
-  ${q(opts.node || process.execPath)} -e 'const fs=require("fs");const f=process.argv[1];const c=JSON.parse(fs.readFileSync(f,"utf8"));delete c.remoteDaemon;delete c.recorderHome;delete c.recorderUser;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\\n")' "$HUMAN_CONFIG"
+  ${q(opts.node || process.execPath)} -e 'const fs=require("fs");const f=process.argv[1];const c=JSON.parse(fs.readFileSync(f,"utf8"));delete c.remoteDaemon;delete c.recorderHome;delete c.recorderUser;delete c.recorderCode;fs.writeFileSync(f,JSON.stringify(c,null,2)+"\\n")' "$HUMAN_CONFIG"
 fi
 echo "service removed. The user ${o.user} and ${o.data} are kept; remove them by hand when you no longer need the history."
 `;

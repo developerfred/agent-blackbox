@@ -472,8 +472,8 @@ async function main() {
         case 'managed-settings': {
             // hooks owned by an admin: print what to put in the managed settings file
             const { managedSettingsPath, managedSettingsSnippet } = require('../src/integrity');
-            const { HOOK_EVENTS, stablePath } = require('../src/install');
-            const command = `"${stablePath(process.execPath)}" "${stablePath(path.resolve(__dirname, 'hook.js'))}" # agent-blackbox-hook`;
+            const { HOOK_EVENTS, hookCommand } = require('../src/install');
+            const command = hookCommand();
             console.log(dim(`# Merge into ${managedSettingsPath()} (needs an admin account; on a managed fleet, push it with MDM).`));
             console.log(dim('# Hooks defined there cannot be edited or removed from the user\'s own settings files.'));
             console.log(JSON.stringify(managedSettingsSnippet({ command, events: HOOK_EVENTS }), null, 2));

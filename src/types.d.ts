@@ -21,6 +21,8 @@ export interface Config {
   remoteDaemon?: boolean;
   recorderHome?: string;
   recorderUser?: string;
+  /** root-owned copy of the code the recorder runs from; hooks point there */
+  recorderCode?: string;
   /** set in the recorder's own config when it cannot see the human's settings */
   hardened?: boolean;
   installed?: { hooks?: boolean; env: Record<string, string | null>; at?: string; settings?: string };
