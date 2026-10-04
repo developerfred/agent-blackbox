@@ -1,4 +1,11 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.publicNumbers = publicNumbers;
+exports.storyHtml = storyHtml;
+exports.xCardHtml = xCardHtml;
+exports.caption = caption;
+exports.findChrome = findChrome;
+exports.makeShareKit = makeShareKit;
 // `blackbox share`: social assets from a scan, made locally.
 //   x-card.png   1200x675  (X, LinkedIn)
 //   story.png    1080x1920 (TikTok, Reels, Stories: last frame)
@@ -8,15 +15,14 @@
 // Only aggregate numbers and the fixed category labels go in: no project
 // names, hosts, skill names, commands or prompts.
 // Rendering uses a Chrome/Chromium already on the machine (headless).
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const http = require('http');
-const { spawn, spawnSync } = require('child_process');
-const { CATEGORIES } = require('./scan');
-const { escHtml: esc, num: n } = require('./util');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const http = require("http");
+const child_process_1 = require("child_process");
+const scan_1 = require("./scan");
+const util_1 = require("./util");
 // The public subset of a scan summary.
-/** @param {import('./types').ScanSummary} S */
 function publicNumbers(S) {
     const skills = S.skills || [];
     return {
@@ -25,21 +31,20 @@ function publicNumbers(S) {
         outboundCalls: S.outboundCalls || 0, trifectaSessions: S.trifectaSessions || 0,
         wouldDenyCalls: S.wouldDenyCalls || 0,
         skillsUsed: skills.length, riskySkills: skills.filter((k) => k.risk === 'high' || k.risk === 'medium').length,
-        categories: CATEGORIES.map((c, i) => ({ label: c.label, value: (S.categories || {})[c.id] || 0, slot: i })),
+        categories: scan_1.CATEGORIES.map((c, i) => ({ label: c.label, value: (S.categories || {})[c.id] || 0, slot: i })),
     };
 }
 const PALETTE = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#14a114', '#9085e9'];
 const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 // One page that can draw any moment of the story: render(t) for t in seconds.
 // Drawn as SVG so every frame is exact and the layout never depends on fonts loading late.
-/** @param {import('./types').ScanSummary} S */
 function storyHtml(S) {
     const data = JSON.stringify(publicNumbers(S));
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
 <title>What my AI coding agent did</title>
 <style>html,body{margin:0;background:#0b0e14;overflow:hidden}svg{display:block;width:100vw;height:auto;max-width:1080px;margin:0 auto}
 @media (min-aspect-ratio:9/16){svg{width:auto;height:100vh}}</style></head><body>
-<svg id="s" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" font-family="${esc(FONT)}"></svg>
+<svg id="s" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" font-family="${(0, util_1.escHtml)(FONT)}"></svg>
 <script>
 const D=${data};const P=${JSON.stringify(PALETTE)};const DUR=10;
 const clamp=(x)=>Math.max(0,Math.min(1,x));const ease=(x)=>1-Math.pow(1-clamp(x),3);
@@ -96,39 +101,34 @@ else render(DUR);
 </script></body></html>`;
 }
 // Static 1200x675 card for X.
-/** @param {import('./types').ScanSummary} S */
 function xCardHtml(S) {
     const D = publicNumbers(S);
     const max = Math.max(1, ...D.categories.map((c) => c.value));
     const total = Math.max(1, D.toolCalls);
     const bars = D.categories.map((c, i) => {
         const y = 210 + i * 46, w = Math.max(6, (300 * c.value) / max);
-        return `<text x="70" y="${y + 24}" font-size="21" fill="#c9d1d9">${esc(c.label)}</text>
+        return `<text x="70" y="${y + 24}" font-size="21" fill="#c9d1d9">${(0, util_1.escHtml)(c.label)}</text>
       <path d="M260 ${y + 6}h${w - 6}a6 6 0 0 1 6 6v12a6 6 0 0 1 -6 6h-${w - 6}z" fill="${PALETTE[c.slot]}"/>
       <text x="${260 + w + 12}" y="${y + 24}" font-size="19" fill="#9da7b3" font-weight="600">${Math.round((100 * c.value) / total)}%</text>`;
     }).join('');
-    /** @param {number} x @param {number} y @param {unknown} v @param {string} l @param {string} col */
     const stat = (x, y, v, l, col) => `<rect x="${x}" y="${y}" width="250" height="150" rx="16" fill="#141922" stroke="#232a35"/>
-    <text x="${x + 24}" y="${y + 76}" font-size="54" font-weight="800" fill="${col}">${esc(n(v))}</text>
-    <text x="${x + 24}" y="${y + 116}" font-size="18" fill="#9da7b3">${esc(l)}</text>`;
+    <text x="${x + 24}" y="${y + 76}" font-size="54" font-weight="800" fill="${col}">${(0, util_1.escHtml)((0, util_1.num)(v))}</text>
+    <text x="${x + 24}" y="${y + 116}" font-size="18" fill="#9da7b3">${(0, util_1.escHtml)(l)}</text>`;
     return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#0b0e14}svg{display:block}</style></head><body>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" font-family="${esc(FONT)}">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" font-family="${(0, util_1.escHtml)(FONT)}">
 <rect width="1200" height="675" fill="#0b0e14"/><circle cx="1150" cy="40" r="300" fill="#3987e5" opacity="0.07"/>
 <text x="70" y="96" font-size="44" font-weight="800" fill="#f0f3f6">What my AI coding agent did</text>
-<text x="70" y="140" font-size="24" fill="#7d8590">${esc(`last ${D.days} days · ${n(D.toolCalls)} ${plural(D.toolCalls, 'tool call', 'tool calls')} · ${n(D.sessions)} ${plural(D.sessions, 'session', 'sessions')}`)}</text>
+<text x="70" y="140" font-size="24" fill="#7d8590">${(0, util_1.escHtml)(`last ${D.days} days · ${(0, util_1.num)(D.toolCalls)} ${plural(D.toolCalls, 'tool call', 'tool calls')} · ${(0, util_1.num)(D.sessions)} ${plural(D.sessions, 'session', 'sessions')}`)}</text>
 ${bars}
 ${stat(640, 200, D.privateSessions, plural(D.privateSessions, 'session read secrets', 'sessions read secrets'), '#f0b04a')}${stat(910, 200, D.outboundCalls, plural(D.outboundCalls, 'call sent data out', 'calls sent data out'), '#f0b04a')}
 ${stat(640, 370, D.trifectaSessions, plural(D.trifectaSessions, 'lethal-trifecta session', 'lethal-trifecta sessions'), '#ff7a66')}${stat(910, 370, D.wouldDenyCalls, plural(D.wouldDenyCalls, 'call would be blocked', 'calls would be blocked'), '#ff7a66')}
 <text x="70" y="630" font-size="22" fill="#7d8590">npx agent-blackbox scan · scanned locally, nothing uploaded</text>
 </svg></body></html>`;
 }
-/** @param {unknown} x @param {string} one @param {string} many */
 const plural = (x, one, many) => (Number(x) === 1 ? one : many);
-/** @param {import('./types').ScanSummary} S */
 function caption(S) {
     const D = publicNumbers(S);
-    /** @param {unknown} x @param {string} one @param {string} many */
-    const p = (x, one, many) => `${n(x)} ${plural(x, one, many)}`;
+    const p = (x, one, many) => `${(0, util_1.num)(x)} ${plural(x, one, many)}`;
     const lines = [
         `I audited what my AI coding agent did in the last ${D.days} days: ${p(D.toolCalls, 'tool call', 'tool calls')} across ${p(D.sessions, 'session', 'sessions')}.`,
         D.privateSessions ? `It read secrets or credentials in ${p(D.privateSessions, 'session', 'sessions')} and sent data out ${p(D.outboundCalls, 'time', 'times')}.` : `It sent data out of my machine ${p(D.outboundCalls, 'time', 'times')}.`,
@@ -145,22 +145,16 @@ function findChrome() {
     const mac = ['Google Chrome', 'Chromium', 'Brave Browser', 'Microsoft Edge', 'Google Chrome Canary']
         .map((a) => `/Applications/${a}.app/Contents/MacOS/${a}`);
     const linux = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge']
-        .map((b) => { const r = spawnSync('sh', ['-c', `command -v ${b}`], { encoding: 'utf8' }); return r.stdout.trim(); });
+        .map((b) => { const r = (0, child_process_1.spawnSync)('sh', ['-c', `command -v ${b}`], { encoding: 'utf8' }); return r.stdout.trim(); });
     const extra = ['/opt/pw-browsers/chromium', ...fs.existsSync('/opt/pw-browsers') ? fs.readdirSync('/opt/pw-browsers').filter((d) => /^chromium-\d+$/.test(d)).map((d) => `/opt/pw-browsers/${d}/chrome-linux/chrome`) : []];
     return [...mac, ...linux, ...extra].find((p) => p && fs.existsSync(p) && fs.statSync(p).isFile()) || null;
 }
 // Chrome refuses to run as root without --no-sandbox (containers, CI). Only then.
 const rootFlags = () => (typeof process.getuid === 'function' && process.getuid() === 0 ? ['--no-sandbox'] : []);
-const hasFfmpeg = () => spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
-// Minimal Chrome DevTools Protocol client over the global WebSocket (Node 22+).
-/**
- * @typedef {(method: string, params?: object) => Promise<any>} Send a DevTools protocol call
- * @typedef {{ send: Send, events: any[] }} Cdp
- */
-/** @template T @param {string} chrome @param {(cdp: Cdp) => Promise<T>} fn @returns {Promise<T>} */
+const hasFfmpeg = () => (0, child_process_1.spawnSync)('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 async function withChrome(chrome, fn) {
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
-    const proc = spawn(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
+    const proc = (0, child_process_1.spawn)(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
         '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--force-device-scale-factor=1',
         // the window must be at least as large as every capture, or Chrome tiles the image
         '--window-size=1280,2000', 'about:blank'], { stdio: 'ignore' });
@@ -177,7 +171,6 @@ async function withChrome(chrome, fn) {
             throw new Error('Chrome did not start');
         const targets = await new Promise((resolve, reject) => {
             http.get({ host: '127.0.0.1', port, path: '/json/list' }, (res) => {
-                /** @type {Buffer[]} */
                 const c = [];
                 res.on('data', (d) => c.push(d));
                 res.on('end', () => { try {
@@ -188,12 +181,11 @@ async function withChrome(chrome, fn) {
                 } });
             }).on('error', reject);
         });
-        const page = targets.find((/** @type {{ type: string }} */ t) => t.type === 'page');
+        const page = targets.find((t) => t.type === 'page');
         const ws = new WebSocket(page.webSocketDebuggerUrl);
-        await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+        await new Promise((r, j) => { ws.onopen = () => r(); ws.onerror = j; });
         let id = 0;
         const waiting = new Map();
-        /** @type {any[]} */
         const events = [];
         ws.onmessage = (m) => {
             const msg = JSON.parse(m.data);
@@ -205,7 +197,6 @@ async function withChrome(chrome, fn) {
             else if (msg.method)
                 events.push(msg.method);
         };
-        /** @type {Send} */
         const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; waiting.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
         await send('Page.enable');
         const result = await fn({ send, events });
@@ -220,7 +211,6 @@ async function withChrome(chrome, fn) {
         catch { /* best effort */ }
     }
 }
-/** @param {Send} send @param {any[]} events @param {string} file @param {number} w @param {number} h */
 async function openPage(send, events, file, w, h) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     events.length = 0;
@@ -232,13 +222,11 @@ async function openPage(send, events, file, w, h) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
     await send('Runtime.evaluate', { expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))', awaitPromise: true });
 }
-/** @param {Send} send @param {number} w @param {number} h */
 const shot = async (send, w, h) => Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: w, height: h, scale: 1 } })).data, 'base64');
 // Fallback without WebSocket: one headless screenshot per call.
-/** @param {string} chrome @param {string} file @param {number} w @param {number} h @param {string} out */
 function screenshotOnce(chrome, file, w, h, out) {
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
-    const r = spawnSync(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, `--window-size=${w},${h}`,
+    const r = (0, child_process_1.spawnSync)(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, `--window-size=${w},${h}`,
         '--force-device-scale-factor=1', `--screenshot=${out}`, 'file://' + file + '?driven=1'], { stdio: 'ignore', timeout: 60000 });
     try {
         fs.rmSync(profile, { recursive: true, force: true });
@@ -246,11 +234,6 @@ function screenshotOnce(chrome, file, w, h, out) {
     catch { /* ignore */ }
     return r.status === 0 && fs.existsSync(out);
 }
-/**
- * @param {any} S scan summary
- * @param {string} outDir
- * @param {{ video?: boolean, log?: (msg: string) => void }} [opts]
- */
 async function makeShareKit(S, outDir, { video = true, log = () => { } } = {}) {
     fs.mkdirSync(outDir, { recursive: true });
     const made = [];
@@ -287,7 +270,7 @@ async function makeShareKit(S, outDir, { video = true, log = () => { } } = {}) {
                     if (i % 60 === 0)
                         log(`  rendering video ${Math.round((100 * i) / total)}%`);
                 }
-                const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(frames, 'f%04d.png'),
+                const r = (0, child_process_1.spawnSync)('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', path.join(frames, 'f%04d.png'),
                     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', '-movflags', '+faststart', path.join(outDir, 'story.mp4')], { stdio: 'inherit' });
                 fs.rmSync(frames, { recursive: true, force: true });
                 if (r.status === 0)
@@ -309,4 +292,3 @@ async function makeShareKit(S, outDir, { video = true, log = () => { } } = {}) {
     fs.unlinkSync(xFile);
     return { made, chrome };
 }
-module.exports = { makeShareKit, storyHtml, xCardHtml, caption, publicNumbers, findChrome };
