@@ -1,4 +1,8 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.GENAI = void 0;
+exports.toOtlpTraces = toOtlpTraces;
+exports.toOtlpLogs = toOtlpLogs;
 // Ledger records -> OpenTelemetry (OTLP/JSON), using the GenAI semantic
 // conventions where one exists and a `blackbox.*` namespace for what the
 // conventions do not cover (policy decisions, taint, chain position).
@@ -10,8 +14,8 @@
 //
 // The GenAI conventions are still in development upstream, so the attribute
 // names are kept in one table (GENAI) to follow them as they change.
-const { sha256 } = require('./util');
-const GENAI = {
+const util_1 = require("./util");
+exports.GENAI = {
     operation: 'gen_ai.operation.name',
     provider: 'gen_ai.provider.name',
     conversation: 'gen_ai.conversation.id',
@@ -20,8 +24,6 @@ const GENAI = {
     toolName: 'gen_ai.tool.name',
     toolCallId: 'gen_ai.tool.call.id',
 };
-/** @typedef {{ key: string, value: Record<string, unknown> }} KeyValue */
-/** @param {string} key @param {unknown} v @returns {KeyValue | null} */
 function kv(key, v) {
     if (v === undefined || v === null || v === '')
         return null;
@@ -33,30 +35,23 @@ function kv(key, v) {
         return { key, value: { doubleValue: v } };
     return { key, value: { stringValue: String(v) } };
 }
-/** @param {Record<string, unknown>} o @returns {KeyValue[]} */
-const attrs = (o) => /** @type {KeyValue[]} */ (Object.entries(o).map(([k, v]) => kv(k, v)).filter(Boolean));
-/** @param {string} iso */
+const attrs = (o) => Object.entries(o).map(([k, v]) => kv(k, v)).filter(Boolean);
 const nanos = (iso) => String(BigInt(Date.parse(iso)) * 1000000n);
-/** Stable ids so re-exporting the same ledger gives the same trace and span ids.
- * @param {string} s @param {number} len */
-const id = (s, len) => sha256(s).slice(0, len);
-/** @param {string} version */
+/** Stable ids so re-exporting the same ledger gives the same trace and span ids. */
+const id = (s, len) => (0, util_1.sha256)(s).slice(0, len);
 function resource(version) {
     return { attributes: attrs({ 'service.name': 'agent-blackbox', 'service.version': version }) };
 }
 const SCOPE = { name: 'agent-blackbox.ledger' };
-/** @param {any} rec */
 const chainAttrs = (rec) => ({ 'blackbox.record.seq': rec.seq, 'blackbox.record.hash': rec.hash });
 /**
  * One `execute_tool` span per tool call: starts at PreToolUse, ends at the
  * PostToolUse / PostToolUseFailure with the same tool_use_id. A call that never
  * finished (denied, or the session ended) is a zero-length span.
- * @param {any[]} records @param {{ version?: string }} [opts]
  */
 function toOtlpTraces(records, { version = '0' } = {}) {
-    /** @type {Map<string, { pre?: any, post?: any, decisions: any[], taints: any[] }>} */
     const calls = new Map();
-    const get = (/** @type {string} */ k) => {
+    const get = (k) => {
         let c = calls.get(k);
         if (!c) {
             c = { decisions: [], taints: [] };
@@ -94,12 +89,12 @@ function toOtlpTraces(records, { version = '0' } = {}) {
             startTimeUnixNano: nanos(start.ts),
             endTimeUnixNano: nanos(end.ts),
             attributes: attrs({
-                [GENAI.operation]: 'execute_tool',
-                [GENAI.provider]: 'anthropic',
-                [GENAI.conversation]: first.session_id,
-                [GENAI.agentId]: first.agent_id,
-                [GENAI.toolName]: first.tool_name,
-                [GENAI.toolCallId]: first.tool_use_id,
+                [exports.GENAI.operation]: 'execute_tool',
+                [exports.GENAI.provider]: 'anthropic',
+                [exports.GENAI.conversation]: first.session_id,
+                [exports.GENAI.agentId]: first.agent_id,
+                [exports.GENAI.toolName]: first.tool_name,
+                [exports.GENAI.toolCallId]: first.tool_use_id,
                 'blackbox.record.seq': start.seq,
                 'blackbox.record.hash': start.hash,
                 'blackbox.decision': (denied || c.decisions[0] || {}).decision,
@@ -120,7 +115,6 @@ function toOtlpTraces(records, { version = '0' } = {}) {
 // Records that are not tool calls become log records: policy decisions are the
 // audit trail the GenAI conventions do not define yet, so they carry blackbox.*.
 const LOG_KINDS = new Set(['decision', 'taint', 'intent', 'purge', 'settings', 'genesis']);
-/** @param {any[]} records @param {{ version?: string }} [opts] */
 function toOtlpLogs(records, { version = '0' } = {}) {
     const logRecords = [];
     for (const r of records) {
@@ -134,9 +128,9 @@ function toOtlpLogs(records, { version = '0' } = {}) {
             spanId: r.session_id && r.tool_use_id ? id(r.session_id + '/' + r.tool_use_id, 16) : undefined,
             attributes: attrs({
                 'event.name': `blackbox.${r.kind}`,
-                [GENAI.conversation]: r.session_id,
-                [GENAI.toolName]: r.tool_name,
-                [GENAI.toolCallId]: r.tool_use_id,
+                [exports.GENAI.conversation]: r.session_id,
+                [exports.GENAI.toolName]: r.tool_name,
+                [exports.GENAI.toolCallId]: r.tool_use_id,
                 'blackbox.decision': r.decision,
                 'blackbox.rule': r.rule,
                 'blackbox.taint.flag': r.flag,
@@ -147,4 +141,3 @@ function toOtlpLogs(records, { version = '0' } = {}) {
     }
     return { resourceLogs: [{ resource: resource(version), scopeLogs: [{ scope: SCOPE, logRecords }] }] };
 }
-module.exports = { toOtlpTraces, toOtlpLogs, GENAI };

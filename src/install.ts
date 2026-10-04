@@ -1,31 +1,30 @@
-'use strict';
 // Wire agent-blackbox into Claude Code's user settings (~/.claude/settings.json).
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('./paths');
-const { claudeDir, stablePath } = require('./util');
+import * as fs from 'fs';
+import * as path from 'path';
+import { P, ensureDirs, readToken, loadConfig, saveConfig } from './paths';
+import { claudeDir, stablePath } from './util';
+import type { Mode } from './types';
 
-const HOOK_EVENTS = [
+// re-exported: the CLI and the installers for other agents reach it from here
+export { stablePath };
+
+export const HOOK_EVENTS = [
   'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
   'PermissionDenied', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure',
   'PreCompact', 'Notification', 'SessionEnd',
 ];
 
-const settingsPath = () => path.join(claudeDir(), 'settings.json');
+export const settingsPath = (): string => path.join(claudeDir(), 'settings.json');
 const hookScript = stablePath(path.resolve(__dirname, '..', 'bin', 'hook.js'));
-const nodePath = () => stablePath(process.execPath);
+export const nodePath = (): string => stablePath(process.execPath);
 // With the recorder as its own user, the hook script is the root-owned copy it runs from:
 // an agent running as you can edit your clone, but not that folder.
-const hookScriptPath = () => { const code = loadConfig().recorderCode; return code ? path.join(code, 'dist', 'bin', 'hook.js') : hookScript; };
-const hookCommand = () => `"${nodePath()}" "${hookScriptPath()}" # agent-blackbox-hook`;
-/** @param {any} h */
-const isOurs = (h) => h && typeof h.command === 'string' && h.command.includes('agent-blackbox-hook');
+export const hookScriptPath = (): string => { const code = loadConfig().recorderCode; return code ? path.join(code, 'dist', 'bin', 'hook.js') : hookScript; };
+export const hookCommand = (): string => `"${nodePath()}" "${hookScriptPath()}" # agent-blackbox-hook`;
+const isOurs = (h: any): boolean => h && typeof h.command === 'string' && h.command.includes('agent-blackbox-hook');
 
-/** @param {{ raw?: boolean, prompts?: boolean }} opts @returns {Record<string, string>} */
-function desiredEnv({ raw, prompts }) {
-  /** @type {Record<string, string>} */
-  const env = {
+function desiredEnv({ raw, prompts }: { raw?: boolean; prompts?: boolean }): Record<string, string> {
+  const env: Record<string, string> = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
     OTEL_LOGS_EXPORTER: 'otlp',
     OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: 'http/json',
@@ -43,8 +42,7 @@ function desiredEnv({ raw, prompts }) {
 
 // Values an earlier agent-blackbox install wrote (possibly with another port,
 // token or data folder) belong to us and may be replaced.
-/** @param {string} k @param {unknown} v */
-function writtenByUs(k, v) {
+function writtenByUs(k: string, v: unknown): boolean {
   if (typeof v !== 'string') return false;
   if (k === 'OTEL_EXPORTER_OTLP_LOGS_ENDPOINT') return /^http:\/\/127\.0\.0\.1:\d+\/v1\/logs$/.test(v);
   if (k === 'OTEL_EXPORTER_OTLP_LOGS_HEADERS') return /^x-blackbox-token=[0-9a-f]+$/.test(v);
@@ -52,29 +50,26 @@ function writtenByUs(k, v) {
   return false;
 }
 
-/** @param {string} file @returns {Record<string, any>} */
-function readSettings(file) {
+function readSettings(file: string): Record<string, any> {
   if (!fs.existsSync(file)) return {};
   const text = fs.readFileSync(file, 'utf8');
   if (!text.trim()) return {};
   return JSON.parse(text); // throws on invalid JSON: never overwrite a file we cannot parse
 }
 
-/** @param {Record<string, any>} settings */
-function stripOurHooks(settings) {
+function stripOurHooks(settings: Record<string, any>): void {
   const hooks = settings.hooks || {};
   for (const ev of Object.keys(hooks)) {
     hooks[ev] = (hooks[ev] || [])
-      .map((/** @type {{ hooks?: any[] }} */ g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurs(h)) }))
-      .filter((/** @type {{ hooks: any[] }} */ g) => g.hooks.length);
+      .map((g: { hooks?: any[] }) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurs(h)) }))
+      .filter((g: { hooks: any[] }) => g.hooks.length);
     if (!hooks[ev].length) delete hooks[ev];
   }
   if (!Object.keys(hooks).length) delete settings.hooks; else settings.hooks = hooks;
 }
 
 // hooks: false installs only the telemetry settings (for the plugin, which brings its own hooks)
-/** @param {{ mode?: import('./types').Mode, raw?: boolean, prompts?: boolean, force?: boolean, hooks?: boolean, log?: (msg: string) => void }} [opts] */
-function install({ mode, raw = false, prompts = false, force = false, hooks = true, log = console.log } = {}) {
+export function install({ mode, raw = false, prompts = false, force = false, hooks = true, log = console.log }: { mode?: Mode; raw?: boolean; prompts?: boolean; force?: boolean; hooks?: boolean; log?: (msg: string) => void } = {}): { file: string; skipped: string[] } {
   ensureDirs();
   const file = settingsPath();
   const settings = readSettings(file);
@@ -102,7 +97,7 @@ function install({ mode, raw = false, prompts = false, force = false, hooks = tr
   if (mode) cfg.mode = mode;
   cfg.installed = cfg.installed || { env: {} };
   settings.env ||= {};
-  const skipped = [];
+  const skipped: string[] = [];
   const want = desiredEnv({ raw, prompts });
   // a key we added before but no longer want (e.g. raw bodies turned off): restore it
   for (const [k, prev] of Object.entries(cfg.installed.env)) {
@@ -129,7 +124,7 @@ function install({ mode, raw = false, prompts = false, force = false, hooks = tr
   return { file, skipped };
 }
 
-function uninstall({ log = console.log } = {}) {
+export function uninstall({ log = console.log }: { log?: (msg: string) => void } = {}): void {
   const file = settingsPath();
   const settings = readSettings(file);
   const cfg = loadConfig();
@@ -147,16 +142,13 @@ function uninstall({ log = console.log } = {}) {
 }
 
 /** Hook scripts the installed hooks run, as written in settings.json. */
-function installedHookScripts() {
-  /** @type {Set<string>} */
-  const out = new Set();
+export function installedHookScripts(): string[] {
+  const out = new Set<string>();
   for (const groups of Object.values(readSettings(settingsPath()).hooks || {})) {
-    for (const g of /** @type {any[]} */ (groups)) for (const h of g.hooks || []) {
+    for (const g of (groups as any[])) for (const h of g.hooks || []) {
       const m = isOurs(h) && /^"[^"]*" "([^"]+)"/.exec(h.command);
       if (m) out.add(m[1]);
     }
   }
   return [...out];
 }
-
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, installedHookScripts, nodePath, hookScriptPath };

@@ -1,4 +1,3 @@
-'use strict';
 // Ledger records -> OpenTelemetry (OTLP/JSON), using the GenAI semantic
 // conventions where one exists and a `blackbox.*` namespace for what the
 // conventions do not cover (policy decisions, taint, chain position).
@@ -10,9 +9,9 @@
 //
 // The GenAI conventions are still in development upstream, so the attribute
 // names are kept in one table (GENAI) to follow them as they change.
-const { sha256 } = require('./util');
+import { sha256 } from './util';
 
-const GENAI = {
+export const GENAI = {
   operation: 'gen_ai.operation.name',
   provider: 'gen_ai.provider.name',
   conversation: 'gen_ai.conversation.id',
@@ -22,10 +21,9 @@ const GENAI = {
   toolCallId: 'gen_ai.tool.call.id',
 };
 
-/** @typedef {{ key: string, value: Record<string, unknown> }} KeyValue */
+interface KeyValue { key: string; value: Record<string, unknown> }
 
-/** @param {string} key @param {unknown} v @returns {KeyValue | null} */
-function kv(key, v) {
+function kv(key: string, v: unknown): KeyValue | null {
   if (v === undefined || v === null || v === '') return null;
   if (typeof v === 'boolean') return { key, value: { boolValue: v } };
   if (typeof v === 'number' && Number.isInteger(v)) return { key, value: { intValue: String(v) } };
@@ -33,36 +31,29 @@ function kv(key, v) {
   return { key, value: { stringValue: String(v) } };
 }
 
-/** @param {Record<string, unknown>} o @returns {KeyValue[]} */
-const attrs = (o) => /** @type {KeyValue[]} */ (Object.entries(o).map(([k, v]) => kv(k, v)).filter(Boolean));
+const attrs = (o: Record<string, unknown>): KeyValue[] => Object.entries(o).map(([k, v]) => kv(k, v)).filter(Boolean) as KeyValue[];
 
-/** @param {string} iso */
-const nanos = (iso) => String(BigInt(Date.parse(iso)) * 1000000n);
+const nanos = (iso: string): string => String(BigInt(Date.parse(iso)) * 1000000n);
 
-/** Stable ids so re-exporting the same ledger gives the same trace and span ids.
- * @param {string} s @param {number} len */
-const id = (s, len) => sha256(s).slice(0, len);
+/** Stable ids so re-exporting the same ledger gives the same trace and span ids. */
+const id = (s: string, len: number): string => sha256(s).slice(0, len);
 
-/** @param {string} version */
-function resource(version) {
+function resource(version: string) {
   return { attributes: attrs({ 'service.name': 'agent-blackbox', 'service.version': version }) };
 }
 
 const SCOPE = { name: 'agent-blackbox.ledger' };
 
-/** @param {any} rec */
-const chainAttrs = (rec) => ({ 'blackbox.record.seq': rec.seq, 'blackbox.record.hash': rec.hash });
+const chainAttrs = (rec: any) => ({ 'blackbox.record.seq': rec.seq, 'blackbox.record.hash': rec.hash });
 
 /**
  * One `execute_tool` span per tool call: starts at PreToolUse, ends at the
  * PostToolUse / PostToolUseFailure with the same tool_use_id. A call that never
  * finished (denied, or the session ended) is a zero-length span.
- * @param {any[]} records @param {{ version?: string }} [opts]
  */
-function toOtlpTraces(records, { version = '0' } = {}) {
-  /** @type {Map<string, { pre?: any, post?: any, decisions: any[], taints: any[] }>} */
-  const calls = new Map();
-  const get = (/** @type {string} */ k) => {
+export function toOtlpTraces(records: any[], { version = '0' }: { version?: string } = {}) {
+  const calls = new Map<string, { pre?: any; post?: any; decisions: any[]; taints: any[] }>();
+  const get = (k: string) => {
     let c = calls.get(k);
     if (!c) { c = { decisions: [], taints: [] }; calls.set(k, c); }
     return c;
@@ -75,7 +66,7 @@ function toOtlpTraces(records, { version = '0' } = {}) {
     else if (r.kind === 'decision') c.decisions.push(r);
     else if (r.kind === 'taint') c.taints.push(r);
   }
-  const spans = [];
+  const spans: any[] = [];
   for (const [key, c] of calls) {
     const first = c.pre || c.post;
     if (!first) continue;
@@ -119,9 +110,8 @@ function toOtlpTraces(records, { version = '0' } = {}) {
 // audit trail the GenAI conventions do not define yet, so they carry blackbox.*.
 const LOG_KINDS = new Set(['decision', 'taint', 'intent', 'purge', 'settings', 'genesis']);
 
-/** @param {any[]} records @param {{ version?: string }} [opts] */
-function toOtlpLogs(records, { version = '0' } = {}) {
-  const logRecords = [];
+export function toOtlpLogs(records: any[], { version = '0' }: { version?: string } = {}) {
+  const logRecords: any[] = [];
   for (const r of records) {
     if (!LOG_KINDS.has(r.kind)) continue;
     logRecords.push({
@@ -145,5 +135,3 @@ function toOtlpLogs(records, { version = '0' } = {}) {
   }
   return { resourceLogs: [{ resource: resource(version), scopeLogs: [{ scope: SCOPE, logRecords }] }] };
 }
-
-module.exports = { toOtlpTraces, toOtlpLogs, GENAI };
