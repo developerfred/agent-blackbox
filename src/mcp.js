@@ -15,9 +15,7 @@ const SECRET_VALUE = [/\bAKIA[0-9A-Z]{16}\b/, /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]
   /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bxox[abpr]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/, /\bnpm_[A-Za-z0-9]{36}\b/];
 const SECRET_KEY = /(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE|CREDENTIAL|AUTH)/i;
 
-const { readJson, sha256 } = require('./util');
-/** @param {string} f */
-const exists = (f) => { try { fs.accessSync(f); return true; } catch { return false; } };
+const { readJson, sha256, exists } = require('./util');
 
 // Tiny TOML reader for Codex's [mcp_servers.<name>] tables.
 /** @param {string} file @returns {Record<string, any>} */

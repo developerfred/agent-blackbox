@@ -3,6 +3,7 @@
 const { palette } = require('./term');
 
 /** @type {Record<string, number>} */
+/** @type {Record<string, number>} */
 const SEV_ORDER = { high: 0, medium: 1, low: 2, none: 3 };
 
 /**
@@ -17,6 +18,7 @@ function renderSkills(audits, { color = false, all = false } = {}) {
     return out.join('\n');
   }
   const sorted = [...audits].sort((a, b) => SEV_ORDER[a.risk] - SEV_ORDER[b.risk] || a.name.localeCompare(b.name));
+  /** @type {Record<string, number>} */
   const tally = { high: 0, medium: 0, low: 0, none: 0 };
   for (const a of audits) tally[a.risk]++;
   out.push(dim(`  ${tally.high} high · ${tally.medium} medium · ${tally.low} low · ${tally.none} clean`));

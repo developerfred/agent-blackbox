@@ -66,6 +66,15 @@ const defined = (obj) => /** @type {Partial<T>} */ (Object.fromEntries(Object.en
  */
 const pushCapped = (list, item, max = 500) => (list.includes(item) ? list : [...list, item].slice(-max));
 
+/** @param {string} p */
+const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
+/** @param {string} p */
+const isDir = (p) => !!statOf(p)?.isDirectory();
+/** @param {string} p */
+const isFile = (p) => !!statOf(p)?.isFile();
+/** Does anything exist at this path? @param {string} p */
+const exists = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
+
 /**
  * Last path segment (POSIX or ~/ style), or `fallback` for an empty path.
  * @param {string} p
@@ -73,4 +82,4 @@ const pushCapped = (list, item, max = 500) => (list.includes(item) ? list : [...
  */
 const baseName = (p, fallback = '') => p.split('/').filter(Boolean).pop() || fallback;
 
-module.exports = { baseName, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };
+module.exports = { baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };
