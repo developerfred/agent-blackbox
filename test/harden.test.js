@@ -64,3 +64,37 @@ test('harden --check: same user or hooks starting their own recorder are reporte
   assert.equal(checkHardened({ uid: 998 }, { uid: 1000, cfg: {} }).ok, false);
   assert.equal(checkHardened({ uid: 998 }, { uid: 1000, cfg: { remoteDaemon: true } }).ok, true);
 });
+
+test('harden: a node under a home folder stops the script before anything is created', () => {
+  const home = hardenScript({ ...base, platform: 'darwin', node: '/Users/alice/.nvm/versions/node/v24/bin/node' });
+  shOk(home);
+  const guard = home.indexOf('BLACKBOX_ALLOW_HOME_NODE');
+  assert.ok(guard > 0 && guard < home.indexOf('dscl . -create'), 'the guard runs before the user is created');
+  assert.match(home, /brew install node/);
+  const system = hardenScript({ ...base, platform: 'darwin', node: '/opt/homebrew/bin/node' });
+  assert.ok(!system.includes('BLACKBOX_ALLOW_HOME_NODE'), 'no guard for a system-wide node');
+});
+
+test('harden: the recorder user must be able to run node, checked before the code is copied', () => {
+  for (const platform of ['darwin', 'linux']) {
+    const s = hardenScript({ ...base, platform, node: '/usr/local/bin/node' });
+    shOk(s);
+    const check = s.indexOf('"$NODE" -e 0');
+    assert.ok(check > 0, platform);
+    assert.ok(check > s.search(/dscl \. -create|useradd/), 'after the user exists');
+    assert.ok(check < s.indexOf('rm -rf "$CODE"'), 'before anything is installed');
+  }
+});
+
+test('harden: the guard is real sh: it aborts with exit 1 on a home node and passes with the override', () => {
+  const { spawnSync } = require('child_process');
+  const s = hardenScript({ ...base, platform: 'linux', node: '/home/alice/.nvm/bin/node' });
+  const run = (env) => spawnSync('sh', ['-c', s.replace('[ "$(id -u)" -eq 0 ]', 'true')], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } });
+  const blocked = run({});
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /cannot enter/);
+  assert.match(blocked.stderr, /brew install node/);
+  // with the override it gets past the guard and fails later (no ingest token in this sandbox), never at the guard
+  const past = run({ BLACKBOX_ALLOW_HOME_NODE: '1' });
+  assert.doesNotMatch(past.stderr, /cannot enter/);
+});
