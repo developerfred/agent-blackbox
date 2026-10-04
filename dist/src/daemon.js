@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
+const { merkleRoot, MERKLE_ALG } = require('./merkle');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
 const SEALED_PREFIX = 'bbx1:';
@@ -85,7 +86,9 @@ class Daemon {
     /** @type {Policy} */ policy = unset;
     /** @type {Vault | null} */ vault = null;
     /** @type {import('./types').DaemonState} */ state = unset;
-    /** @type {Map<number, [number, number]>} seq -> [byte offset, byte length] in the ledger file */ lines = new Map();
+    /** byte offset and length of record `seq` in the ledger file (index 0 unused): lookups read one line, not the file */
+    /** @type {number[]} */ lineOff = [];
+    /** @type {number[]} */ lineLen = [];
     /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
     constructor() {
         this.cfg = loadConfig();
@@ -222,7 +225,8 @@ class Daemon {
     }
     // ---- in-memory index for the timeline UI ----
     indexLedger() {
-        this.lines.clear(); // payload lookups read one line, not the file
+        this.lineOff.length = 0;
+        this.lineLen.length = 0;
         if (!fs.existsSync(P.ledger))
             return;
         const buf = fs.readFileSync(P.ledger);
@@ -233,7 +237,8 @@ class Daemon {
             if (end > off) {
                 try {
                     const rec = JSON.parse(buf.toString('utf8', off, end));
-                    this.lines.set(rec.seq, [off, end - off]);
+                    this.lineOff[rec.seq] = off;
+                    this.lineLen[rec.seq] = end - off;
                     this.index(rec);
                 }
                 catch { /* verify reports it */ }
@@ -264,7 +269,7 @@ class Daemon {
             return;
         let s = this.sessions.get(rec.session_id);
         if (!s) {
-            s = { id: rec.session_id, first: rec.ts, last: rec.ts, cwd: null, events: 0, tools: 0, flags: {}, decisions: 0, records: [] };
+            s = { id: rec.session_id, first: rec.ts, last: rec.ts, cwd: null, events: 0, tools: 0, flags: {}, decisions: 0, seqs: [] };
             this.sessions.set(rec.session_id, s);
         }
         s.last = rec.ts;
@@ -277,17 +282,52 @@ class Daemon {
             s.flags[rec.flag] = rec.why;
         if (rec.kind === 'decision' && rec.decision !== 'note')
             s.decisions++;
+        s.seqs.push(rec.seq);
+        if (s.seqs.length > 5000)
+            s.seqs.shift();
+    }
+    // A record as the timeline shows it: no signature, summary unsealed (or "[erased]" once the key is gone).
+    /** @param {import('./types').LedgerRecord} rec */
+    liteRecord(rec) {
         const { sig, ...lite } = rec;
         if (typeof lite.summary === 'string')
             lite.summary = this.openSummary(lite.summary);
-        s.records.push(lite);
-        if (s.records.length > 5000)
-            s.records.shift();
+        return lite;
+    }
+    /** Records by sequence number, read from the ledger file with one open. @param {number[]} seqs */
+    readRecords(seqs) {
+        const out = [];
+        const fd = fs.openSync(P.ledger, 'r');
+        try {
+            for (const seq of seqs) {
+                const rec = this.readAt(fd, seq);
+                if (rec)
+                    out.push(rec);
+            }
+        }
+        finally {
+            fs.closeSync(fd);
+        }
+        return out;
+    }
+    /** @param {number} fd @param {number} seq @returns {import('./types').LedgerRecord | null} */
+    readAt(fd, seq) {
+        if (this.lineOff[seq] === undefined)
+            return null;
+        const buf = Buffer.alloc(this.lineLen[seq]);
+        fs.readSync(fd, buf, 0, buf.length, this.lineOff[seq]);
+        try {
+            return JSON.parse(buf.toString('utf8'));
+        }
+        catch {
+            return null;
+        }
     }
     append(kind, fields) {
         const at = this.ledger.size;
         const rec = this.ledger.append(kind, fields);
-        this.lines.set(rec.seq, [at, this.ledger.size - at - 1]);
+        this.lineOff[rec.seq] = at;
+        this.lineLen[rec.seq] = this.ledger.size - at - 1;
         this.index(rec);
         return rec;
     }
@@ -474,6 +514,22 @@ class Daemon {
         });
         return { keys: keys.length, erased, bodies };
     }
+    // Commit to every record since the last anchor with one Merkle root and
+    // write that as an `anchor` record; the caller publishes the root plus the
+    // chain head somewhere the agent cannot write.
+    anchorBatch() {
+        const recs = readJsonl(P.ledger);
+        let from = 1;
+        for (const r of recs)
+            if (r.kind === 'anchor')
+                from = r.to + 1;
+        const to = this.ledger.seq;
+        if (to < from)
+            return null;
+        const batch = recs.filter((r) => r.seq >= from && r.seq <= to);
+        const rec = this.append('anchor', { alg: MERKLE_ALG, from, to, count: batch.length, root: merkleRoot(batch.map((r) => r.hash)) });
+        return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root };
+    }
     // Decrypted payload of one record, for the human reviewing the evidence.
     payload(seq) {
         const rec = this.findRecord(seq);
@@ -488,7 +544,7 @@ class Daemon {
                 continue;
             }
             try {
-                const text = this.ledger.getBlob(rec[f], rec.key).toString('utf8');
+                const text = this.ledger.getBlob(/** @type {string} */ (rec[f]), rec.key).toString('utf8');
                 try {
                     out[f] = JSON.parse(text);
                 }
@@ -504,22 +560,14 @@ class Daemon {
     }
     // One record by sequence number, read straight from its place in the file.
     findRecord(seq) {
-        const at = this.lines.get(seq);
-        if (!at)
+        if (this.lineOff[seq] === undefined)
             return null;
-        const buf = Buffer.alloc(at[1]);
         const fd = fs.openSync(P.ledger, 'r');
         try {
-            fs.readSync(fd, buf, 0, at[1], at[0]);
+            return this.readAt(fd, seq);
         }
         finally {
             fs.closeSync(fd);
-        }
-        try {
-            return JSON.parse(buf.toString('utf8'));
-        }
-        catch {
-            return null;
         }
     }
     drainSpool() {
@@ -674,12 +722,12 @@ class Daemon {
                     return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: P.home, integrity: this.state.integrity || null } : base);
                 }
                 if (url.pathname === '/api/sessions') {
-                    const list = [...this.sessions.values()].map(({ records, ...s }) => s).sort((a, b) => (a.last < b.last ? 1 : -1));
+                    const list = [...this.sessions.values()].map(({ seqs, ...s }) => s).sort((a, b) => (a.last < b.last ? 1 : -1));
                     return send(200, { head: { seq: this.ledger.seq, hash: this.ledger.head }, sessions: list });
                 }
                 if (url.pathname === '/api/events') {
                     const s = this.sessions.get(url.searchParams.get('session'));
-                    return send(s ? 200 : 404, s ? s.records : { error: 'unknown session' });
+                    return send(s ? 200 : 404, s ? this.readRecords(s.seqs).map((r) => this.liteRecord(r)) : { error: 'unknown session' });
                 }
                 if (url.pathname === '/api/docs')
                     return send(200, this.policy.listDocs());
@@ -732,6 +780,10 @@ class Daemon {
                             this.saveState();
                         }
                         return send(200, { cleared });
+                    }
+                    if (url.pathname === '/api/anchor/batch') {
+                        const a = this.anchorBatch();
+                        return send(a ? 200 : 204, a || {});
                     }
                     if (url.pathname === '/purge')
                         return send(200, this.purge(body.days == null ? null : Number(body.days), body.session || null));
