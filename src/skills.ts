@@ -1,4 +1,3 @@
-'use strict';
 // Skills: find the ones installed for any agent, audit their files for risky
 // patterns, and pin their content so a later change ("rug pull") is noticed.
 //
@@ -9,22 +8,21 @@
 // and `allowed-tools` (tools used without asking). The audit looks hardest there.
 //
 // Static analysis finds known-bad shapes; it cannot prove a skill is safe.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { redact } = require('./policy');
-const { readJson, sha256, isDir, isFile } = require('./util');
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import { redact } from './policy';
+import { readJson, sha256, isDir, isFile } from './util';
+import type { Finding, Severity } from './types';
 
 const MAX_FILES = 300;
 const MAX_BYTES = 1024 * 1024;
-/** @type {Record<string, number>} */
-const SEVERITY = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
+export const SEVERITY: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
 
 // ---------- discovery ----------
 
-/** @returns {{ dir: string, source: string, deep?: boolean, commands?: boolean }[]} */
-function candidateRoots(home = os.homedir(), cwd = process.cwd()) {
+function candidateRoots(home = os.homedir(), cwd = process.cwd()): { dir: string; source: string; deep?: boolean; commands?: boolean }[] {
   const claude = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
   return [
     { dir: path.join(claude, 'skills'), source: 'claude personal' },
@@ -41,15 +39,13 @@ function candidateRoots(home = os.homedir(), cwd = process.cwd()) {
   ];
 }
 
-/** @param {string} p */
-const real = (p) => { try { return fs.realpathSync(p); } catch { return null; } };
+const real = (p: string): string | null => { try { return fs.realpathSync(p); } catch { return null; } };
 
 // Every directory under `dir` (up to `depth`) that holds a SKILL.md.
-/** @param {string} dir @param {number} depth @param {string[]} [out] @returns {string[]} */
-function findSkillDirs(dir, depth, out = []) {
+function findSkillDirs(dir: string, depth: number, out: string[] = []): string[] {
   if (depth < 0 || !isDir(dir)) return out;
   if (isFile(path.join(dir, 'SKILL.md'))) { out.push(dir); return out; }
-  let entries = [];
+  let entries: fs.Dirent[] = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of entries) {
     if (e.name === 'node_modules' || e.name === '.git') continue;
@@ -58,16 +54,12 @@ function findSkillDirs(dir, depth, out = []) {
   return out;
 }
 
-/** @param {{ home?: string, cwd?: string, extra?: string[] }} [opts] */
-/**
- * @typedef {{ name: string, dir: string, file: string, files?: string[], source: string, realpath: string, single?: boolean, plugin?: string }} Skill
- */
+export interface Skill { name: string; dir: string; file: string; files?: string[]; source: string; realpath: string; single?: boolean; plugin?: string }
 
-/** @param {{ home?: string, cwd?: string, extra?: string[] }} [opts] @returns {Skill[]} */
-function discoverSkills({ home, cwd, extra = [] } = {}) {
+export function discoverSkills({ home, cwd, extra = [] }: { home?: string; cwd?: string; extra?: string[] } = {}): Skill[] {
   const roots = [...candidateRoots(home, cwd), ...extra.map((d) => ({ dir: path.resolve(d), source: 'path', deep: false, commands: false }))];
-  const seen = new Set();
-  const skills = [];
+  const seen = new Set<string>();
+  const skills: Skill[] = [];
   for (const root of roots) {
     if (!isDir(root.dir)) continue;
     if (root.commands) {
@@ -98,8 +90,7 @@ function discoverSkills({ home, cwd, extra = [] } = {}) {
   return skills;
 }
 
-/** @param {string} pluginsRoot @param {string} dir */
-function pluginOf(pluginsRoot, dir) {
+function pluginOf(pluginsRoot: string, dir: string): string | undefined {
   const parts = path.relative(pluginsRoot, dir).split(path.sep);
   const i = parts.lastIndexOf('skills');
   return i > 0 ? parts[i - 1] : undefined;
@@ -107,8 +98,7 @@ function pluginOf(pluginsRoot, dir) {
 
 // ---------- reading ----------
 
-/** @param {string} file @returns {string | null} */
-function readText(file) {
+function readText(file: string): string | null {
   try {
     const st = fs.statSync(file);
     if (!st.isFile() || st.size > MAX_BYTES) return null;
@@ -118,10 +108,9 @@ function readText(file) {
   } catch { return null; }
 }
 
-/** @param {string} dir @param {string[]} [out] @param {number} [depth] @returns {string[]} */
-function listFiles(dir, out = [], depth = 0) {
+function listFiles(dir: string, out: string[] = [], depth = 0): string[] {
   if (out.length >= MAX_FILES || depth > 6) return out;
-  let entries = [];
+  let entries: fs.Dirent[] = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (e.name === 'node_modules' || e.name === '.git') continue;
@@ -134,14 +123,11 @@ function listFiles(dir, out = [], depth = 0) {
 }
 
 // Minimal frontmatter reader: top-level keys, scalar or inline/block lists.
-/** @param {string} text @returns {Record<string, string | string[]>} */
-function parseFrontmatter(text) {
+export function parseFrontmatter(text: string): Record<string, any> {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!m) return {};
-  /** @type {Record<string, any>} */
-  const out = {};
-  /** @type {string | null} */
-  let key = null;
+  const out: Record<string, any> = {};
+  let key: string | null = null;
   for (const line of m[1].split(/\r?\n/)) {
     const top = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
     if (top) {
@@ -160,8 +146,7 @@ function parseFrontmatter(text) {
 // ---------- rules ----------
 
 const NET = String.raw`(?:curl|wget|nc|ncat|socat|scp|rsync|ftp|httpie|xh|Invoke-WebRequest|iwr|Invoke-RestMethod|irm)\b`;
-/** @type {{ id: string, sev: import('./types').Severity, re: RegExp, msg: string }[]} */
-const RULES = [
+const RULES: { id: string; sev: Severity; re: RegExp; msg: string }[] = [
   { id: 'download-exec', sev: 'high', re: new RegExp(String.raw`\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\b(?:curl|wget)\b[^\n|]*\|\s*(?:python3?|node|perl|ruby)\b|(?:ba|z)?sh\s+<\(\s*(?:curl|wget)|eval\s+["'$(]*\s*\$\(\s*(?:curl|wget)|\b(?:iex|Invoke-Expression)\b[^\n]*(?:iwr|Invoke-WebRequest|DownloadString)`, 'i'),
     msg: 'downloads code and runs it immediately' },
   { id: 'obfuscated-exec', sev: 'high', re: /base64\s+(?:-d|--decode|-D)\b[^\n]*\|\s*(?:ba|z)?sh\b|\beval\s*\(\s*(?:atob|Buffer\.from)\s*\(|\bexec\s*\(\s*(?:base64\.b64decode|codecs\.decode|bytes\.fromhex)|\bFromBase64String\b[^\n]*\b(?:iex|Invoke-Expression)\b/i,
@@ -182,8 +167,7 @@ const RULES = [
 const INJECTION = /\bignore\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|messages|rules)|\b(?:do\s+not|don't|never)\s+(?:tell|inform|mention|show|reveal|notify)\s+(?:this\s+to\s+)?the\s+user\b(?!\s+to\b)|\bwithout\s+(?:asking|telling|informing|notifying)\s+the\s+user\b|\b(?:silently|secretly|covertly)\s+(?:send|upload|post|copy|run|execute|exfiltrate)\b|\bnew\s+system\s+prompt\b|\byou\s+are\s+no\s+longer\b/i;
 // Defensive text quotes attack phrases in order to forbid them.
 const DEFENSIVE = /\b(?:do\s+not|don't|never)\s+(?:follow|obey|comply)|\bis\s+data\b|\bnot\s+instructions\b|\btreat\b[^.]*\bas\s+(?:data|untrusted)/i;
-/** @param {string} line @param {number} index */
-function quotedAt(line, index) {
+function quotedAt(line: string, index: number): boolean {
   const before = line.slice(Math.max(0, index - 3), index);
   return /["'“‘`]/.test(before);
 }
@@ -200,16 +184,14 @@ const SECRET_RES = [
 
 const CODE_EXT = /\.(?:sh|bash|zsh|fish|ps1|py|js|mjs|cjs|ts|rb|pl|php|go|rs|lua)$/i;
 
-/** @param {string} line */
-function excerpt(line) {
+function excerpt(line: string): string {
   const t = redact(line.trim().replace(/\s+/g, ' '));
   return t.length > 140 ? t.slice(0, 139) + '…' : t;
 }
 
 // Which lines of a markdown file sit inside fenced code blocks.
-/** @param {string[]} lines @returns {boolean[]} */
-function fencedLines(lines) {
-  const inside = new Array(lines.length).fill(false);
+function fencedLines(lines: string[]): boolean[] {
+  const inside: boolean[] = new Array(lines.length).fill(false);
   let open = false;
   lines.forEach((l, i) => {
     if (/^\s*```/.test(l)) { inside[i] = true; open = !open; return; }
@@ -218,19 +200,15 @@ function fencedLines(lines) {
   return inside;
 }
 
-/** @param {string} file @param {string} rel @param {string} text @param {{ isSkillMd?: boolean }} opts @returns {import('./types').Finding[]} */
-function auditFile(file, rel, text, { isSkillMd }) {
-  /** @type {import('./types').Finding[]} */
-  const findings = [];
-  /** @param {import('./types').Severity} sev @param {string} rule @param {number} line @param {string} message @param {string | null} [ex] */
-  const add = (sev, rule, line, message, ex) => findings.push({ severity: sev, rule, file: rel, line, message, excerpt: ex });
+export function auditFile(file: string, rel: string, text: string, { isSkillMd }: { isSkillMd?: boolean }): Finding[] {
+  const findings: Finding[] = [];
+  const add = (sev: Severity, rule: string, line: number, message: string, ex?: string | null): number => findings.push({ severity: sev, rule, file: rel, line, message, excerpt: ex });
   const lines = text.split(/\r?\n/);
   const isCode = CODE_EXT.test(file) || /^#!/.test(text);
   const isMd = /\.md$/i.test(file);
   const fenced = isMd ? fencedLines(lines) : null;
   let hasNet = false, hasCred = false;
-  /** @type {number | null} */
-  let firstCred = null;
+  let firstCred: number | null = null;
 
   lines.forEach((line, i) => {
     const ln = i + 1;
@@ -267,10 +245,9 @@ function auditFile(file, rel, text, { isSkillMd }) {
 
   if (isSkillMd) {
     const fm = parseFrontmatter(text);
-    /** @param {string} k */
-    const fmLine = (k) => { const i = lines.findIndex((l) => l.startsWith(k + ':')); return i < 0 ? 1 : i + 1; };
+    const fmLine = (k: string): number => { const i = lines.findIndex((l) => l.startsWith(k + ':')); return i < 0 ? 1 : i + 1; };
     if (fm.hooks !== undefined) add('high', 'skill-hooks', fmLine('hooks'), 'registers hooks: commands that keep running for the rest of the session once the skill is used', null);
-    const tools = /** @type {string[]} */ ([]).concat(fm['allowed-tools'] || []).join(' ');
+    const tools = ([] as string[]).concat(fm['allowed-tools'] || []).join(' ');
     if (tools) {
       const broad = /(^|[\s,[])Bash(?:\(\s*\*\s*\)|\(\s*\*\s+\*\s*\))?(?=$|[\s,\]])/.test(tools) || /Bash\((?:curl|wget|sh|bash|zsh|python3?|node|perl|ruby|eval|sudo|nc)\b[^)]*\*\)/.test(tools);
       add(broad ? 'high' : 'low', 'allowed-tools', fmLine('allowed-tools'), broad ? 'pre-approves unrestricted shell or network/interpreter commands' : 'pre-approves some tools for the turn the skill runs', excerpt(tools));
@@ -287,13 +264,11 @@ function auditFile(file, rel, text, { isSkillMd }) {
   return findings;
 }
 
-/** @param {string} base @param {string[]} files */
-function hashFiles(base, files) {
+function hashFiles(base: string, files: string[]): { hash: string; files: Record<string, string> } {
   const h = crypto.createHash('sha256');
-  /** @type {Record<string, string>} */
-  const per = {};
+  const per: Record<string, string> = {};
   for (const f of files) {
-    let buf;
+    let buf: Buffer;
     try { buf = fs.readFileSync(f); } catch { continue; }
     const rel = path.relative(base, f) || path.basename(f);
     per[rel] = sha256(buf);
@@ -302,12 +277,10 @@ function hashFiles(base, files) {
   return { hash: h.digest('hex'), files: per };
 }
 
-/** @param {Skill} skill */
-function auditSkill(skill) {
+export function auditSkill(skill: Skill) {
   const files = skill.single ? [skill.file] : listFiles(skill.dir);
   const base = skill.single ? path.dirname(skill.file) : skill.dir;
-  /** @type {import('./types').Finding[]} */
-  let findings = [];
+  let findings: Finding[] = [];
   for (const f of files) {
     const text = readText(f);
     if (text == null) continue;
@@ -315,27 +288,23 @@ function auditSkill(skill) {
     findings = findings.concat(auditFile(f, rel, text, { isSkillMd: rel === 'SKILL.md' || skill.single }));
   }
   // one finding per rule per file line is plenty; keep the strongest
-  /** @type {Map<string, import('./types').Finding>} */
-  const seen = new Map();
+  const seen = new Map<string, Finding>();
   for (const x of findings) {
     const k = `${x.rule}\0${x.file}\0${x.line}`;
-    if (!seen.has(k) || SEVERITY[x.severity] > SEVERITY[/** @type {import('./types').Finding} */ (seen.get(k)).severity]) seen.set(k, x);
+    if (!seen.has(k) || SEVERITY[x.severity] > SEVERITY[(seen.get(k) as Finding).severity]) seen.set(k, x);
   }
   findings = [...seen.values()].sort((a, b) => SEVERITY[b.severity] - SEVERITY[a.severity] || (a.file || '').localeCompare(b.file || '') || (a.line || 0) - (b.line || 0));
   const counts = { high: 0, medium: 0, low: 0 };
-  for (const x of findings) if (x.severity in counts) counts[/** @type {keyof typeof counts} */ (x.severity)]++;
-  /** @type {import('./types').Severity} */
-  const risk = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
+  for (const x of findings) if (x.severity in counts) counts[x.severity as keyof typeof counts]++;
+  const risk: Severity = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
   return { ...skill, fileCount: files.length, findings, counts, risk, ...hashFiles(base, files) };
 }
 
 // ---------- pins ----------
 
-/** @param {string} file @returns {Record<string, any>} */
-const loadPins = (file) => readJson(file, {});
+export const loadPins = (file: string): Record<string, any> => readJson(file, {});
 
-/** @returns {{ status: 'new' | 'pinned' | 'changed', changed?: string[], pinnedAt?: string }} */
-function comparePin(/** @type {Record<string, any>} */ pins, /** @type {{ realpath: string, hash: string, files: Record<string, string> }} */ a) {
+function comparePin(pins: Record<string, any>, a: { realpath: string; hash: string; files: Record<string, string> }): { status: 'new' | 'pinned' | 'changed'; changed?: string[]; pinnedAt?: string } {
   const p = pins[a.realpath];
   if (!p) return { status: 'new' };
   if (p.hash === a.hash) return { status: 'pinned' };
@@ -343,8 +312,7 @@ function comparePin(/** @type {Record<string, any>} */ pins, /** @type {{ realpa
   return { status: 'changed', changed, pinnedAt: p.pinnedAt };
 }
 
-/** @param {string} file @param {any[]} audits */
-function savePins(file, audits) {
+export function savePins(file: string, audits: any[]): Record<string, any> {
   const pins = loadPins(file);
   const now = new Date().toISOString();
   for (const a of audits) pins[a.realpath] = { name: a.name, source: a.source, hash: a.hash, files: a.files, pinnedAt: now };
@@ -353,8 +321,7 @@ function savePins(file, audits) {
   return pins;
 }
 
-/** @param {{ home?: string, cwd?: string, extra?: string[], pinsFile?: string }} [opts] */
-function auditAll({ home, cwd, extra, pinsFile } = {}) {
+export function auditAll({ home, cwd, extra, pinsFile }: { home?: string; cwd?: string; extra?: string[]; pinsFile?: string } = {}) {
   const pins = pinsFile ? loadPins(pinsFile) : {};
   return discoverSkills({ home, cwd, extra }).map((s) => {
     const a = auditSkill(s);
@@ -370,8 +337,7 @@ function auditAll({ home, cwd, extra, pinsFile } = {}) {
 
 // Look up a skill by the name the agent used ("docs", "plugin:skill",
 // "anthropic-skills:docs"). Returns the riskiest match.
-/** @template {{ name: string, dir: string, risk: string, plugin?: string, source: string }} A @param {A[]} audits @param {unknown} invoked @returns {A | null} */
-function riskFor(audits, invoked) {
+export function riskFor<A extends { name: string; dir: string; risk: string; plugin?: string; source: string }>(audits: A[], invoked: unknown): A | null {
   const name = String(invoked || '').trim();
   if (!name) return null;
   const short = name.split(':').pop();
@@ -380,5 +346,3 @@ function riskFor(audits, invoked) {
     .filter((a) => !plugin || !a.plugin || a.plugin === plugin || a.source !== 'claude plugin');
   return matches.sort((a, b) => SEVERITY[b.risk] - SEVERITY[a.risk])[0] || null;
 }
-
-module.exports = { discoverSkills, auditSkill, auditAll, auditFile, parseFrontmatter, savePins, loadPins, riskFor, SEVERITY };
