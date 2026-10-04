@@ -190,11 +190,12 @@ function verifyLedger(text, { trustedKey = null, anchors = [], store = null } = 
       const { hash, sig, ...body } = rec;
       if (!isHex(hash, 64) || sha256(canon(body)) !== hash) {
         err(line, 'HASH_MISMATCH', `${label}: content does not match its hash (record edited)`);
-      } else if (chainKey) {
+      }
+      if (chainKey) {
         let good = false;
         try {
           const raw = Buffer.from(String(sig), 'base64');
-          good = raw.length === 64 && crypto.verify(null, Buffer.from(hash, 'hex'), chainKey, raw);
+          good = raw.length === 64 && crypto.verify(null, Buffer.from(String(hash), 'hex'), chainKey, raw);
         } catch { good = false; }
         if (!good) err(line, 'BAD_SIGNATURE', `${label}: signature does not verify`);
       }

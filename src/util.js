@@ -86,6 +86,12 @@ function stablePath(p) {
   return fs.existsSync(opt) ? opt : p;
 }
 
+/** HTML-escape any value (null and undefined become the empty string). @param {unknown} s */
+const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => /** @type {Record<string, string>} */ ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+
+/** A count with thousands separators ("1,234"); nothing becomes 0. @param {unknown} x */
+const num = (x) => Number(x || 0).toLocaleString('en-US');
+
 /**
  * Last path segment (POSIX or ~/ style), or `fallback` for an empty path.
  * @param {string} p
@@ -93,4 +99,4 @@ function stablePath(p) {
  */
 const baseName = (p, fallback = '') => p.split('/').filter(Boolean).pop() || fallback;
 
-module.exports = { stablePath, baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };
+module.exports = { escHtml, num, stablePath, baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };

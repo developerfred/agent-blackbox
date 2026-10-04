@@ -198,3 +198,6 @@ export interface SkillAudit {
   findings: Finding[];
   [extra: string]: unknown;
 }
+
+/** What scan() returns and the renderers (terminal, HTML, share kit) take. */
+export type ScanSummary = ReturnType<typeof import('./scan').scan>;
