@@ -116,7 +116,7 @@ A recorder that sees everything is itself a target. agent-blackbox stores proof 
 - **Every endpoint needs a token**, including reads. `blackbox ui` opens the page with it in the URL fragment, which is never sent over the network. Other local users and processes get `401`.
 - **Files are private** (`0700` folders, `0600` files), and the agent is blocked from `~/.blackbox` through its tools.
 - **Encrypted at rest, one key per session.** Payloads, and the one-line summary of each hook record (prompt, command and path text), are sealed with AES-256-GCM under a random key for their session, stored wrapped by a master key. Copies of the folder (backups, Time Machine, cloud sync, a tool indexing your disk) hold only ciphertext.
-- **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads and summaries become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload.
+- **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads and summaries become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload. To do it automatically, set `"retainDays": 30` in `~/.blackbox/config.json`: sessions older than that are erased at start and every hour (off by default).
 - **Raw model bodies are off by default.** With `--raw`, Claude Code itself writes each body in clear text to `~/.blackbox/api-bodies/`; the recorder scrubs and moves it as soon as Claude Code indexes it (at most ~3 minutes later).
 
 ## The evidence

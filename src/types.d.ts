@@ -10,6 +10,8 @@ export interface Config {
   opaqueCode: 'ask' | 'alert';
   web3: 'ask' | 'alert' | 'off';
   failMode: 'open' | 'closed';
+  /** erase sessions older than this many days (crypto-erase); null or 0 keeps everything */
+  retainDays?: number | null;
   allowHosts: string[];
   trustedMcpServers: string[];
   privateMcpServers: string[];
