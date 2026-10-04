@@ -199,3 +199,36 @@ test('docs: marked documents are listed and cleared through the recorder, with t
     assert.deepEqual(recs[1].paths, ['/proj/AGENTS.md']);
   } finally { server.closeAllConnections(); server.close(); }
 });
+
+test('timeline: records are read from the ledger on demand, so a purged session shows [erased] right away', async () => {
+  ensureDirs();
+  const port = Number(process.env.BLACKBOX_PORT);
+  const tok = readToken(), adm = readAdminToken();
+  const call = (method, p, body, token) => request({ port, method, path: p, token, body });
+  const d = new Daemon();
+  const server = await d.listen(port);
+  d.start();
+  try {
+    const sid = 'tl-purge';
+    for (const c of ['echo first-visible', 'echo second-visible']) {
+      await call('POST', '/hook', { hook_event_name: 'PostToolUse', session_id: sid, tool_name: 'Bash', tool_input: { command: c }, tool_response: 'ok' }, tok);
+    }
+    const events = (await call('GET', `/api/events?session=${sid}`, null, adm)).body;
+    assert.equal(events.length, 2);
+    assert.ok(events.every((r) => !('sig' in r)), 'no signature in the timeline');
+    assert.ok(events.every((r) => r.seq > 0 && r.session_id === sid));
+    assert.match(events[0].summary, /first-visible/);
+    assert.deepEqual(events.map((r) => r.seq), [...events.map((r) => r.seq)].sort((a, b) => a - b), 'in ledger order');
+    const sessions = (await call('GET', '/api/sessions', null, adm)).body.sessions;
+    const mine = sessions.find((s) => s.id === sid);
+    assert.equal(mine.events, 2);
+    assert.ok(!('seqs' in mine) && !('records' in mine), 'the session list does not carry records');
+
+    assert.equal((await call('POST', '/purge', { session: sid }, adm)).status, 200);
+    const after = (await call('GET', `/api/events?session=${sid}`, null, adm)).body;
+    assert.equal(after.length, 2, 'the chain still holds the records');
+    assert.ok(after.every((r) => !/visible/.test(r.summary)), 'but their text is gone as soon as the key is');
+    assert.ok(after.some((r) => r.summary === '[erased]'));
+    assert.equal((await call('GET', '/api/events?session=nope', null, adm)).status, 404);
+  } finally { server.closeAllConnections(); server.close(); }
+});
