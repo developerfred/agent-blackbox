@@ -18,6 +18,7 @@
     "src/policy.js",
     "eval/run.js",
     "eval/corpus.js",
+    "src/skills.js",
     "src/install.js"
   ]
 }

@@ -16,7 +16,7 @@ const { Policy } = require('../src/policy');
 const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../src/paths');
 const { Daemon } = require('../src/daemon');
 const { request } = require('../src/local-http');
-const { readJsonl, readJson, parseLine, defined, pushCapped, baseName } = require('../src/util');
+const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists } = require('../src/util');
 
 test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   const f = path.join(HOME, 'x.jsonl');
@@ -30,6 +30,12 @@ test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   assert.deepEqual(pushCapped(['a', 'b'], 'c', 2), ['b', 'c'], 'oldest dropped');
   assert.equal(baseName('~/proj/x.sh'), 'x.sh');
   assert.equal(baseName('/', 'fallback'), 'fallback');
+  // path kind helpers shared by skills and mcp
+  const f2 = path.join(HOME, 'kind.txt');
+  fs.writeFileSync(f2, 'x');
+  assert.ok(isFile(f2) && !isDir(f2) && exists(f2));
+  assert.ok(isDir(HOME) && !isFile(HOME) && exists(HOME));
+  assert.ok(!isFile(path.join(HOME, 'nope')) && !isDir(path.join(HOME, 'nope')) && !exists(path.join(HOME, 'nope')));
 });
 
 test('local-http: content-length and chunked responses, errors, timeouts', async () => {

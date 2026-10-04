@@ -106,7 +106,7 @@ export interface Paths {
   bodies: string; anchors: string;
 }
 
-export type Severity = 'high' | 'medium' | 'low' | 'none';
+export type Severity = 'high' | 'medium' | 'low' | 'info' | 'none';
 
 export interface Finding {
   severity: Severity;
@@ -115,7 +115,7 @@ export interface Finding {
   detail?: string | null;
   file?: string;
   line?: number;
-  excerpt?: string;
+  excerpt?: string | null;
 }
 
 export interface Counts { high: number; medium: number; low: number }
