@@ -1,4 +1,3 @@
-'use strict';
 // `blackbox share`: social assets from a scan, made locally.
 //   x-card.png   1200x675  (X, LinkedIn)
 //   story.png    1080x1920 (TikTok, Reels, Stories: last frame)
@@ -8,18 +7,17 @@
 // Only aggregate numbers and the fixed category labels go in: no project
 // names, hosts, skill names, commands or prompts.
 // Rendering uses a Chrome/Chromium already on the machine (headless).
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const http = require('http');
-const { spawn, spawnSync } = require('child_process');
-const { CATEGORIES } = require('./scan');
-
-const { escHtml: esc, num: n } = require('./util');
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as http from 'http';
+import { spawn, spawnSync } from 'child_process';
+import { CATEGORIES } from './scan';
+import { escHtml as esc, num as n } from './util';
+import type { ScanSummary } from './types';
 
 // The public subset of a scan summary.
-/** @param {import('./types').ScanSummary} S */
-function publicNumbers(S) {
+export function publicNumbers(S: ScanSummary) {
   const skills = S.skills || [];
   return {
     days: S.days, sessions: S.sessions || 0, toolCalls: S.toolCalls || 0,
@@ -27,7 +25,7 @@ function publicNumbers(S) {
     outboundCalls: S.outboundCalls || 0, trifectaSessions: S.trifectaSessions || 0,
     wouldDenyCalls: S.wouldDenyCalls || 0,
     skillsUsed: skills.length, riskySkills: skills.filter((k) => k.risk === 'high' || k.risk === 'medium').length,
-    categories: CATEGORIES.map((c, i) => ({ label: c.label, value: (S.categories || {})[c.id] || 0, slot: i })),
+    categories: CATEGORIES.map((c, i) => ({ label: c.label, value: ((S.categories || {}) as Record<string, number>)[c.id] || 0, slot: i })),
   };
 }
 
@@ -36,8 +34,7 @@ const FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', R
 
 // One page that can draw any moment of the story: render(t) for t in seconds.
 // Drawn as SVG so every frame is exact and the layout never depends on fonts loading late.
-/** @param {import('./types').ScanSummary} S */
-function storyHtml(S) {
+export function storyHtml(S: ScanSummary): string {
   const data = JSON.stringify(publicNumbers(S));
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=1080">
 <title>What my AI coding agent did</title>
@@ -101,8 +98,7 @@ else render(DUR);
 }
 
 // Static 1200x675 card for X.
-/** @param {import('./types').ScanSummary} S */
-function xCardHtml(S) {
+export function xCardHtml(S: ScanSummary): string {
   const D = publicNumbers(S);
   const max = Math.max(1, ...D.categories.map((c) => c.value));
   const total = Math.max(1, D.toolCalls);
@@ -112,8 +108,7 @@ function xCardHtml(S) {
       <path d="M260 ${y + 6}h${w - 6}a6 6 0 0 1 6 6v12a6 6 0 0 1 -6 6h-${w - 6}z" fill="${PALETTE[c.slot]}"/>
       <text x="${260 + w + 12}" y="${y + 24}" font-size="19" fill="#9da7b3" font-weight="600">${Math.round((100 * c.value) / total)}%</text>`;
   }).join('');
-  /** @param {number} x @param {number} y @param {unknown} v @param {string} l @param {string} col */
-  const stat = (x, y, v, l, col) => `<rect x="${x}" y="${y}" width="250" height="150" rx="16" fill="#141922" stroke="#232a35"/>
+  const stat = (x: number, y: number, v: unknown, l: string, col: string): string => `<rect x="${x}" y="${y}" width="250" height="150" rx="16" fill="#141922" stroke="#232a35"/>
     <text x="${x + 24}" y="${y + 76}" font-size="54" font-weight="800" fill="${col}">${esc(n(v))}</text>
     <text x="${x + 24}" y="${y + 116}" font-size="18" fill="#9da7b3">${esc(l)}</text>`;
   return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#0b0e14}svg{display:block}</style></head><body>
@@ -128,14 +123,11 @@ ${stat(640, 370, D.trifectaSessions, plural(D.trifectaSessions, 'lethal-trifecta
 </svg></body></html>`;
 }
 
-/** @param {unknown} x @param {string} one @param {string} many */
-const plural = (x, one, many) => (Number(x) === 1 ? one : many);
+const plural = (x: unknown, one: string, many: string): string => (Number(x) === 1 ? one : many);
 
-/** @param {import('./types').ScanSummary} S */
-function caption(S) {
+export function caption(S: ScanSummary): string {
   const D = publicNumbers(S);
-  /** @param {unknown} x @param {string} one @param {string} many */
-  const p = (x, one, many) => `${n(x)} ${plural(x, one, many)}`;
+  const p = (x: unknown, one: string, many: string): string => `${n(x)} ${plural(x, one, many)}`;
   const lines = [
     `I audited what my AI coding agent did in the last ${D.days} days: ${p(D.toolCalls, 'tool call', 'tool calls')} across ${p(D.sessions, 'session', 'sessions')}.`,
     D.privateSessions ? `It read secrets or credentials in ${p(D.privateSessions, 'session', 'sessions')} and sent data out ${p(D.outboundCalls, 'time', 'times')}.` : `It sent data out of my machine ${p(D.outboundCalls, 'time', 'times')}.`,
@@ -148,7 +140,7 @@ function caption(S) {
 
 // ---------- rendering with a local headless Chrome ----------
 
-function findChrome() {
+export function findChrome(): string | null {
   if (process.env.BLACKBOX_CHROME && fs.existsSync(process.env.BLACKBOX_CHROME)) return process.env.BLACKBOX_CHROME;
   const mac = ['Google Chrome', 'Chromium', 'Brave Browser', 'Microsoft Edge', 'Google Chrome Canary']
     .map((a) => `/Applications/${a}.app/Contents/MacOS/${a}`);
@@ -164,45 +156,40 @@ const rootFlags = () => (typeof process.getuid === 'function' && process.getuid(
 const hasFfmpeg = () => spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 
 // Minimal Chrome DevTools Protocol client over the global WebSocket (Node 22+).
-/**
- * @typedef {(method: string, params?: object) => Promise<any>} Send a DevTools protocol call
- * @typedef {{ send: Send, events: any[] }} Cdp
- */
+/** A DevTools protocol call. */
+type Send = (method: string, params?: object) => Promise<any>;
+interface Cdp { send: Send; events: any[] }
 
-/** @template T @param {string} chrome @param {(cdp: Cdp) => Promise<T>} fn @returns {Promise<T>} */
-async function withChrome(chrome, fn) {
+async function withChrome<T>(chrome: string, fn: (cdp: Cdp) => Promise<T>): Promise<T> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
   const proc = spawn(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--force-device-scale-factor=1',
     // the window must be at least as large as every capture, or Chrome tiles the image
     '--window-size=1280,2000', 'about:blank'], { stdio: 'ignore' });
   try {
-    let port = null;
+    let port: string | null = null;
     for (let i = 0; i < 100 && !port; i++) {
       await new Promise((r) => setTimeout(r, 100));
       try { port = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0].trim(); } catch { /* not yet */ }
     }
     if (!port) throw new Error('Chrome did not start');
-    const targets = await new Promise((resolve, reject) => {
+    const targets = await new Promise<any[]>((resolve, reject) => {
       http.get({ host: '127.0.0.1', port, path: '/json/list' }, (res) => {
-        /** @type {Buffer[]} */
-        const c = []; res.on('data', (d) => c.push(d)); res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(c).toString('utf8'))); } catch (e) { reject(e); } });
+        const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(c).toString('utf8'))); } catch (e) { reject(e); } });
       }).on('error', reject);
     });
-    const page = targets.find((/** @type {{ type: string }} */ t) => t.type === 'page');
+    const page = targets.find((t: { type: string }) => t.type === 'page');
     const ws = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+    await new Promise<void>((r, j) => { ws.onopen = () => r(); ws.onerror = j; });
     let id = 0;
-    const waiting = new Map();
-    /** @type {any[]} */
-    const events = [];
+    const waiting = new Map<number, { res: (v: any) => void; rej: (e: Error) => void }>();
+    const events: any[] = [];
     ws.onmessage = (m) => {
       const msg = JSON.parse(m.data);
-      if (msg.id && waiting.has(msg.id)) { const { res, rej } = waiting.get(msg.id); waiting.delete(msg.id); msg.error ? rej(new Error(msg.error.message)) : res(msg.result); }
+      if (msg.id && waiting.has(msg.id)) { const { res, rej } = waiting.get(msg.id)!; waiting.delete(msg.id); msg.error ? rej(new Error(msg.error.message)) : res(msg.result); }
       else if (msg.method) events.push(msg.method);
     };
-    /** @type {Send} */
-    const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; waiting.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
+    const send: Send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; waiting.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
     await send('Page.enable');
     const result = await fn({ send, events });
     ws.close();
@@ -213,8 +200,7 @@ async function withChrome(chrome, fn) {
   }
 }
 
-/** @param {Send} send @param {any[]} events @param {string} file @param {number} w @param {number} h */
-async function openPage(send, events, file, w, h) {
+async function openPage(send: Send, events: any[], file: string, w: number, h: number): Promise<void> {
   await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
   events.length = 0;
   await send('Page.navigate', { url: 'file://' + file + '?driven=1' });
@@ -225,12 +211,10 @@ async function openPage(send, events, file, w, h) {
   await send('Runtime.evaluate', { expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))', awaitPromise: true });
 }
 
-/** @param {Send} send @param {number} w @param {number} h */
-const shot = async (send, w, h) => Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: w, height: h, scale: 1 } })).data, 'base64');
+const shot = async (send: Send, w: number, h: number): Promise<Buffer> => Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: w, height: h, scale: 1 } })).data, 'base64');
 
 // Fallback without WebSocket: one headless screenshot per call.
-/** @param {string} chrome @param {string} file @param {number} w @param {number} h @param {string} out */
-function screenshotOnce(chrome, file, w, h, out) {
+function screenshotOnce(chrome: string, file: string, w: number, h: number, out: string): boolean {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-chrome-'));
   const r = spawnSync(chrome, [...rootFlags(), '--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, `--window-size=${w},${h}`,
     '--force-device-scale-factor=1', `--screenshot=${out}`, 'file://' + file + '?driven=1'], { stdio: 'ignore', timeout: 60000 });
@@ -238,14 +222,9 @@ function screenshotOnce(chrome, file, w, h, out) {
   return r.status === 0 && fs.existsSync(out);
 }
 
-/**
- * @param {any} S scan summary
- * @param {string} outDir
- * @param {{ video?: boolean, log?: (msg: string) => void }} [opts]
- */
-async function makeShareKit(S, outDir, { video = true, log = () => {} } = {}) {
+export async function makeShareKit(S: ScanSummary, outDir: string, { video = true, log = () => {} }: { video?: boolean; log?: (msg: string) => void } = {}): Promise<{ made: string[]; chrome: string | null }> {
   fs.mkdirSync(outDir, { recursive: true });
-  const made = [];
+  const made: string[] = [];
   const storyFile = path.join(outDir, 'story.html');
   const xFile = path.join(outDir, 'x-card.html');
   fs.writeFileSync(storyFile, storyHtml(S));
@@ -296,5 +275,3 @@ async function makeShareKit(S, outDir, { video = true, log = () => {} } = {}) {
   fs.unlinkSync(xFile);
   return { made, chrome };
 }
-
-module.exports = { makeShareKit, storyHtml, xCardHtml, caption, publicNumbers, findChrome };
