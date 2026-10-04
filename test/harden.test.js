@@ -120,3 +120,33 @@ test('harden: the service runs the compiled code (dist/), and the script stops e
   assert.doesNotMatch(withDist.stderr, /npm run build/);
   assert.match(withDist.stderr, /no ingest token/);
 });
+
+test('hooks point at the recorder\'s root-owned code once it runs as its own user', () => {
+  const { spawnSync } = require('child_process');
+  const s = hardenScript({ ...base, platform: 'linux', node: '/usr/bin/node' });
+  assert.match(s, /c\.recorderCode=process\.argv\[4\]/);
+  assert.match(s, /"\$DATA" blackbox "\$CODE"/);
+  assert.match(s, /hooks will point at \$CODE\/dist\/bin\/hook\.js/);
+  assert.match(undoScript({ ...base, platform: 'linux' }), /delete c\.recorderCode/);
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hookroot-'));
+  const claude = path.join(home, 'claude');
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ remoteDaemon: true, recorderCode: '/usr/local/lib/agent-blackbox' }));
+  const env = { ...process.env, BLACKBOX_HOME: path.join(home, 'bb'), CLAUDE_CONFIG_DIR: claude };
+  fs.mkdirSync(path.join(home, 'bb'), { recursive: true });
+  fs.renameSync(path.join(home, 'config.json'), path.join(home, 'bb', 'config.json'));
+  const root = path.join(__dirname, '..', 'dist');
+  const inst = spawnSync(process.execPath, [path.join(root, 'src', 'install-cli.js'), 'install', '--telemetry-only'], { env, encoding: 'utf8' });
+  assert.equal(inst.status, 0, inst.stderr);
+  // hooks installed normally point at the root-owned copy
+  const full = spawnSync(process.execPath, [path.join(root, 'src', 'install-cli.js'), 'install'], { env, encoding: 'utf8' });
+  assert.equal(full.status, 0, full.stderr);
+  const settings = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const cmds = Object.values(settings.hooks).flatMap((g) => g.flatMap((x) => x.hooks.map((h) => h.command)));
+  assert.ok(cmds.length > 5);
+  for (const c of cmds) assert.match(c, /\/usr\/local\/lib\/agent-blackbox\/dist\/bin\/hook\.js" # agent-blackbox-hook$/);
+  // and so does the block for managed settings
+  const ms = spawnSync(process.execPath, [path.join(root, 'bin', 'blackbox.js'), 'managed-settings'], { env, encoding: 'utf8' });
+  assert.match(ms.stdout, /\/usr\/local\/lib\/agent-blackbox\/dist\/bin\/hook\.js/);
+  assert.ok(!ms.stdout.includes(path.join(__dirname, '..')), 'not the clone');
+});
