@@ -10,6 +10,7 @@ const { readJson, readJsonl } = require('./util');
 const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
 const { Ledger, verify } = require('./ledger');
 const { merkleRoot, MERKLE_ALG } = require('./merkle');
+const anchoring = require('./anchor');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
 const agentApi = require('./agent-api');
@@ -119,6 +120,43 @@ class Daemon {
     this.enforceRetention();
     this.retentionTimer = setInterval(() => this.enforceRetention(), 60 * 60 * 1000);
     this.retentionTimer.unref();
+    // Automatic anchoring only runs when `config.anchor` names a target.
+    if (anchoring.settings(this.cfg)) {
+      this.anchorTimer = setInterval(() => this.autoAnchor(), 60 * 1000);
+      this.anchorTimer.unref();
+    }
+  }
+
+  // A batch is committed when enough records or enough time have passed, then
+  // published. A failed publish is kept in state and retried on the next tick.
+  async autoAnchor() {
+    const s = anchoring.settings(this.cfg);
+    if (!s) return;
+    try {
+      const pending = /** @type {any[]} */ (this.state.anchorPending || []);
+      const toPublish = [];
+      const recs = readJsonl(P.ledger);
+      let lastTo = 0;
+      for (const r of recs) if (r.kind === 'anchor') lastTo = r.to;
+      const lastAt = this.state.anchorLastAt == null ? null : Number(this.state.anchorLastAt);
+      if (anchoring.due(s, { newRecords: this.ledger.seq - lastTo, lastAt, now: Date.now() })) {
+        const a = this.anchorBatch();
+        if (a) { this.state.anchorLastAt = Date.now(); toPublish.push({ anchored_at: new Date().toISOString(), ...a }); }
+      }
+      for (const a of [...pending, ...toPublish]) {
+        try {
+          await anchoring.publish(a, s);
+          fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+          pending.splice(pending.indexOf(a), 1);
+          this.log(`anchored #${a.to} (root ${a.root.slice(0, 12)}...)`);
+        } catch (e) {
+          if (!pending.includes(a)) pending.push(a);
+          this.log('anchor publish failed, will retry:', e.message);
+        }
+      }
+      this.state.anchorPending = pending.slice(-50);
+      this.saveState();
+    } catch (e) { this.log('auto anchor:', e.message); }
   }
 
   enforceRetention() {

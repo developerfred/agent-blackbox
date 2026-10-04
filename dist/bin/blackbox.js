@@ -278,6 +278,8 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
   blackbox anchor --batch     also commit to all records since the last anchor with one Merkle root
+  blackbox anchor --auto (--file PATH | --webhook URL) [--every N] [--minutes M] | --auto off
+                              opt in to automatic batches published to a target you name (off by default)
   blackbox anchor --prove <seq> | --verify-proof <file>
                               inclusion proof for one record; check one offline against a published root
   blackbox export [--session ID] [--out dir] [--endpoint URL]
@@ -421,6 +423,45 @@ async function main() {
         }
         case 'anchor': {
             const { merkleRoot, merkleProof, verifyProof } = require('../src/merkle');
+            if (flag('--auto')) {
+                // opt-in: the recorder commits a batch now and then and publishes head and root to a target you name
+                if (remote()) {
+                    const c = loadConfig();
+                    console.log(`The recorder runs as its own user, so set "anchor": { "file": "...", "webhook": "...", "every": 100, "minutes": 60 } in ${c.recorderHome}/config.json as an admin, then restart the service.`);
+                    return;
+                }
+                const cfg = loadConfig();
+                const file = opt('--file');
+                const webhook = opt('--webhook');
+                if (opt('--auto') === 'off' || args[args.indexOf('--auto') + 1] === 'off') {
+                    delete cfg.anchor;
+                    saveConfig(cfg);
+                    if (await health()) {
+                        await stop();
+                        await start({ quiet: true });
+                    }
+                    console.log('automatic anchoring is off');
+                    return;
+                }
+                if (!file && !webhook) {
+                    const a = cfg.anchor;
+                    console.log(a ? `automatic anchoring is on: ${JSON.stringify(a)}` : 'automatic anchoring is off (nothing is published unless you turn it on)');
+                    console.log(dim('usage: blackbox anchor --auto (--file PATH | --webhook URL) [--every N records] [--minutes M] | --auto off'));
+                    return;
+                }
+                if (webhook && !/^https?:\/\//.test(webhook))
+                    throw new Error('--webhook must be an http(s) URL');
+                cfg.anchor = { file: file ? path.resolve(file) : undefined, webhook, every: opt('--every') ? Number(opt('--every')) : undefined, minutes: opt('--minutes') ? Number(opt('--minutes')) : undefined };
+                saveConfig(cfg);
+                if (await health()) {
+                    await stop();
+                    await start({ quiet: true });
+                }
+                console.log(`automatic anchoring is on: ${JSON.stringify(cfg.anchor)}`);
+                console.log(dim('Only the chain head and Merkle root leave the recorder: no payloads, summaries, session ids or paths.'));
+                console.log(dim('A target the agent can write to proves nothing: use a remote, a synced folder it cannot reach, or a service you control.'));
+                return;
+            }
             if (flag('--batch')) {
                 // one Merkle root over everything since the last anchor, written to the ledger
                 await start({ quiet: true });

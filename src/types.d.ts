@@ -16,6 +16,8 @@ export interface Config {
   askFallback?: 'deny' | 'allow';
   /** erase sessions older than this many days (crypto-erase); null or 0 keeps everything */
   retainDays?: number | null;
+  /** opt-in automatic anchoring: where to publish the chain head and Merkle root */
+  anchor?: { file?: string; webhook?: string; every?: number; minutes?: number };
   allowHosts: string[];
   trustedMcpServers: string[];
   privateMcpServers: string[];

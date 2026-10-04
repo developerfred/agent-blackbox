@@ -26,6 +26,24 @@ blackbox anchor --verify-proof proof.json   # needs only proof.json and the root
 
 `blackbox verify` recomputes the root and fails on a mismatch, an unknown `alg`, or a range that does not fit. A proof does not bind the batch size, so a verifier takes `from`, `to` and `count` from the signed anchor record, never from the proof.
 
-## What this does not do (yet)
+## Automatic anchoring (opt-in)
 
-Writing the anchor record only makes the ledger commit to the batch; trust comes from publishing the root outside it. `blackbox anchor --batch` does not send anything anywhere. Scheduled batches and an optional publishing target come in a separate, opt-in change.
+Off by default. Turn it on by naming a target:
+
+```
+blackbox anchor --auto --file ~/synced/anchors.jsonl          # append a line per batch
+blackbox anchor --auto --webhook https://example.org/anchors  # POST the same JSON
+blackbox anchor --auto --file ... --every 100 --minutes 60    # when a batch is due
+blackbox anchor --auto            # show the setting
+blackbox anchor --auto off
+```
+
+The recorder then commits a batch when `every` new records have piled up (default 100), or when there is at least one new record and `minutes` have passed since the last batch (default 60), and publishes it. A failed publish is kept and retried each minute. The setting lives in `config.anchor` (`file`, `webhook`, `every`, `minutes`); with the recorder as its own user, an admin sets it in the recorder's `config.json`.
+
+What leaves the machine: `seq`, `hash`, `sig` and `key_id` of the anchor record, its `from`, `to`, `count`, `root`, and the time. No payload, summary, session id, path or prompt. Nothing is sent when `anchor` is not configured.
+
+Choose the target with care: an anchor only protects you if the agent cannot rewrite where it was published. A file in a folder the agent can write is no better than the ledger itself; a git remote, a synced folder the agent cannot reach, or a service you control is.
+
+## What this does not do
+
+It does not pick a public transparency log or timestamp authority for you, and it does not prove that everything was recorded (see the spec, section 11). RFC 3161 timestamping and OpenTimestamps targets are possible later targets.
