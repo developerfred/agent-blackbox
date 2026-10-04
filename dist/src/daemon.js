@@ -11,6 +11,7 @@ const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./path
 const { Ledger, verify } = require('./ledger');
 const { Vault, scopeOf } = require('./vault');
 const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
+const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
 const ORPHAN_AFTER_MS = 3 * 60 * 1000;
 const clip = (s, n = 160) => {
@@ -97,6 +98,22 @@ class Daemon {
         this.checkIntegrity();
         this.integrityTimer = setInterval(() => this.checkIntegrity(), 60 * 1000);
         this.integrityTimer.unref();
+        // Retention: with `retainDays` set, sessions older than that are crypto-erased
+        // at start and once an hour.
+        this.enforceRetention();
+        this.retentionTimer = setInterval(() => this.enforceRetention(), 60 * 60 * 1000);
+        this.retentionTimer.unref();
+    }
+    enforceRetention() {
+        const days = Number(this.cfg.retainDays);
+        if (!(days > 0))
+            return null;
+        return this.safe(() => {
+            const r = this.purge(days, null, { bodies: false });
+            if (r.keys)
+                this.log(`retention: erased ${r.keys} session key${r.keys === 1 ? '' : 's'} older than ${days} days`);
+            return r;
+        });
     }
     // Are our hooks still in place? Any change is written to the ledger; a
     // removal or disableAllHooks is also shown to the human on the next event.
@@ -203,6 +220,24 @@ class Daemon {
             off = end + 1;
         }
     }
+    // The one-line summary holds prompt, command and path text, so it is sealed
+    // under the session key like the payload: `purge` erases it too. The hash
+    // chain covers the sealed form.
+    sealSummary(text, sid) {
+        if (!this.vault || !text)
+            return text;
+        return SEALED_PREFIX + this.vault.seal(scopeOf(sid), Buffer.from(text, 'utf8')).data.toString('base64');
+    }
+    openSummary(text) {
+        if (!text.startsWith(SEALED_PREFIX) || !this.vault)
+            return text;
+        try {
+            return this.vault.open(Buffer.from(text.slice(SEALED_PREFIX.length), 'base64')).toString('utf8');
+        }
+        catch {
+            return '[erased]';
+        }
+    }
     index(rec) {
         if (!rec.session_id)
             return;
@@ -222,6 +257,8 @@ class Daemon {
         if (rec.kind === 'decision' && rec.decision !== 'note')
             s.decisions++;
         const { sig, ...lite } = rec;
+        if (typeof lite.summary === 'string')
+            lite.summary = this.openSummary(lite.summary);
         s.records.push(lite);
         if (s.records.length > 5000)
             s.records.shift();
@@ -265,7 +302,7 @@ class Daemon {
             tool_name: ev.tool_name,
             tool_use_id: ev.tool_use_id,
             cwd: event === 'SessionStart' ? ev.cwd : undefined,
-            summary: summarize(clean),
+            summary: this.sealSummary(summarize(clean), sid),
             payload: blob.sha,
             payload_size: blob.size,
             key: blob.key,
@@ -351,7 +388,7 @@ class Daemon {
     // unreadable. Unencrypted blobs from older versions are deleted. The chain
     // keeps every hash and stays verifiable.
     // days: only sessions whose last record is older than N days; session: one session.
-    purge(days, session = null) {
+    purge(days, session = null, { bodies: dropBodies = true } = {}) {
         const cutoff = days == null ? Infinity : Date.now() - days * 864e5;
         const lastByKey = new Map(); // kid -> { last, sessions }
         const plainOld = new Set();
@@ -396,7 +433,7 @@ class Daemon {
             catch { /* already gone */ }
         }
         let bodies = 0;
-        if (!session) {
+        if (!session && dropBodies) {
             for (const name of fs.existsSync(P.bodies) ? fs.readdirSync(P.bodies) : []) {
                 if (!name.endsWith('.json'))
                     continue;

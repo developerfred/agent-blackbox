@@ -93,10 +93,21 @@ const exists = (p) => { try {
 catch {
     return false;
 } };
+// Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
+// disappear on upgrade; its stable symlinks live in …/opt/<name>/. Anything that
+// must survive `brew upgrade` (hooks, the recorder service) points at the stable path.
+/** @param {string} p */
+function stablePath(p) {
+    const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.*)$/.exec(p);
+    if (!m)
+        return p;
+    const opt = path.join(m[1], 'opt', m[2], m[3]);
+    return fs.existsSync(opt) ? opt : p;
+}
 /**
  * Last path segment (POSIX or ~/ style), or `fallback` for an empty path.
  * @param {string} p
  * @param {string} [fallback]
  */
 const baseName = (p, fallback = '') => p.split('/').filter(Boolean).pop() || fallback;
-module.exports = { baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };
+module.exports = { stablePath, baseName, isDir, isFile, exists, sha256, claudeDir, readJson, parseLine, readJsonl, defined, pushCapped };

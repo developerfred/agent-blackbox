@@ -45,6 +45,8 @@ const DEFAULT_CONFIG = {
   web3: 'ask',
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
+  // erase sessions older than this many days, automatically (same as `blackbox purge --days N`); null keeps everything
+  retainDays: null,
   // hosts considered safe destinations for outbound traffic (suffix match)
   allowHosts: [
     'github.com', 'githubusercontent.com', 'registry.npmjs.org', 'npmjs.com',

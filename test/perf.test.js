@@ -16,7 +16,7 @@ const { Policy } = require('../dist/src/policy');
 const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../dist/src/paths');
 const { Daemon } = require('../dist/src/daemon');
 const { request } = require('../dist/src/local-http');
-const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists } = require('../dist/src/util');
+const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists, stablePath } = require('../dist/src/util');
 
 test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   const f = path.join(HOME, 'x.jsonl');
@@ -123,4 +123,16 @@ test('daemon: payload lookup by record number, across restarts; state is flushed
     const late = (await call('GET', '/api/events?session=late', null, adm)).body[0];
     assert.equal((await call('GET', `/api/payload?seq=${late.seq}`, null, adm)).body.payload.tool_input.command, 'echo late');
   } finally { server.closeAllConnections(); server.close(); }
+});
+
+test('util: stablePath maps a Homebrew Cellar path to its opt symlink, only when that exists', () => {
+  const prefix = path.join(HOME, 'brew');
+  const cellar = path.join(prefix, 'Cellar', 'node', '26.7.0', 'bin', 'node');
+  fs.mkdirSync(path.dirname(cellar), { recursive: true });
+  fs.writeFileSync(cellar, '');
+  assert.equal(stablePath(cellar), cellar, 'no opt link yet: unchanged');
+  fs.mkdirSync(path.join(prefix, 'opt', 'node', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(prefix, 'opt', 'node', 'bin', 'node'), '');
+  assert.equal(stablePath(cellar), path.join(prefix, 'opt', 'node', 'bin', 'node'));
+  assert.equal(stablePath('/usr/local/bin/node'), '/usr/local/bin/node');
 });

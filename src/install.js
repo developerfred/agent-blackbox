@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { P, ensureDirs, readToken, loadConfig, saveConfig } = require('./paths');
-const { claudeDir } = require('./util');
+const { claudeDir, stablePath } = require('./util');
 
 const HOOK_EVENTS = [
   'SessionStart', 'UserPromptSubmit', 'UserPromptExpansion', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
@@ -13,24 +13,13 @@ const HOOK_EVENTS = [
 ];
 
 const settingsPath = () => path.join(claudeDir(), 'settings.json');
-// Homebrew installs into versioned folders (…/Cellar/<name>/<version>/…) that
-// disappear on upgrade; its stable symlinks live in …/opt/<name>/. Hooks must
-// point at the stable path or they break on the next `brew upgrade`.
-/** @param {string} p */
-function stablePath(p) {
-  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/(.*)$/.exec(p);
-  if (!m) return p;
-  const opt = path.join(m[1], 'opt', m[2], m[3]);
-  return fs.existsSync(opt) ? opt : p;
-}
-
 const hookScript = stablePath(path.resolve(__dirname, '..', 'bin', 'hook.js'));
 const nodePath = () => stablePath(process.execPath);
 /** @param {any} h */
 const isOurs = (h) => h && typeof h.command === 'string' && h.command.includes('agent-blackbox-hook');
 
-/** @param {{ raw?: boolean }} opts @returns {Record<string, string>} */
-function desiredEnv({ raw }) {
+/** @param {{ raw?: boolean, prompts?: boolean }} opts @returns {Record<string, string>} */
+function desiredEnv({ raw, prompts }) {
   /** @type {Record<string, string>} */
   const env = {
     CLAUDE_CODE_ENABLE_TELEMETRY: '1',
@@ -40,9 +29,10 @@ function desiredEnv({ raw }) {
     OTEL_EXPORTER_OTLP_LOGS_HEADERS: `x-blackbox-token=${readToken()}`,
     OTEL_LOGS_EXPORT_INTERVAL: '2000',
     OTEL_LOG_TOOL_DETAILS: '1',
-    OTEL_LOG_USER_PROMPTS: '1',
-    OTEL_LOG_ASSISTANT_RESPONSES: '1',
   };
+  // prompt and response text is recorded only when asked for; the hooks already
+  // keep the prompt, and the telemetry copy would double what is stored
+  if (prompts) { env.OTEL_LOG_USER_PROMPTS = '1'; env.OTEL_LOG_ASSISTANT_RESPONSES = '1'; }
   if (raw) env.OTEL_LOG_RAW_API_BODIES = `file:${P.bodies}`;
   return env;
 }
@@ -79,8 +69,8 @@ function stripOurHooks(settings) {
 }
 
 // hooks: false installs only the telemetry settings (for the plugin, which brings its own hooks)
-/** @param {{ mode?: import('./types').Mode, raw?: boolean, force?: boolean, hooks?: boolean, log?: (msg: string) => void }} [opts] */
-function install({ mode, raw = false, force = false, hooks = true, log = console.log } = {}) {
+/** @param {{ mode?: import('./types').Mode, raw?: boolean, prompts?: boolean, force?: boolean, hooks?: boolean, log?: (msg: string) => void }} [opts] */
+function install({ mode, raw = false, prompts = false, force = false, hooks = true, log = console.log } = {}) {
   ensureDirs();
   const file = settingsPath();
   const settings = readSettings(file);
@@ -109,7 +99,7 @@ function install({ mode, raw = false, force = false, hooks = true, log = console
   cfg.installed = cfg.installed || { env: {} };
   settings.env ||= {};
   const skipped = [];
-  const want = desiredEnv({ raw });
+  const want = desiredEnv({ raw, prompts });
   // a key we added before but no longer want (e.g. raw bodies turned off): restore it
   for (const [k, prev] of Object.entries(cfg.installed.env)) {
     if (k in want) continue;
@@ -130,7 +120,7 @@ function install({ mode, raw = false, force = false, hooks = true, log = console
 
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   log(hooks ? `  hooks   ${HOOK_EVENTS.length} events → ${hookScript}` : '  hooks   left to the Claude Code plugin');
-  log(`  telemetry → http://127.0.0.1:${P.port}/v1/logs${raw ? ' + raw API bodies (scrubbed)' : ''}`);
+  log(`  telemetry → http://127.0.0.1:${P.port}/v1/logs${prompts ? ' + prompt and response text' : ''}${raw ? ' + raw API bodies (scrubbed)' : ''}`);
   if (skipped.length) log(`  kept your existing values for: ${skipped.join(', ')} (rerun with --force to override)`);
   return { file, skipped };
 }

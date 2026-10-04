@@ -259,9 +259,11 @@ function assertOutsideClaudeDir(out) {
 }
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
-  blackbox install [--mode ask|deny|monitor] [--raw] [--force] [--telemetry-only]
+  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--fail-closed] [--force] [--telemetry-only]
                               add hooks + telemetry to ~/.claude/settings.json, start recorder
-                              (--raw also keeps full model request/response bodies, scrubbed;
+                              (--prompts also logs prompt and response text through telemetry, off by default;
+                               --fail-closed denies tool calls while the recorder is unreachable;
+                               --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
   blackbox uninstall          remove them (evidence is kept)
   blackbox start | stop | status
@@ -277,7 +279,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
                               audit installed skills (Claude Code, Cursor, Codex, Copilot, ~/.agents)
-  blackbox harden [--out file] [--user NAME] [--undo | --check]
+  blackbox harden [--out file] [--user NAME] [--node PATH] [--undo | --check]
                               print a reviewable root script that runs the recorder as its own OS user
                               (agent can write evidence but not read or erase it); --check tells if it does
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
@@ -316,9 +318,14 @@ async function main() {
             if (mode)
                 parseMode(mode);
             console.log(bold('Installing agent-blackbox into Claude Code'));
-            require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+            require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+            if (flag('--fail-closed'))
+                saveConfig({ ...loadConfig(), failMode: 'closed' });
             await stop().catch(() => { });
             await start();
+            const posture = loadConfig();
+            console.log(`\n  ${posture.remoteDaemon ? green('●') : yellow('!')} keys and ledger: ${posture.remoteDaemon ? 'recorder runs as a dedicated user' : `readable by any process running as you; ${cyan('blackbox harden')} moves them out of reach`}`);
+            console.log(`  ${posture.failMode === 'closed' ? green('●') : yellow('!')} if the recorder is down: tool calls ${posture.failMode === 'closed' ? 'are denied' : `still run; ${cyan('blackbox install --fail-closed')} denies them instead`}`);
             console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
             console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
             return;
@@ -450,7 +457,7 @@ async function main() {
                 process.exitCode = r.ok ? 0 : 1;
                 return;
             }
-            const o = { user: opt('--user'), data: opt('--data'), code: opt('--code'), port: P.port };
+            const o = { user: opt('--user'), data: opt('--data'), code: opt('--code'), node: opt('--node'), port: P.port };
             const text = flag('--undo') ? h.undoScript(o) : h.hardenScript(o);
             const out = opt('--out');
             if (out) {

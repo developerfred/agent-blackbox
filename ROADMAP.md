@@ -43,6 +43,17 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 ## Phase 2: team server (months 2–3)
 
+Privacy rules the team server must meet before any code is written. The promise on the README ("no account, no cloud, no telemetry") stays true for the single-developer tool; team mode is a separate, explicit opt-in.
+
+- **Opt-in per machine, visible to the person at the keyboard.** Nothing is sent until the developer's own recorder is enrolled; enrolment and its endpoint are shown by `blackbox status`.
+- **Metadata only by default.** What may leave a machine: session ids, tool names, rule names and decisions, taint flags, secret fingerprints, counts and timestamps. Prompts, tool arguments, tool results, file paths and command text stay on the machine, sealed under keys the server never holds.
+- **Evidence stays local, the server holds pointers.** The server stores signed chain heads and record hashes so it can check integrity; a reviewer who needs a payload asks the developer's machine, and the developer approves.
+- **Encrypted in transit and at rest, with a retention limit set by the organisation and shown to the developer.**
+- **No silent widening.** A policy push can add rules, never switch on more collection; anything that sends more data needs a new opt-in on the machine.
+- **Export is the same data.** SIEM export (Splunk, Sentinel, Datadog) carries the same metadata set, nothing more.
+- **Deletion works the same way.** Purging a session on the machine also tells the server to drop what it holds about it.
+
+
 - [ ] Fleet view: agents, MCP servers and plugins on every machine; flagged sessions
 - [ ] Central policy pushed through MDM and each agent's managed settings
 - [ ] SSO, Slack alerts, SIEM export (Splunk, Sentinel, Datadog)

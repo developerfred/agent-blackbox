@@ -103,6 +103,7 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | --- | --- | --- |
 | Hooks | 13 Claude Code lifecycle events | Every prompt, tool call with arguments, tool result, subagent, stop |
 | Native telemetry | Claude Code OpenTelemetry logs (OTLP/HTTP JSON) | Cost, tokens, permission decisions, hook runs, MCP connections |
+| Prompt and response text via telemetry (opt-in, `install --prompts`) | `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES` | The text of prompts and answers (the hooks already record each prompt) |
 | Raw model I/O (opt-in, `install --raw`) | `OTEL_LOG_RAW_API_BODIES=file:` | The full request and response of every model call |
 
 All three are linked by `session_id`, `prompt_id` and `tool_use_id`.
@@ -114,9 +115,11 @@ A recorder that sees everything is itself a target. agent-blackbox stores proof 
 - **Secrets are replaced before anything is written.** API keys, tokens, private keys and `.env`-style `KEY=value` pairs become `[secret:<fingerprint>]` in every summary and payload. The fingerprint is an HMAC with a per-install key, so the ledger can say "secret `a91f…` was read at #5 and tried to leave at #12" without holding the value.
 - **Every endpoint needs a token**, including reads. `blackbox ui` opens the page with it in the URL fragment, which is never sent over the network. Other local users and processes get `401`.
 - **Files are private** (`0700` folders, `0600` files), and the agent is blocked from `~/.blackbox` through its tools.
-- **Encrypted at rest, one key per session.** Payloads are sealed with AES-256-GCM under a random key for their session, stored wrapped by a master key. Copies of the folder (backups, Time Machine, cloud sync, a tool indexing your disk) hold only ciphertext.
-- **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload.
+- **Encrypted at rest, one key per session.** Payloads, and the one-line summary of each hook record (prompt, command and path text), are sealed with AES-256-GCM under a random key for their session, stored wrapped by a master key. Copies of the folder (backups, Time Machine, cloud sync, a tool indexing your disk) hold only ciphertext.
+- **Erase for real.** `blackbox purge --session ID` or `--days N` destroys session keys: those payloads and summaries become unreadable everywhere, including in backups made earlier. The chain keeps every hash and still verifies. `blackbox show <n>` prints one decrypted payload. To do it automatically, set `"retainDays": 30` in `~/.blackbox/config.json`: sessions older than that are erased at start and every hour (off by default).
 - **Raw model bodies are off by default.** With `--raw`, Claude Code itself writes each body in clear text to `~/.blackbox/api-bodies/`; the recorder scrubs and moves it as soon as Claude Code indexes it (at most ~3 minutes later).
+
+What is recorded, where, for how long, and what the defaults do not cover: [docs/PRIVACY.md](docs/PRIVACY.md).
 
 ## The evidence
 
@@ -149,7 +152,7 @@ and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why 
 - **Same-user processes are not stopped by the OS.** Until you run the recorder as a dedicated user (`sudo sh <(blackbox harden)`: read the script first, it changes nothing by itself; `blackbox harden --check` confirms; `--undo` reverses it), any process running as you, including a command the agent finds a way around the policy to run, can read the master and signing keys, decrypt payloads, and rewrite the ledger and re-sign it. The rules protecting `~/.blackbox` are pattern matching on tool arguments, not an OS boundary. What still holds: a rewrite cannot match a chain head you already published with `blackbox anchor`, and erased session keys stay erased.
 - **The firewall catches known patterns, not every attack.** It stops naive exfiltration and the evasions in the corpus. An adaptive attacker can get through: injection detection in files is a heuristic on wording, a pre-existing script is only inspected if the recorder can read it (not when it runs as a dedicated user that cannot see your home folder), and a long opaque value in a URL is judged by its shape. Treat it as friction and evidence, not a guarantee.
 - **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it. Removing the hooks or setting `disableAllHooks` is detected and recorded (the daemon checks once a minute and on every session start), but not prevented. To make the hooks admin-owned, put them in Claude Code managed settings: `blackbox managed-settings` prints the block.
-- **Fail-open by default.** If the recorder is unreachable, tools still run (set `"failMode": "closed"` to deny instead).
+- **Fail-open by default.** If the recorder is unreachable, tools still run (`blackbox install --fail-closed`, or `"failMode": "closed"` in the config, denies instead). `blackbox install` prints which of the two postures you are in, and whether the recorder runs as a dedicated user.
 - **HTTPS payloads of shell commands are not visible**; the command line is, before it runs, and that is where the policy acts.
 - **Heuristics, not proofs.** Secret detection matches patterns and exact values; encoded or split secrets can slip through.
 - **User intent is inferred from your prompt text.** If you name a host, calls to it are not asked about (secrets are still denied).
