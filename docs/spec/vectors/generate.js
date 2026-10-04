@@ -150,34 +150,34 @@ const bad = (recs, errors, more = {}) => ({ ok: false, records: recs, errors, ..
   // edited field, hash left alone
   const r = { ...full.recs[3], summary: 'Bash echo harmless' };
   const l1 = [...L]; l1[3] = JSON.stringify(r);
-  ledgerCase('invalid-edited-field', 1, l1, bad(9, [err(4, 'HASH_MISMATCH')]));
+  ledgerCase('invalid-edited-field', 1, l1, bad(full.recs.length, [err(4, 'HASH_MISMATCH')]));
   // edited field and hash recomputed, signature left alone
   const { hash: _h, sig: _s, ...body } = r;
   const rehashed = { ...body, hash: sha256(canon(body)), sig: full.recs[3].sig };
   const l2 = [...L]; l2[3] = JSON.stringify(rehashed);
-  ledgerCase('invalid-edited-and-rehashed', 1, l2, bad(9, [err(4, 'BAD_SIGNATURE'), err(5, 'PREV_MISMATCH')]));
+  ledgerCase('invalid-edited-and-rehashed', 1, l2, bad(full.recs.length, [err(4, 'BAD_SIGNATURE'), err(5, 'PREV_MISMATCH')]));
   // removed record
   const l3 = [...L]; l3.splice(3, 1);
-  ledgerCase('invalid-removed-record', 1, l3, bad(8, [err(4, 'SEQ_GAP'), err(4, 'PREV_MISMATCH')]));
+  ledgerCase('invalid-removed-record', 1, l3, bad(full.recs.length - 1, [err(4, 'SEQ_GAP'), err(4, 'PREV_MISMATCH')]));
   // reordered records
   const l4 = [...L]; [l4[2], l4[3]] = [l4[3], l4[2]];
-  ledgerCase('invalid-reordered', 1, l4, bad(9, [err(3, 'SEQ_GAP'), err(3, 'PREV_MISMATCH'), err(4, 'SEQ_GAP'), err(4, 'PREV_MISMATCH'), err(5, 'SEQ_GAP'), err(5, 'PREV_MISMATCH')]));
+  ledgerCase('invalid-reordered', 1, l4, bad(full.recs.length, [err(3, 'SEQ_GAP'), err(3, 'PREV_MISMATCH'), err(4, 'SEQ_GAP'), err(4, 'PREV_MISMATCH'), err(5, 'SEQ_GAP'), err(5, 'PREV_MISMATCH')]));
   // flipped signature byte
   const sig = Buffer.from(full.recs[5].sig, 'base64'); sig[0] ^= 1;
   const l5 = [...L]; l5[5] = JSON.stringify({ ...full.recs[5], sig: sig.toString('base64') });
-  ledgerCase('invalid-bad-signature', 1, l5, bad(9, [err(6, 'BAD_SIGNATURE')]));
+  ledgerCase('invalid-bad-signature', 1, l5, bad(full.recs.length, [err(6, 'BAD_SIGNATURE')]));
   // truncated, checked against an anchor taken at seq 7
   write('cases/invalid-truncated-vs-anchor/anchor.json', JSON.stringify({ anchored_at: '2026-10-04T13:00:00.000Z', seq: 7, hash: full.recs[6].hash, sig: full.recs[6].sig, key_id: KEY.keyId }) + '\n');
   ledgerCase('invalid-truncated-vs-anchor', 1, L.slice(0, 4), bad(4, [err(0, 'ANCHOR_MISMATCH')]), { anchor: 'cases/invalid-truncated-vs-anchor/anchor.json' });
   // anchor with the wrong hash for its seq (history rewritten)
   write('cases/invalid-rewritten-vs-anchor/anchor.json', JSON.stringify({ anchored_at: '2026-10-04T13:00:00.000Z', seq: 4, hash: sha256('another history'), sig: full.recs[3].sig, key_id: KEY.keyId }) + '\n');
-  ledgerCase('invalid-rewritten-vs-anchor', 1, L, bad(9, [err(0, 'ANCHOR_MISMATCH')]), { anchor: 'cases/invalid-rewritten-vs-anchor/anchor.json' });
+  ledgerCase('invalid-rewritten-vs-anchor', 1, L, bad(full.recs.length, [err(0, 'ANCHOR_MISMATCH')]), { anchor: 'cases/invalid-rewritten-vs-anchor/anchor.json' });
   // a line that is not JSON
   const l6 = [...L]; l6.splice(4, 0, '{"v":1,"seq":');
-  ledgerCase('invalid-not-json', 1, l6, bad(9, [err(5, 'INVALID_JSON')]));
+  ledgerCase('invalid-not-json', 1, l6, bad(full.recs.length, [err(5, 'INVALID_JSON')]));
   // a duplicate key (same value, so nothing else changes)
   const l7 = [...L]; l7[3] = l7[3].replace('"kind":"hook"', '"kind":"hook","kind":"hook"');
-  ledgerCase('invalid-duplicate-key', 1, l7, bad(9, [err(4, 'DUPLICATE_KEY')]));
+  ledgerCase('invalid-duplicate-key', 1, l7, bad(full.recs.length, [err(4, 'DUPLICATE_KEY')]));
   ledgerCase('invalid-empty-ledger', 1, [], { ok: false, records: 0, errors: [err(0, 'EMPTY_LEDGER')] });
 }
 {
