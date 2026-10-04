@@ -27,6 +27,7 @@ The hook script picks its adapter with `--agent <id>` (default `claude`). Adapte
 |---|---|---|---|---|---|
 | Claude Code | `blackbox install` (or the plugin) | yes | yes | yes | 14 lifecycle events, OpenTelemetry too |
 | OpenAI Codex CLI | `blackbox install --agent codex` | yes, for Bash, `apply_patch` and MCP calls | no: an ask becomes a block | yes | see below |
+| Gemini CLI | `blackbox install --agent gemini` | yes, for every tool | no: an ask becomes a block | yes | see below |
 | Cursor | `blackbox install --agent cursor` | yes, for shell and MCP calls | yes | shell, MCP and file reads (with content) | file edits are recorded after the fact; see below |
 
 ### Codex CLI
@@ -50,6 +51,17 @@ Limits to know before relying on it:
 - **File reads are never blocked.** The read hook carries the file's content, so the session learns what it read (private data, injected text), and the trifecta rule fires later on the egress.
 - **Other Cursor hook points are not used.** Newer events (a generic tool hook, session start and end, subagents) are not registered until they have been checked against a real Cursor.
 - The reply fields are written in both `snake_case` and `camelCase` (`user_message` and `userMessage`), because the documentation and the type definitions I could reach disagree. As with Codex, the payload shapes come from third-party examples; the official page was not reachable. Restart Cursor after installing.
+
+### Gemini CLI
+
+Hooks live in `~/.gemini/settings.json` under `hooks`. The adapter registers `SessionStart`, `SessionEnd`, `BeforeAgent` (the prompt), `AfterAgent`, `BeforeTool`, `AfterTool` and `Notification`, and renames the tools: `run_shell_command` is `Bash`, `read_file` and `read_many_files` are `Read`, `write_file` is `Write`, `replace` is `Edit`, `web_fetch` is `WebFetch`, `google_web_search` is `WebSearch`, and MCP tools (named by their `mcp_context`) are `mcp__<server>__<tool>`. `save_memory`, which appends to the `GEMINI.md` later sessions load as instructions, is seen as a write to that file, so the memory-write rule covers it. Gemini's `web_fetch` takes a prompt that holds the URLs; every URL in it is checked.
+
+Limits to know before relying on it:
+
+- **Gemini cannot ask you.** An `ask` becomes a block (`"askFallback": "allow"` lets it run with a notice). Denials use `decision: "deny"`; the model sees only the uninformative reason and you see the detail.
+- **Hooks may need enabling** in your Gemini settings, and apply to new sessions.
+- Gemini's model-level hooks (`BeforeModel`, `AfterModel`, `BeforeToolSelection`) are not used; the recorder sees tool calls, prompts and turns, not model traffic, and there is no OpenTelemetry stream like Claude Code's.
+- The event names, tool names and reply shape follow Gemini CLI's hooks reference in its repository. The tool parameter names (`file_path`, `prompt`, `paths`) are from memory of Gemini's tools and have not been run against a real Gemini; check them with your version.
 
 ## Adding an agent
 

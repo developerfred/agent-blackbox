@@ -346,7 +346,7 @@ function inputText(toolInput) {
         .filter((x) => typeof x === 'string').join('\n');
 }
 // Where each supported agent keeps the hooks that record it.
-const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml)|\.cursor\/hooks\.json)/;
+const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml)|\.cursor\/hooks\.json|\.gemini\/settings\.json)/;
 class Policy {
     /**
      * protect: extra paths (the real data folder) the agent may never touch.
@@ -622,20 +622,25 @@ class Policy {
             return { yes: false };
         }
         if (tool === 'WebFetch') {
-            let u;
-            try {
-                u = new URL(input.url);
-            }
-            catch {
-                return { yes: false };
-            }
-            if (allowed(u.hostname, allow)) {
-                const carries = urlCarriesData(input.url);
-                return carries ? { yes: true, why: carries } : { yes: false };
-            }
-            const longSegment = u.pathname.split('/').some((p) => p.length > 40);
-            if (u.search.length > 1 || longSegment) {
-                return { yes: true, intended: allowed(u.hostname.toLowerCase(), sessIntent), why: `URL to ${u.hostname} carries data in its path or query` };
+            // an adapter may send several URLs for one fetch (urls); any of them can carry data out
+            for (const url of [input.url, ...(Array.isArray(input.urls) ? input.urls : [])]) {
+                let u;
+                try {
+                    u = new URL(url);
+                }
+                catch {
+                    continue;
+                }
+                if (allowed(u.hostname, allow)) {
+                    const carries = urlCarriesData(url);
+                    if (carries)
+                        return { yes: true, why: carries };
+                    continue;
+                }
+                const longSegment = u.pathname.split('/').some((p) => p.length > 40);
+                if (u.search.length > 1 || longSegment) {
+                    return { yes: true, intended: allowed(u.hostname.toLowerCase(), sessIntent), why: `URL to ${u.hostname} carries data in its path or query` };
+                }
             }
             return { yes: false };
         }
