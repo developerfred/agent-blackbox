@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { P, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, loadConfig, saveConfig } = require('../src/paths');
+const { P, ensureDirs, cliToken, loadConfig, saveConfig } = require('../src/paths');
 const { verify, GENESIS } = require('../src/ledger');
 const { readJsonl } = require('../src/util');
 
@@ -13,7 +13,7 @@ const { red, green, yellow, dim, bold, cyan } = require('../src/term').palette(!
 
 // admin: this call reads, verifies or erases, so it needs the admin token
 function call(method, p, body, admin = true) {
-  const token = readAdminToken() || (admin ? readAdminTokenViaSudo() : '') || readToken();
+  const token = cliToken(admin);
   return require('../src/local-http').request({ port: P.port, method, path: p, token, body });
 }
 
@@ -422,7 +422,7 @@ async function main() {
     case 'ui': {
       await start({ quiet: true });
       // The token travels in the URL fragment, which the browser never sends to a server.
-      const url = `http://127.0.0.1:${P.port}/#token=${readAdminToken() || readToken()}`;
+      const url = `http://127.0.0.1:${P.port}/#token=${cliToken(true)}`;
       const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
       try { spawn(opener, [url], { stdio: 'ignore', detached: true }).unref(); } catch { /* print only */ }
       console.log(`http://127.0.0.1:${P.port}/ ${dim('(opened with a private access token)')}`);

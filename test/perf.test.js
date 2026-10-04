@@ -124,3 +124,30 @@ test('daemon: payload lookup by record number, across restarts; state is flushed
     assert.equal((await call('GET', `/api/payload?seq=${late.seq}`, null, adm)).body.payload.tool_input.command, 'echo late');
   } finally { server.closeAllConnections(); server.close(); }
 });
+
+test('cli token: a leftover admin-token is not sent when the recorder runs as its own user', () => {
+  const { cliToken } = require('../src/paths');
+  ensureDirs();
+  fs.writeFileSync(P.token, 'ingest-token');
+  fs.writeFileSync(P.adminToken, 'stale-admin-token');
+  const original = fs.existsSync(P.config) ? fs.readFileSync(P.config, 'utf8') : null;
+  try {
+    // recorder as the same user: unchanged, the admin token wins
+    fs.writeFileSync(P.config, JSON.stringify({}));
+    assert.equal(cliToken(false), 'stale-admin-token');
+    assert.equal(cliToken(true), 'stale-admin-token');
+    // recorder as its own user: the stale file belongs to a recorder that is gone and would be refused
+    fs.writeFileSync(P.config, JSON.stringify({ remoteDaemon: true }));
+    assert.equal(cliToken(false), 'ingest-token');
+    assert.equal(cliToken(true), 'ingest-token', 'without sudo access it falls back to the ingest token (a 403, not a wrong 401)');
+    // and the folder stops growing an admin token of its own
+    fs.rmSync(P.adminToken);
+    ensureDirs();
+    assert.ok(!fs.existsSync(P.adminToken));
+    fs.writeFileSync(P.config, JSON.stringify({}));
+    ensureDirs();
+    assert.ok(fs.existsSync(P.adminToken), 'same-user mode still creates it');
+  } finally {
+    if (original == null) fs.rmSync(P.config, { force: true }); else fs.writeFileSync(P.config, original);
+  }
+});
