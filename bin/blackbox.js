@@ -218,9 +218,10 @@ function assertOutsideClaudeDir(out) {
 
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
-  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--force] [--telemetry-only]
+  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--fail-closed] [--force] [--telemetry-only]
                               add hooks + telemetry to ~/.claude/settings.json, start recorder
                               (--prompts also logs prompt and response text through telemetry, off by default;
+                               --fail-closed denies tool calls while the recorder is unreachable;
                                --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
   blackbox uninstall          remove them (evidence is kept)
