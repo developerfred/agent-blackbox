@@ -1,0 +1,774 @@
+'use strict';
+// `blackbox scan`: a retroactive audit of existing Claude Code transcripts.
+// Each past session is replayed offline through the same Policy the live hook
+// uses, so the user sees what the firewall *would* have done, without
+// installing anything. Read-only: nothing is written under ~/.claude and no
+// network request is made. Only aggregate numbers leave this module, except
+// for the opt-in --details list, whose reason text goes through redact().
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { Policy, redact, hostsIn } = require('./policy');
+const { loadConfig, DEFAULT_CONFIG } = require('./paths');
+const { claudeDir, baseName } = require('./util');
+const { palette } = require('./term');
+const DAY = 86400000;
+const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'lethal-trifecta']);
+const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
+// Rules worth listing per session in --details (plain egress is too common).
+const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper', 'web3-transaction']);
+// Tool categories, in a fixed order: the order is also the color order in the
+// HTML report, so a category keeps its color everywhere.
+const CATEGORIES = [
+    { id: 'shell', label: 'Shell' },
+    { id: 'read', label: 'Read & search' },
+    { id: 'edit', label: 'Edit & write' },
+    { id: 'web', label: 'Web' },
+    { id: 'mcp', label: 'MCP' },
+    { id: 'agents', label: 'Agents & planning' },
+    { id: 'other', label: 'Other' },
+];
+function categoryOf(name) {
+    if (/^mcp__/.test(name))
+        return 'mcp';
+    if (/^(Bash|PowerShell|BashOutput|KillShell|KillBash|Monitor)$/.test(name))
+        return 'shell';
+    if (/^(Read|Grep|Glob|LS|NotebookRead|ListMcpResourcesTool|ReadMcpResourceTool)$/.test(name))
+        return 'read';
+    if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(name))
+        return 'edit';
+    if (/^(WebFetch|WebSearch)$/.test(name))
+        return 'web';
+    if (/^(Task|Agent|Todo\w*|Task\w+|Skill|Workflow|SendMessage|ExitPlanMode|EnterPlanMode|EnterWorktree|ExitWorktree)$/.test(name))
+        return 'agents';
+    return 'other';
+}
+// First program of each segment of a shell command (`cd x && npm test | tee`
+// -> cd, npm, tee). Names only: arguments never leave this function.
+function programsOf(cmd) {
+    const out = [];
+    // Inline scripts are not programs: drop heredoc bodies and quoted strings.
+    const text = String(cmd || '')
+        .split(/<<-?\s*['"]?[A-Za-z_]+['"]?/)[0]
+        .replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, ' ');
+    for (const seg of text.split(/&&|\|\||[;|\n]/)) {
+        const words = seg.trim().replace(/^\(+/, '').split(/\s+/).filter((w) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+        let w = words[0];
+        if (w === 'sudo' || w === 'time' || w === 'exec' || w === 'nohup')
+            w = words[1];
+        if (!w)
+            continue;
+        w = baseName(w.replace(/^["']|["']$/g, ''));
+        if (/^[A-Za-z0-9._+-]{1,32}$/.test(w))
+            out.push(w);
+    }
+    return out;
+}
+const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
+// Ties break on the key so the order does not depend on which file came first.
+const byCountThenKey = (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+const top = (map, k) => [...map.entries()].sort(byCountThenKey).slice(0, k);
+function defaultProjectsDir() {
+    const base = claudeDir();
+    return path.join(base, 'projects');
+}
+// Session files live at projects/<cwd>/<id>.jsonl; subagent transcripts sit
+// deeper (<id>/subagents/agent-*.jsonl), so walk a few levels.
+/** @param {string} dir @param {number} minMtime @param {number} [depth] @param {{ file: string, mtime: number }[]} [out] */
+function findFiles(dir, minMtime, depth = 0, out = []) {
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    }
+    catch {
+        return out;
+    }
+    for (const e of entries) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory() && depth < 4)
+            findFiles(p, minMtime, depth + 1, out);
+        else if (e.isFile() && e.name.endsWith('.jsonl')) {
+            try {
+                const st = fs.statSync(p);
+                if (st.mtimeMs >= minMtime)
+                    out.push({ file: p, mtime: st.mtimeMs });
+            }
+            catch { /* vanished */ }
+        }
+    }
+    return out;
+}
+// Line iterator over a file in fixed-size chunks: transcripts can be far
+// larger than we want to hold as one string.
+function* lines(file) {
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+    }
+    catch {
+        return;
+    }
+    const buf = Buffer.alloc(1 << 20);
+    let rest = '';
+    try {
+        for (;;) {
+            const n = fs.readSync(fd, buf, 0, buf.length, null);
+            if (!n)
+                break;
+            const chunk = rest + buf.toString('utf8', 0, n);
+            const parts = chunk.split('\n');
+            rest = parts.pop() ?? '';
+            yield* parts;
+        }
+        if (rest)
+            yield rest;
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+}
+// Note: a multi-byte UTF-8 char split across chunks decodes as U+FFFD on both
+// sides; that only touches text content, never the JSON structure we rely on.
+const textOfResult = (content) => (typeof content === 'string' ? content
+    : Array.isArray(content) ? content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n')
+        : '');
+// Transcripts store Read output with "   12\t" (or "12→") line-number prefixes.
+// The live hook gets { file: { content } } without them, and KEY=value
+// detection is anchored at line start, so rebuild that shape.
+function toolResponse(tool, text) {
+    if (tool === 'Read')
+        return { file: { content: text.replace(/^ *\d+(?:\t|→)/gm, '') } };
+    return text;
+}
+function humanPrompt(content) {
+    if (typeof content === 'string')
+        return content;
+    if (!Array.isArray(content) || content.some((b) => b && b.type === 'tool_result'))
+        return null;
+    const t = textOfResult(content);
+    return t || null;
+}
+/**
+ * Replays transcript files through a fresh Policy and returns the raw,
+ * mergeable aggregates (Maps and Sets, structured-cloneable so a worker thread
+ * can post them back). Files are processed in the order given, so a session
+ * that spans files must be handled by one call (see groupFiles).
+ * @param {string[]} files
+ * @param {import('./types').Config} cfg
+ * @param {Buffer} [salt] HMAC salt for secret fingerprints; shared by all workers of one scan so they agree
+ */
+function collect(files, cfg, salt = crypto.randomBytes(32)) {
+    const { parseToolName } = require('./mcp');
+    const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
+    const policy = new Policy(cfg, { sessions: {} }, salt);
+    const sessions = new Map(); // id -> { first, last, tools, private, untrusted, rules:Set }
+    // A session can move between directories (and span files), so project
+    // numbers follow each entry's own cwd rather than one cwd per session.
+    const projects = new Map(); // basename -> { sessions:Set, toolCalls, flagged:Set }
+    const toolCounts = new Map();
+    const catCounts = new Map();
+    const dayCats = new Map(); // YYYY-MM-DD -> Map(category -> calls)
+    const programs = new Map();
+    const hosts = new Map(); // host -> { calls, kind }
+    const skillUse = new Map(); // name -> { model, user, sessions:Set }
+    const useSkill = (name, who, sid) => {
+        const k = String(name).replace(/^\//, '').trim();
+        if (!k)
+            return;
+        const r = skillUse.get(k) || { model: 0, user: 0, sessions: new Set() };
+        r[who]++;
+        r.sessions.add(sid);
+        skillUse.set(k, r);
+    };
+    const allowed = (h) => (cfg.allowHosts || []).some((a) => h === a || h.endsWith('.' + a));
+    const flagged = [];
+    const flaggedKey = new Set();
+    const t = { toolCalls: 0, outboundCalls: 0, wouldDenyCalls: 0, wouldAskCalls: 0, malformedLines: 0 };
+    const ruleCounts = {};
+    let first = null, last = null;
+    const sess = (id, e) => {
+        let s = sessions.get(id);
+        if (!s)
+            sessions.set(id, (s = { id, first: null, last: null, tools: 0, private: false, untrusted: false, rules: new Set() }));
+        if (e.timestamp) {
+            if (!s.first || e.timestamp < s.first)
+                s.first = e.timestamp;
+            if (!s.last || e.timestamp > s.last)
+                s.last = e.timestamp;
+            if (!first || e.timestamp < first)
+                first = e.timestamp;
+            if (!last || e.timestamp > last)
+                last = e.timestamp;
+        }
+        return s;
+    };
+    for (const file of files) {
+        const fallbackId = path.basename(file, '.jsonl');
+        const pending = new Map(); // tool_use_id -> { name, input, session_id }
+        for (const line of lines(file)) {
+            if (!line.trim())
+                continue;
+            let e;
+            try {
+                e = JSON.parse(line);
+            }
+            catch {
+                t.malformedLines++;
+                continue;
+            }
+            if (!e || (e.type !== 'assistant' && e.type !== 'user'))
+                continue;
+            const content = e.message && e.message.content;
+            const session_id = e.sessionId || fallbackId;
+            const s = sess(session_id, e);
+            const project = e.cwd ? path.basename(e.cwd) : '(unknown)';
+            let proj = projects.get(project);
+            if (!proj)
+                projects.set(project, (proj = { sessions: new Set(), toolCalls: 0, flagged: new Set(), categories: new Map() }));
+            proj.sessions.add(session_id);
+            if (e.type === 'assistant') {
+                if (!Array.isArray(content))
+                    continue;
+                for (const b of content) {
+                    if (!b || b.type !== 'tool_use' || typeof b.name !== 'string')
+                        continue;
+                    const tool_input = b.input && typeof b.input === 'object' ? b.input : {};
+                    t.toolCalls++;
+                    s.tools++;
+                    proj.toolCalls++;
+                    toolCounts.set(b.name, (toolCounts.get(b.name) || 0) + 1);
+                    const mp = parseToolName(b.name);
+                    if (mp) {
+                        const r = mcpUse.get(mp.server) || { plugin: mp.plugin, calls: 0, sessions: new Set(), tools: new Map(), outbound: 0, errors: 0, first: null, last: null };
+                        r.calls++;
+                        r.sessions.add(session_id);
+                        bump(r.tools, mp.tool);
+                        if (mp.outbound)
+                            r.outbound++;
+                        if (e.timestamp) {
+                            if (!r.first || e.timestamp < r.first)
+                                r.first = e.timestamp;
+                            if (!r.last || e.timestamp > r.last)
+                                r.last = e.timestamp;
+                        }
+                        mcpUse.set(mp.server, r);
+                    }
+                    if (b.name === 'Skill')
+                        useSkill(tool_input.skill || tool_input.name || tool_input.command || '', 'model', session_id);
+                    const cat = categoryOf(b.name);
+                    bump(catCounts, cat);
+                    bump(proj.categories, cat);
+                    const dk = e.timestamp ? String(e.timestamp).slice(0, 10) : null;
+                    if (dk) {
+                        if (!dayCats.has(dk))
+                            dayCats.set(dk, new Map());
+                        bump(dayCats.get(dk), cat);
+                    }
+                    if (cat === 'shell' && typeof tool_input.command === 'string') {
+                        for (const prog of programsOf(tool_input.command))
+                            bump(programs, prog);
+                    }
+                    const targets = b.name === 'WebFetch' && typeof tool_input.url === 'string' ? hostsIn(tool_input.url)
+                        : cat === 'shell' && typeof tool_input.command === 'string' ? hostsIn(tool_input.command) : [];
+                    for (const h of new Set(targets)) {
+                        const rec = hosts.get(h) || { calls: 0, kind: null };
+                        rec.calls++;
+                        const intent = (policy.session(session_id).intentHosts || []).some((a) => h === a || h.endsWith('.' + a));
+                        rec.kind = allowed(h) ? 'allowlisted' : intent ? 'named by you' : 'external';
+                        hosts.set(h, rec);
+                    }
+                    pending.set(b.id, { name: b.name, input: tool_input, session_id });
+                    let d = null;
+                    try {
+                        d = policy.preToolUse({ session_id, tool_name: b.name, tool_input, tool_use_id: b.id });
+                    }
+                    catch { /* odd input */ }
+                    if (!d)
+                        continue;
+                    ruleCounts[d.rule] = (ruleCounts[d.rule] || 0) + 1;
+                    if (EGRESS_RULES.has(d.rule))
+                        t.outboundCalls++;
+                    if (DENY_RULES.has(d.rule))
+                        t.wouldDenyCalls++;
+                    if (d.rule === 'lethal-trifecta' || d.rule === 'hook-tamper')
+                        t.wouldAskCalls++;
+                    if (FLAG_RULES.has(d.rule)) {
+                        s.rules.add(d.rule);
+                        proj.flagged.add(session_id);
+                        const k = `${session_id}\0${d.rule}`;
+                        if (!flaggedKey.has(k)) {
+                            flaggedKey.add(k);
+                            flagged.push({ session: session_id, date: e.timestamp || null, project, rule: d.rule, reason: redact(d.reason || '') });
+                        }
+                    }
+                }
+            }
+            else {
+                // a slash command the human typed: <command-name>/deploy</command-name>
+                const raw = typeof content === 'string' ? content : Array.isArray(content) ? textOfResult(content) : '';
+                const cmd = /<command-name>\/?([^<\s]+)<\/command-name>/.exec(raw);
+                if (cmd)
+                    useSkill(cmd[1], 'user', session_id);
+                const prompt = e.isMeta ? null : humanPrompt(content);
+                if (prompt != null) {
+                    if (typeof policy.userPrompt === 'function') {
+                        try {
+                            policy.userPrompt({ session_id, prompt });
+                        }
+                        catch { /* optional */ }
+                    }
+                    continue;
+                }
+                if (!Array.isArray(content))
+                    continue;
+                for (const b of content) {
+                    if (!b || b.type !== 'tool_result')
+                        continue;
+                    const call = pending.get(b.tool_use_id);
+                    if (!call)
+                        continue;
+                    pending.delete(b.tool_use_id);
+                    // A failed or refused call never delivered real content.
+                    if (b.is_error) {
+                        const mp = parseToolName(call.name);
+                        if (mp && mcpUse.has(mp.server))
+                            mcpUse.get(mp.server).errors++;
+                        continue;
+                    }
+                    let r = null;
+                    try {
+                        r = policy.postToolUse({ session_id: call.session_id, tool_name: call.name, tool_input: call.input, tool_response: toolResponse(call.name, textOfResult(b.content)), tool_use_id: b.tool_use_id });
+                    }
+                    catch { /* odd input */ }
+                    const cs = sessions.get(call.session_id) || s;
+                    for (const taint of (r && r.taints) || []) {
+                        if (taint.flag === 'private')
+                            cs.private = true;
+                        if (taint.flag === 'untrusted')
+                            cs.untrusted = true;
+                    }
+                }
+            }
+        }
+    }
+    return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last };
+}
+const minTs = (a, b) => (!a || (b && b < a) ? b || a : a);
+const maxTs = (a, b) => (!a || (b && b > a) ? b || a : a);
+const addInto = (to, from) => { for (const [k, v] of from)
+    to.set(k, (to.get(k) || 0) + v); };
+/** Folds partial aggregates (in file order) into one, as if scanned in a single pass. */
+function mergeParts(parts) {
+    const M = collect([], DEFAULT_CONFIG);
+    for (const P of parts) {
+        for (const [id, s] of P.sessions) {
+            const m = M.sessions.get(id);
+            if (!m) {
+                M.sessions.set(id, s);
+                continue;
+            }
+            m.first = minTs(m.first, s.first);
+            m.last = maxTs(m.last, s.last);
+            m.tools += s.tools;
+            m.private ||= s.private;
+            m.untrusted ||= s.untrusted;
+            for (const r of s.rules)
+                m.rules.add(r);
+        }
+        for (const [name, p] of P.projects) {
+            const m = M.projects.get(name);
+            if (!m) {
+                M.projects.set(name, p);
+                continue;
+            }
+            for (const id of p.sessions)
+                m.sessions.add(id);
+            for (const id of p.flagged)
+                m.flagged.add(id);
+            m.toolCalls += p.toolCalls;
+            addInto(m.categories, p.categories);
+        }
+        addInto(M.toolCounts, P.toolCounts);
+        addInto(M.catCounts, P.catCounts);
+        addInto(M.programs, P.programs);
+        for (const [d, c] of P.dayCats) {
+            if (!M.dayCats.has(d))
+                M.dayCats.set(d, new Map());
+            addInto(M.dayCats.get(d), c);
+        }
+        for (const [h, r] of P.hosts) {
+            const m = M.hosts.get(h);
+            if (!m)
+                M.hosts.set(h, r);
+            else {
+                m.calls += r.calls;
+                m.kind = r.kind;
+            }
+        }
+        for (const [k, r] of P.skillUse) {
+            const m = M.skillUse.get(k);
+            if (!m) {
+                M.skillUse.set(k, r);
+                continue;
+            }
+            m.model += r.model;
+            m.user += r.user;
+            for (const id of r.sessions)
+                m.sessions.add(id);
+        }
+        for (const [server, r] of P.mcpUse) {
+            const m = M.mcpUse.get(server);
+            if (!m) {
+                M.mcpUse.set(server, r);
+                continue;
+            }
+            m.calls += r.calls;
+            m.outbound += r.outbound;
+            m.errors += r.errors;
+            for (const id of r.sessions)
+                m.sessions.add(id);
+            addInto(m.tools, r.tools);
+            m.first = minTs(m.first, r.first);
+            m.last = maxTs(m.last, r.last);
+        }
+        const seen = new Set(M.flagged.map((f) => `${f.session}\0${f.rule}`));
+        for (const f of P.flagged) {
+            const k = `${f.session}\0${f.rule}`;
+            if (!seen.has(k)) {
+                seen.add(k);
+                M.flagged.push(f);
+            }
+        }
+        for (const k of Object.keys(M.t))
+            M.t[k] += P.t[k];
+        for (const [r, n] of Object.entries(P.ruleCounts))
+            M.ruleCounts[r] = (M.ruleCounts[r] || 0) + n;
+        M.first = minTs(M.first, P.first);
+        M.last = maxTs(M.last, P.last);
+    }
+    return M;
+}
+/**
+ * @param {ReturnType<typeof collect>} P
+ * @param {{ files: number, days: number, now: number, audits?: any[] | null, mcpAudits?: any[] | null }} o
+ */
+function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
+    const { parseToolName, configFor, normName } = require('./mcp');
+    const { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last } = P;
+    const list = [...sessions.values()];
+    const count = (fn) => list.filter(fn).length;
+    return {
+        scannedAt: new Date(now).toISOString(),
+        days,
+        files,
+        sessions: list.length,
+        range: { first, last },
+        toolCalls: t.toolCalls,
+        privateSessions: count((s) => s.private),
+        untrustedSessions: count((s) => s.untrusted),
+        bothTaintsSessions: count((s) => s.private && s.untrusted),
+        outboundCalls: t.outboundCalls,
+        trifectaSessions: count((s) => s.rules.has('lethal-trifecta')),
+        wouldAskCalls: t.wouldAskCalls,
+        wouldDenyCalls: t.wouldDenyCalls,
+        wouldDenySessions: count((s) => s.rules.has('secret-egress') || s.rules.has('sensitive-egress')),
+        flaggedSessions: count((s) => s.rules.size > 0),
+        rules: ruleCounts,
+        topTools: top(toolCounts, 15).map(([name, count]) => ({ name, count, category: categoryOf(name) })),
+        categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, catCounts.get(c.id) || 0])),
+        daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
+        shellPrograms: top(programs, 15).map(([name, count]) => ({ name, count })),
+        hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
+        skills: [...skillUse.entries()].sort((a, b) => (b[1].model + b[1].user) - (a[1].model + a[1].user) || (a[0] < b[0] ? -1 : 1)).slice(0, 25).map(([name, r]) => {
+            const a = audits ? require('./skills').riskFor(audits, name) : null;
+            return { name, calls: r.model + r.user, byModel: r.model, byUser: r.user, sessions: r.sessions.size,
+                risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
+                rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
+        }),
+        mcp: (() => {
+            const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).map(([server, r]) => {
+                const cfgs = mcpAudits ? configFor(mcpAudits, server) : [];
+                return {
+                    server, plugin: r.plugin, calls: r.calls, sessions: r.sessions.size, outboundCalls: r.outbound, errors: r.errors,
+                    firstUsed: r.first, lastUsed: r.last,
+                    tools: top(r.tools, 50).map(([name, count]) => ({ name, calls: count, outbound: parseToolName(`mcp__x__${name}`)?.outbound })),
+                    configured: cfgs.map((c) => ({ client: c.client, scope: c.scope, transport: c.transport, risk: c.risk, rules: c.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) })),
+                };
+            });
+            const usedNames = new Set(used.map((u) => normName(u.server)));
+            const unused = (mcpAudits || []).filter((a) => !usedNames.has(normName(a.name)))
+                .map((a) => ({ server: a.name, client: a.client, scope: a.scope, transport: a.transport, risk: a.risk, rules: a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) }));
+            return { used, unused };
+        })(),
+        projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
+                sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size,
+                categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
+            }])),
+        malformedLines: t.malformedLines,
+        flagged: flagged.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.session.localeCompare(b.session) || a.rule.localeCompare(b.rule)),
+    };
+}
+const scanDefaults = () => ({ projectsDir: defaultProjectsDir(), days: 30, now: Date.now(), cfg: loadConfig(), audits: null, mcpAudits: null });
+/**
+ * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
+ */
+function scan(opts = {}) {
+    const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
+    const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
+    return summarize(collect(files.map((f) => f.file), cfg), { files: files.length, days, now, audits, mcpAudits });
+}
+// A session can span files (resumed sessions, subagent transcripts), and the
+// Policy's taint state follows the session, so files that share a session must
+// be replayed by the same worker. Group them by the sessionIds near the top of
+// each file plus the <id>/subagents/ directory layout.
+/** @param {{ file: string, mtime: number }[]} files @returns {{ file: string, mtime: number }[][]} */
+function groupFiles(files) {
+    const parent = new Map();
+    const find = (x) => { while (parent.get(x) !== x) {
+        parent.set(x, parent.get(parent.get(x)));
+        x = parent.get(x);
+    } return x; };
+    const union = (a, b) => { if (!parent.has(a))
+        parent.set(a, a); if (!parent.has(b))
+        parent.set(b, b); parent.set(find(a), find(b)); };
+    const head = Buffer.alloc(1 << 16);
+    for (const { file } of files) {
+        const dir = path.dirname(file);
+        const key = path.basename(dir) === 'subagents' ? 'dir:' + path.dirname(dir) : 'dir:' + path.join(dir, path.basename(file, '.jsonl'));
+        union('file:' + file, key);
+        let fd;
+        try {
+            fd = fs.openSync(file, 'r');
+            const n = fs.readSync(fd, head, 0, head.length, 0);
+            for (const m of head.toString('utf8', 0, n).matchAll(/"sessionId":"([^"]+)"/g))
+                union('file:' + file, 'sid:' + m[1]);
+        }
+        catch { /* unreadable: collect() skips it too */ }
+        finally {
+            if (fd !== undefined)
+                fs.closeSync(fd);
+        }
+    }
+    const groups = new Map();
+    for (const f of files) {
+        const r = find('file:' + f.file);
+        if (!groups.has(r))
+            groups.set(r, []);
+        groups.get(r).push(f);
+    }
+    return [...groups.values()];
+}
+/**
+ * Splits files into at most `jobs` batches of whole groups, balanced by bytes.
+ * @param {{ file: string, mtime: number }[]} files @param {number} jobs @returns {{ file: string, mtime: number }[][]}
+ */
+function partition(files, jobs) {
+    const sized = groupFiles(files).map((g) => {
+        let bytes = 0;
+        for (const f of g) {
+            try {
+                bytes += fs.statSync(f.file).size;
+            }
+            catch { /* vanished */ }
+        }
+        return { g, bytes };
+    }).sort((a, b) => b.bytes - a.bytes);
+    /** @type {{ bytes: number, files: { file: string, mtime: number }[] }[]} */
+    const bins = Array.from({ length: Math.min(jobs, sized.length) }, () => ({ bytes: 0, files: [] }));
+    for (const s of sized) {
+        const bin = bins.reduce((m, b) => (b.bytes < m.bytes ? b : m));
+        bin.bytes += s.bytes;
+        bin.files.push(...s.g);
+    }
+    return bins.map((b) => b.files.sort((x, y) => x.mtime - y.mtime));
+}
+/**
+ * Same result as scan(), with the transcripts replayed on worker threads.
+ * @param {Parameters<typeof scan>[0] & { jobs?: number }} [opts]
+ * @returns {Promise<ReturnType<typeof summarize>>}
+ */
+async function scanParallel(opts = {}) {
+    const { Worker } = require('worker_threads');
+    const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
+    const jobs = Math.max(1, Math.floor(opts.jobs || defaultJobs()));
+    const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
+    const salt = crypto.randomBytes(32);
+    const batches = jobs > 1 && files.length > 1 ? partition(files, jobs) : [files];
+    if (batches.length < 2)
+        return summarize(collect(files.map((f) => f.file), cfg, salt), { files: files.length, days, now, audits, mcpAudits });
+    const parts = await Promise.all(batches.map((b) => new Promise((/** @type {(p: ReturnType<typeof collect>) => void} */ resolve, reject) => {
+        const w = new Worker(path.join(__dirname, 'scan-worker.js'), { workerData: { files: b.map((f) => f.file), cfg, salt } });
+        w.once('message', resolve);
+        w.once('error', reject);
+        w.once('exit', (code) => { if (code)
+            reject(new Error(`scan worker exited with code ${code}`)); });
+    })));
+    const order = batches.map((b, i) => i).sort((x, y) => batches[x][0].mtime - batches[y][0].mtime);
+    return summarize(mergeParts(order.map((i) => parts[i])), { files: files.length, days, now, audits, mcpAudits });
+}
+const defaultJobs = () => Math.min(8, typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length);
+// ---------- terminal report ----------
+const day = (ts) => (ts ? String(ts).slice(0, 10) : '?');
+function renderReport(summary, { color = (process.stdout.isTTY ? true : false), details = false } = {}) {
+    const { red, green, yellow, dim, bold, cyan } = palette(color);
+    const S = summary;
+    const n = (x) => Number(x).toLocaleString('en-US');
+    const warn = (x, col) => (x ? col(n(x)) : green(n(x)));
+    const out = [];
+    out.push(bold(`agent-blackbox scan · last ${S.days} days`));
+    if (!S.sessions) {
+        out.push(dim('  no Claude Code sessions found in that window.'));
+        return out.join('\n');
+    }
+    out.push(dim(`  ${n(S.sessions)} sessions · ${day(S.range.first)} → ${day(S.range.last)} · ${n(S.toolCalls)} tool calls`));
+    out.push('');
+    const row = (label, val) => out.push(`  ${label.padEnd(46)} ${val}`);
+    row('sessions that read private data', warn(S.privateSessions, yellow));
+    row('sessions that ingested untrusted content', warn(S.untrustedSessions, yellow));
+    row('outbound calls (network, git push, MCP send)', warn(S.outboundCalls, yellow));
+    row('sessions where the lethal trifecta would fire', warn(S.trifectaSessions, red));
+    row('calls that would have been denied', warn(S.wouldDenyCalls, red));
+    if (S.rules['self-protection'] || S.rules['hook-tamper']) {
+        row('settings / evidence tampering attempts', warn((S.rules['self-protection'] || 0) + (S.rules['hook-tamper'] || 0), red));
+    }
+    // 256-color approximations of the report's category colors, same order
+    const CAT_ANSI = [33, 208, 36, 214, 211, 28, 99];
+    const paint = (i, str) => (color ? `\x1b[38;5;${CAT_ANSI[i]}m${str}\x1b[0m` : str);
+    const cats = CATEGORIES.map((cdef, i) => ({ ...cdef, i, v: (S.categories || {})[cdef.id] || 0 }));
+    const catMax = Math.max(1, ...cats.map((x) => x.v));
+    if (S.toolCalls) {
+        out.push('');
+        out.push(bold('  tool calls by category'));
+        for (const x of cats) {
+            const w = Math.round((x.v / catMax) * 28);
+            const share = Math.round((x.v / S.toolCalls) * 100);
+            out.push(`    ${x.label.padEnd(18)} ${paint(x.i, '█'.repeat(w) || (x.v ? '▏' : ''))}${' '.repeat(Math.max(0, 29 - Math.max(w, x.v ? 1 : 0)))}${String(n(x.v)).padStart(6)}  ${dim(String(share).padStart(3) + '%')}`);
+        }
+    }
+    if (S.topTools.length) {
+        out.push('');
+        out.push(bold('  top tools'));
+        for (const t of S.topTools.slice(0, 8)) {
+            const ci = CATEGORIES.findIndex((cdef) => cdef.id === t.category);
+            out.push(`    ${String(n(t.count)).padStart(7)}  ${paint(ci < 0 ? 6 : ci, '■')} ${t.name}`);
+        }
+    }
+    if ((S.skills || []).length) {
+        out.push('');
+        out.push(bold('  skills used') + dim('   (model = the agent chose it, you = slash command)'));
+        for (const k of S.skills.slice(0, 10)) {
+            const risk = k.risk == null ? dim('not installed here') : k.risk === 'high' ? red('high risk') : k.risk === 'medium' ? yellow('medium risk') : k.risk === 'low' ? dim('low') : green('clean');
+            out.push(`    ${String(n(k.calls)).padStart(7)}  ${k.name.slice(0, 32).padEnd(32)} ${dim(`model ${k.byModel} · you ${k.byUser}`.padEnd(18))} ${risk}${k.rules && k.rules.length ? dim(' · ' + k.rules.join(', ')) : ''}`);
+        }
+        out.push(dim(`    audit every installed skill: blackbox skills`));
+    }
+    if (S.mcp && S.mcp.used.length) {
+        out.push('');
+        out.push(bold('  MCP servers') + dim('   (↗ = tool that sends or changes data)'));
+        for (const m of S.mcp.used.slice(0, 8)) {
+            const where = m.configured.length ? dim(m.configured.map((c) => `${c.client} ${c.scope}`).join(', ')) : dim('connector/managed (not in a local config)');
+            const risk = m.configured.some((c) => c.risk === 'high') ? red(' high risk') : m.configured.some((c) => c.risk === 'medium') ? yellow(' medium risk') : '';
+            out.push(`    ${String(n(m.calls)).padStart(7)}  ${m.server.slice(0, 30).padEnd(30)} ${m.outboundCalls ? yellow(`${m.outboundCalls} ↗`) : dim('read-only')}${m.errors ? red(` · ${m.errors} failed`) : ''}${risk}  ${where}`);
+            out.push(dim(`             ${m.tools.slice(0, 4).map((t) => `${t.name}${t.outbound ? '↗' : ''} ${t.calls}`).join(' · ')}`));
+        }
+        out.push(dim('    full inventory and config audit: blackbox mcp'));
+    }
+    if ((S.shellPrograms || []).length) {
+        out.push('');
+        out.push(bold('  shell programs'));
+        out.push('    ' + S.shellPrograms.slice(0, 10).map((p) => `${p.name} ${dim(n(p.count))}`).join('  ·  '));
+    }
+    if ((S.hosts || []).length) {
+        out.push('');
+        out.push(bold('  network destinations'));
+        for (const h of S.hosts.slice(0, 8)) {
+            const kind = h.kind === 'external' ? yellow(h.kind) : dim(h.kind);
+            out.push(`    ${String(n(h.calls)).padStart(7)}  ${h.host.slice(0, 40).padEnd(40)} ${kind}`);
+        }
+    }
+    const projects = Object.entries(S.projects).sort((a, b) => b[1].toolCalls - a[1].toolCalls);
+    if (projects.length) {
+        out.push('');
+        out.push(bold('  projects') + dim('   (bar: share of each category)'));
+        for (const [name, p] of projects.slice(0, 10)) {
+            const pc = p.categories || {};
+            let bar = '';
+            if (p.toolCalls) {
+                let used = 0;
+                CATEGORIES.forEach((cdef, i) => {
+                    const v = pc[cdef.id] || 0;
+                    if (!v)
+                        return;
+                    const w = Math.max(1, Math.round((v / p.toolCalls) * 16));
+                    bar += paint(i, '█'.repeat(w));
+                    used += w;
+                });
+                bar += ' '.repeat(Math.max(0, 18 - used));
+            }
+            const main = CATEGORIES.map((cdef) => [cdef.label, pc[cdef.id] || 0]).filter(([, v]) => v).sort((a, b) => b[1] - a[1]).slice(0, 2)
+                .map(([l, v]) => `${l.split(' ')[0].toLowerCase()} ${Math.round((v / (p.toolCalls || 1)) * 100)}%`).join(', ');
+            out.push(`    ${name.slice(0, 28).padEnd(28)} ${String(p.sessions).padStart(3)} sess ${String(n(p.toolCalls)).padStart(6)} calls  ${color ? bar : ''}${dim(main)}${p.flagged ? '  ' + red(`${p.flagged} flagged`) : ''}`);
+        }
+        if (projects.length > 10)
+            out.push(dim(`    … ${projects.length - 10} more`));
+    }
+    if (details) {
+        out.push('');
+        out.push(bold('  flagged sessions'));
+        if (!S.flagged.length)
+            out.push(dim('    none'));
+        for (const f of S.flagged) {
+            const col = DENY_RULES.has(f.rule) ? red : yellow;
+            out.push(`    ${day(f.date)}  ${f.session}  ${f.project || '(unknown)'}  ${col(f.rule)}`);
+            if (f.reason)
+                out.push(dim(`      ${redact(f.reason)}`));
+        }
+    }
+    else if (S.flagged.length) {
+        out.push(dim(`\n  ${S.flagged.length} flagged events; rerun with --details to list them.`));
+    }
+    if (S.malformedLines)
+        out.push(dim(`  (${S.malformedLines} unreadable transcript lines skipped)`));
+    out.push('');
+    out.push(dim('  Scanned locally; nothing was uploaded.'));
+    out.push(`  To stop these going forward: ${cyan('blackbox install')}`);
+    return out.join('\n');
+}
+// ---------- shareable SVG card ----------
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+// Numbers and fixed labels only: no paths, project names, tools, commands,
+// prompts or session ids, so the card is safe to post publicly.
+function renderCard(summary) {
+    const S = summary;
+    const n = (x) => Number(x || 0).toLocaleString('en-US');
+    const tiles = [
+        { v: S.sessions, l: 'sessions scanned', c: '#e6edf3' },
+        { v: S.toolCalls, l: 'tool calls', c: '#e6edf3' },
+        { v: S.privateSessions, l: 'sessions read private data', c: '#f0b429' },
+        { v: S.outboundCalls, l: 'outbound calls', c: '#f0b429' },
+        { v: S.trifectaSessions, l: 'lethal trifecta sessions', c: '#ff6b6b' },
+        { v: S.wouldDenyCalls, l: 'calls that would be denied', c: '#ff6b6b' },
+    ];
+    const W = 1200, H = 630, cols = 3, tw = 340, th = 170, gx = 30, gy = 30;
+    const x0 = (W - (cols * tw + (cols - 1) * gx)) / 2, y0 = 170;
+    const range = S.range && S.range.first ? `${day(S.range.first)} to ${day(S.range.last)}` : `last ${S.days} days`;
+    const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    const body = tiles.map((t, i) => {
+        const x = x0 + (i % cols) * (tw + gx), y = y0 + Math.floor(i / cols) * (th + gy);
+        return `  <g transform="translate(${x},${y})">
+    <rect width="${tw}" height="${th}" rx="16" fill="#161b22" stroke="#30363d"/>
+    <text x="28" y="92" font-size="64" font-weight="700" fill="${t.c}">${esc(n(t.v))}</text>
+    <text x="28" y="136" font-size="22" fill="#8b949e">${esc(t.l)}</text>
+  </g>`;
+    }).join('\n');
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${esc(font)}">
+  <rect width="${W}" height="${H}" fill="#0d1117"/>
+  <text x="${x0}" y="92" font-size="44" font-weight="700" fill="#e6edf3">${esc('What my AI coding agent did')}</text>
+  <text x="${x0}" y="132" font-size="24" fill="#8b949e">${esc(`Claude Code history · ${range}`)}</text>
+${body}
+  <text x="${W / 2}" y="${H - 28}" font-size="20" fill="#6e7681" text-anchor="middle">${esc('agent-blackbox · scanned locally, nothing uploaded')}</text>
+</svg>
+`;
+}
+module.exports = { scan, scanParallel, collect, mergeParts, groupFiles, defaultJobs, renderReport, renderCard, defaultProjectsDir, CATEGORIES, categoryOf, programsOf };

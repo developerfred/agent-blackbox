@@ -4,8 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fx = require('./fixtures/report');
 const golden = require('./fixtures/report-golden.json');
-const { renderMcp } = require('../src/mcp-report');
-const { renderSkills } = require('../src/skills-report');
+const { renderMcp } = require('../dist/src/mcp-report');
+const { renderSkills } = require('../dist/src/skills-report');
 
 test('blackbox mcp report: plain, colored with --all, and ordering', () => {
   assert.equal(renderMcp(fx.mcpAudits, fx.summary, {}), golden.mcp);
@@ -24,7 +24,7 @@ test('blackbox skills report: sorted by risk then name, low notes behind --all',
 
 test('cli: --mode is validated for eval and install', () => {
   const { spawnSync } = require('child_process');
-  const bin = require('path').join(__dirname, '..', 'bin', 'blackbox.js');
+  const bin = require('path').join(__dirname, '..', 'dist', 'bin', 'blackbox.js');
   const bad = spawnSync(process.execPath, [bin, 'eval', '--mode', 'bogus'], { encoding: 'utf8', env: { ...process.env, BLACKBOX_HOME: require('os').tmpdir() + '/bb-mode' } });
   assert.notEqual(bad.status, 0);
   assert.match(bad.stderr, /mode must be ask, deny or monitor/);

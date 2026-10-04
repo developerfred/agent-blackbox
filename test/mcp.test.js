@@ -9,7 +9,7 @@ process.env.BLACKBOX_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-mcp-home-'
 process.env.BLACKBOX_PORT = String(19900 + Math.floor(Math.random() * 90));
 delete process.env.CLAUDE_CONFIG_DIR;
 
-const { auditServers, saveMcpPins, parseToolName, codexServers } = require('../src/mcp');
+const { auditServers, saveMcpPins, parseToolName, codexServers } = require('../dist/src/mcp');
 
 const write = (f, t) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof t === 'string' ? t : JSON.stringify(t, null, 2)); };
 // built at runtime so no token-shaped literal sits in the repository
@@ -81,7 +81,7 @@ test('mcp: tool names parse into server, tool and plugin; verbs mark outbound', 
 
 test('mcp: scan reports usage per server and joins the config audit', () => {
   const { home, cwd } = fixture();
-  const { scan } = require('../src/scan');
+  const { scan } = require('../dist/src/scan');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-mcpscan-'));
   const L = [
     { type: 'assistant', sessionId: 'm1', cwd: '/w', timestamp: '2026-10-01T10:00:00Z', message: { content: [
@@ -97,15 +97,15 @@ test('mcp: scan reports usage per server and joins the config audit', () => {
   assert.deepEqual([gh.calls, gh.outboundCalls, gh.errors], [3, 2, 1]);
   assert.equal(gh.configured[0].risk, 'high');
   assert.ok(S.mcp.unused.some((u) => u.server === 'box'), 'configured but unused servers are listed');
-  const { renderHtml } = require('../src/scan-html');
+  const { renderHtml } = require('../dist/src/scan-html');
   assert.ok(renderHtml(S).includes('MCP servers'));
 });
 
 test('mcp: the daemon asks before calling a tool of a high-risk server', () => {
   const { home, cwd } = fixture();
-  const { ensureDirs } = require('../src/paths');
+  const { ensureDirs } = require('../dist/src/paths');
   ensureDirs();
-  const { Daemon } = require('../src/daemon');
+  const { Daemon } = require('../dist/src/daemon');
   const d = new Daemon();
   d.start();
   d.mcpAudits = auditServers({ home, cwd });
