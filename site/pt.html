@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-blackbox (Português)</title>
+<meta name="description" content="Caixa-preta e firewall contra prompt injection para agentes de IA de código. Local, sem telemetria.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><div class="wrap"><nav>
+<strong>agent-blackbox</strong>
+<a href="index.html">English</a>
+<a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
+</nav></div></header>
+<main class="wrap">
+<section class="hero">
+<h1>Caixa-preta e firewall para agentes de IA de código</h1>
+<p class="lead">Cada prompt, chamada de ferramenta e resultado vai para um registro encadeado por hash e assinado com Ed25519, escrito por um processo separado. Um motor de política barra a <em>trifeta letal</em> (dado privado + conteúdo não confiável + chamada externa) antes de a chamada rodar. Claude Code primeiro; Codex, Cursor e Gemini CLI depois.</p>
+<p>Tudo roda na sua máquina: sem conta, sem nuvem, sem telemetria, sem dependências em runtime. Node 18+, Apache-2.0.</p>
+</section>
+
+<h2>Audite seu histórico</h2>
+<pre><code>npx agent-blackbox scan             # roda em paralelo (--jobs N)
+npx agent-blackbox scan --html
+npx agent-blackbox skills
+npx agent-blackbox mcp</code></pre>
+
+<h2>Instalação</h2>
+<pre><code>/plugin marketplace add developerfred/agent-blackbox
+/plugin install agent-blackbox@agent-blackbox
+
+# ou pela CLI
+brew install developerfred/tap/agent-blackbox
+blackbox install
+blackbox timeline --last
+blackbox verify</code></pre>
+<p><code>blackbox uninstall</code> remove os hooks e mantém as evidências em <code>~/.blackbox</code>.</p>
+
+<h2>Privacidade</h2>
+<ul>
+<li>Nada sai da sua máquina: o gravador escuta só em <code>127.0.0.1</code>.</li>
+<li>Payloads e resumos são cifrados por sessão (AES-256-GCM). <code>blackbox purge</code> ou <code>retainDays</code> apaga de verdade, inclusive em backups.</li>
+<li>Texto de prompts e respostas via telemetria é opcional (<code>install --prompts</code>).</li>
+<li><code>install</code> mostra a chave e se o modo é fail-open; <code>--fail-closed</code> nega quando o gravador está parado.</li>
+<li>Detalhes: <a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/PRIVACY.md">docs/PRIVACY.md</a> (em inglês).</li>
+</ul>
+
+<h2>Limites</h2>
+<ul>
+<li>Sem <code>blackbox harden</code> (gravador como usuário dedicado do sistema), um processo rodando como você consegue ler a chave mestra.</li>
+<li>O firewall pega padrões conhecidos, não todo ataque. É atrito e evidência, não garantia.</li>
+<li>A cadeia prova que nada gravado foi alterado, não que tudo foi gravado.</li>
+</ul>
+</main>
+<footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">código</a> · Esta página não carrega scripts, fontes nem rastreadores.</div></footer>
+</body>
+</html>
