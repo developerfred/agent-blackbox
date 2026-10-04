@@ -35,7 +35,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 - [ ] Launch: demo GIF, Show HN, X, Farcaster, r/ClaudeAI on the same day
 - [ ] Prompt-injection challenge repo with a canary token
-- [ ] Adapters for Codex CLI and Cursor (one canonical event, OpenTelemetry GenAI conventions)
+- [ ] Adapters for Codex CLI, Cursor and Gemini CLI (one canonical event, OpenTelemetry GenAI conventions): adapter interface and Codex done, see docs/AGENTS.md
 - [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
 - [ ] Merkle batching and automatic anchoring of the chain head ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
 - [ ] Declarative rules file (trigger, predicate, action) ([AgentSpec](https://arxiv.org/abs/2503.18666))

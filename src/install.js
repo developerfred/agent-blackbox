@@ -146,4 +146,4 @@ function uninstall({ log = console.log } = {}) {
   log(`  evidence kept in ${P.home}`);
 }
 
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand };
+module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, nodePath, hookScriptPath };

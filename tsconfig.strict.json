@@ -20,6 +20,7 @@
     "eval/corpus.js",
     "src/skills.js",
     "src/install.js",
-    "src/adapters/*.js"
+    "src/adapters/*.js",
+    "src/install-agent.js"
   ]
 }

@@ -163,4 +163,4 @@ function uninstall({ log = console.log } = {}) {
     log(`  removed agent-blackbox hooks and telemetry settings from ${file}`);
     log(`  evidence kept in ${P.home}`);
 }
-module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand };
+module.exports = { install, uninstall, settingsPath, HOOK_EVENTS, stablePath, hookCommand, nodePath, hookScriptPath };
