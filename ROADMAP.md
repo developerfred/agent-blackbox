@@ -39,7 +39,8 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] `blackbox export`: ledger as OpenTelemetry GenAI traces and logs, local by default ([docs/OTEL.md](docs/OTEL.md))
 - [ ] Adapters for Codex CLI and Cursor (one canonical event, OpenTelemetry GenAI conventions)
 - [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925))
-- [ ] Merkle batching and automatic anchoring of the chain head ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
+- [x] Merkle batching of the chain: `blackbox anchor --batch`, inclusion proofs ([docs/ANCHORING.md](docs/ANCHORING.md))
+- [ ] Automatic anchoring of the chain head, opt-in, to a target the user names ([Agent Flight Recorder](https://arxiv.org/html/2609.01931))
 - [ ] Declarative rules file (trigger, predicate, action) ([AgentSpec](https://arxiv.org/abs/2503.18666))
 - [ ] Public evaluation of the policy: attacks that get through and false alarms, measured against defense-aware attacks before any claim ([The Attacker Moves Second](https://arxiv.org/abs/2510.09023))
 

@@ -19,6 +19,7 @@
     "eval/run.js",
     "eval/corpus.js",
     "src/skills.js",
-    "src/install.js"
+    "src/install.js",
+    "src/scan.js"
   ]
 }

@@ -31,6 +31,7 @@ const CATEGORIES = [
   { id: 'agents', label: 'Agents & planning' },
   { id: 'other', label: 'Other' },
 ];
+/** @param {string} name */
 function categoryOf(name) {
   if (/^mcp__/.test(name)) return 'mcp';
   if (/^(Bash|PowerShell|BashOutput|KillShell|KillBash|Monitor)$/.test(name)) return 'shell';
@@ -43,6 +44,7 @@ function categoryOf(name) {
 
 // First program of each segment of a shell command (`cd x && npm test | tee`
 // -> cd, npm, tee). Names only: arguments never leave this function.
+/** @param {string} cmd @returns {string[]} */
 function programsOf(cmd) {
   const out = [];
   // Inline scripts are not programs: drop heredoc bodies and quoted strings.
@@ -60,9 +62,12 @@ function programsOf(cmd) {
   return out;
 }
 
+/** @template K @param {Map<K, number>} map @param {K} key @param {number} [by] */
 const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
 // Ties break on the key so the order does not depend on which file came first.
+/** @param {[string, number]} a @param {[string, number]} b */
 const byCountThenKey = (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+/** The k biggest entries of a counter, ties by key. @param {Map<string, number>} map @param {number} k */
 const top = (map, k) => [...map.entries()].sort(byCountThenKey).slice(0, k);
 
 function defaultProjectsDir() {
@@ -88,6 +93,7 @@ function findFiles(dir, minMtime, depth = 0, out = []) {
 
 // Line iterator over a file in fixed-size chunks: transcripts can be far
 // larger than we want to hold as one string.
+/** @param {string} file @returns {Generator<string>} */
 function* lines(file) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return; }
@@ -108,6 +114,7 @@ function* lines(file) {
 // Note: a multi-byte UTF-8 char split across chunks decodes as U+FFFD on both
 // sides; that only touches text content, never the JSON structure we rely on.
 
+/** @param {unknown} content @returns {string} */
 const textOfResult = (content) => (typeof content === 'string' ? content
   : Array.isArray(content) ? content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n')
     : '');
@@ -115,11 +122,13 @@ const textOfResult = (content) => (typeof content === 'string' ? content
 // Transcripts store Read output with "   12\t" (or "12→") line-number prefixes.
 // The live hook gets { file: { content } } without them, and KEY=value
 // detection is anchored at line start, so rebuild that shape.
+/** @param {string} tool @param {string} text */
 function toolResponse(tool, text) {
   if (tool === 'Read') return { file: { content: text.replace(/^ *\d+(?:\t|→)/gm, '') } };
   return text;
 }
 
+/** @param {any} content @returns {string | null} */
 function humanPrompt(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content) || content.some((b) => b && b.type === 'tool_result')) return null;
@@ -150,6 +159,7 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
   const programs = new Map();
   const hosts = new Map(); // host -> { calls, kind }
   const skillUse = new Map(); // name -> { model, user, sessions:Set }
+  /** @param {string} name @param {'model' | 'user'} who @param {string} sid */
   const useSkill = (name, who, sid) => {
     const k = String(name).replace(/^\//, '').trim();
     if (!k) return;
@@ -157,13 +167,20 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
     r[who]++; r.sessions.add(sid);
     skillUse.set(k, r);
   };
+  /** @param {string} h */
   const allowed = (h) => (cfg.allowHosts || []).some((a) => h === a || h.endsWith('.' + a));
   const flagged = [];
   const flaggedKey = new Set();
+  /** @type {Record<string, number>} */
   const t = { toolCalls: 0, outboundCalls: 0, wouldDenyCalls: 0, wouldAskCalls: 0, malformedLines: 0 };
+  /** @type {Record<string, number>} */
   const ruleCounts = {};
-  let first = null, last = null;
+  /** @type {string | null} */
+  let first = null;
+  /** @type {string | null} */
+  let last = null;
 
+  /** @param {string} id @param {any} e */
   const sess = (id, e) => {
     let s = sessions.get(id);
     if (!s) sessions.set(id, (s = { id, first: null, last: null, tools: 0, private: false, untrusted: false, rules: new Set() }));
@@ -279,14 +296,18 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
     }
   }
 
-  return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last };
+  return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first: /** @type {string | null} */ (first), last: /** @type {string | null} */ (last) };
 }
 
+/** @param {string | null} a @param {string | null} b */
 const minTs = (a, b) => (!a || (b && b < a) ? b || a : a);
+/** @param {string | null} a @param {string | null} b */
 const maxTs = (a, b) => (!a || (b && b > a) ? b || a : a);
+/** @param {Map<string, number>} to @param {Map<string, number>} from */
 const addInto = (to, from) => { for (const [k, v] of from) to.set(k, (to.get(k) || 0) + v); };
 
 /** Folds partial aggregates (in file order) into one, as if scanned in a single pass. */
+/** @param {any[]} parts */
 function mergeParts(parts) {
   const M = collect([], DEFAULT_CONFIG);
   for (const P of parts) {
@@ -335,6 +356,9 @@ function mergeParts(parts) {
   return M;
 }
 
+/** @typedef {import('./types').Finding} Finding */
+/** @typedef {ReturnType<typeof summarize>} ScanSummary what scan() returns and the renderers take */
+
 /**
  * @param {ReturnType<typeof collect>} P
  * @param {{ files: number, days: number, now: number, audits?: any[] | null, mcpAudits?: any[] | null }} o
@@ -343,6 +367,7 @@ function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
   const { parseToolName, configFor, normName } = require('./mcp');
   const { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last } = P;
   const list = [...sessions.values()];
+  /** @param {(s: any) => unknown} fn */
   const count = (fn) => list.filter(fn).length;
   return {
     scannedAt: new Date(now).toISOString(),
@@ -370,7 +395,7 @@ function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
       const a = audits ? require('./skills').riskFor(audits, name) : null;
       return { name, calls: r.model + r.user, byModel: r.model, byUser: r.user, sessions: r.sessions.size,
         risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
-        rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
+        rules: a ? [...new Set(a.findings.filter((/** @type {Finding} */ f) => f.severity !== 'low').map((/** @type {Finding} */ f) => f.rule))] : [] };
     }),
     mcp: (() => {
       const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).map(([server, r]) => {
@@ -384,7 +409,7 @@ function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
       });
       const usedNames = new Set(used.map((u) => normName(u.server)));
       const unused = (mcpAudits || []).filter((a) => !usedNames.has(normName(a.name)))
-        .map((a) => ({ server: a.name, client: a.client, scope: a.scope, transport: a.transport, risk: a.risk, rules: a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) }));
+        .map((a) => ({ server: a.name, client: a.client, scope: a.scope, transport: a.transport, risk: a.risk, rules: a.findings.filter((/** @type {Finding} */ f) => f.severity !== 'low').map((/** @type {Finding} */ f) => f.rule) }));
       return { used, unused };
     })(),
     projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
@@ -414,8 +439,12 @@ function scan(opts = {}) {
 // each file plus the <id>/subagents/ directory layout.
 /** @param {{ file: string, mtime: number }[]} files @returns {{ file: string, mtime: number }[][]} */
 function groupFiles(files) {
+  /** @type {Map<string, string>} */
   const parent = new Map();
-  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  /** @param {string} k */
+  const up = (k) => /** @type {string} */ (parent.get(k));
+  const find = (/** @type {string} */ x) => { while (up(x) !== x) { parent.set(x, up(up(x))); x = up(x); } return x; };
+  /** @param {string} a @param {string} b */
   const union = (a, b) => { if (!parent.has(a)) parent.set(a, a); if (!parent.has(b)) parent.set(b, b); parent.set(find(a), find(b)); };
   const head = Buffer.alloc(1 << 16);
   for (const { file } of files) {
@@ -484,12 +513,16 @@ const defaultJobs = () => Math.min(8, typeof os.availableParallelism === 'functi
 
 // ---------- terminal report ----------
 
+/** @param {unknown} ts */
 const day = (ts) => (ts ? String(ts).slice(0, 10) : '?');
 
+/** @param {ScanSummary} summary @param {{ color?: boolean, details?: boolean }} [opts] */
 function renderReport(summary, { color = (process.stdout.isTTY ? true : false), details = false } = {}) {
   const { red, green, yellow, dim, bold, cyan } = palette(color);
   const S = summary;
+  /** @param {unknown} x */
   const n = (x) => Number(x).toLocaleString('en-US');
+  /** @param {number} x @param {(s: unknown) => string} col */
   const warn = (x, col) => (x ? col(n(x)) : green(n(x)));
   const out = [];
   out.push(bold(`agent-blackbox scan · last ${S.days} days`));
@@ -499,6 +532,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
   }
   out.push(dim(`  ${n(S.sessions)} sessions · ${day(S.range.first)} → ${day(S.range.last)} · ${n(S.toolCalls)} tool calls`));
   out.push('');
+  /** @param {string} label @param {string} val */
   const row = (label, val) => out.push(`  ${label.padEnd(46)} ${val}`);
   row('sessions that read private data', warn(S.privateSessions, yellow));
   row('sessions that ingested untrusted content', warn(S.untrustedSessions, yellow));
@@ -510,6 +544,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
   }
   // 256-color approximations of the report's category colors, same order
   const CAT_ANSI = [33, 208, 36, 214, 211, 28, 99];
+  /** @param {number} i @param {string} str */
   const paint = (i, str) => (color ? `\x1b[38;5;${CAT_ANSI[i]}m${str}\x1b[0m` : str);
   const cats = CATEGORIES.map((cdef, i) => ({ ...cdef, i, v: (S.categories || {})[cdef.id] || 0 }));
   const catMax = Math.max(1, ...cats.map((x) => x.v));
@@ -608,12 +643,15 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
 
 // ---------- shareable SVG card ----------
 
-const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+/** @param {unknown} s */
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => (/** @type {Record<string, string>} */ ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }))[ch]);
 
 // Numbers and fixed labels only: no paths, project names, tools, commands,
 // prompts or session ids, so the card is safe to post publicly.
+/** @param {ScanSummary} summary */
 function renderCard(summary) {
   const S = summary;
+  /** @param {unknown} x */
   const n = (x) => Number(x || 0).toLocaleString('en-US');
   const tiles = [
     { v: S.sessions, l: 'sessions scanned', c: '#e6edf3' },
