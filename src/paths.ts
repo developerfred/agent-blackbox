@@ -1,15 +1,14 @@
-'use strict';
 // Where agent-blackbox keeps its evidence, keys and config.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import type { Paths, Config } from './types';
 
 const HOME = process.env.BLACKBOX_HOME || path.join(os.homedir(), '.blackbox');
 const PORT = Number(process.env.BLACKBOX_PORT || 7071);
 
-/** @type {import('./types').Paths} */
-const P = {
+export const P: Paths = {
   home: HOME,
   port: PORT,
   ledger: path.join(HOME, 'ledger.jsonl'),
@@ -30,8 +29,7 @@ const P = {
   anchors: path.join(HOME, 'anchors.jsonl'),
 };
 
-/** @type {import('./types').Config} */
-const DEFAULT_CONFIG = {
+export const DEFAULT_CONFIG: Config = {
   // ask = make Claude Code prompt the human; deny = block; monitor = log only
   mode: 'ask',
   // encrypt payloads at rest with one key per session (purge = crypto-erasure)
@@ -65,7 +63,7 @@ const DEFAULT_CONFIG = {
   privateMcpServers: [],
 };
 
-function ensureDirs() {
+export function ensureDirs(): void {
   for (const d of [P.home, P.keys]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   for (const d of [P.blobs, P.bodies]) fs.mkdirSync(d, { recursive: true, mode: 0o700 });
   // with the recorder as its own user, the admin token lives with the recorder, not here
@@ -74,13 +72,13 @@ function ensureDirs() {
   }
 }
 
-function readToken() {
+export function readToken(): string {
   try { return fs.readFileSync(P.token, 'utf8').trim(); } catch { return ''; }
 }
 
 // With the recorder running as a dedicated user, only the ingest token is
 // in the human's folder and this returns ''; reads then go through sudo.
-function readAdminToken() {
+export function readAdminToken(): string {
   try { return fs.readFileSync(P.adminToken, 'utf8').trim(); } catch { /* not ours to read */ }
   return '';
 }
@@ -88,41 +86,37 @@ function readAdminToken() {
 // With the recorder as a dedicated user, the admin token is read through sudo,
 // which asks the human for a password the agent cannot type. Only the CLI
 // calls this, and only for commands that read, verify or erase.
-/** @type {string | null} */
-let sudoToken = null;
-function readAdminTokenViaSudo() {
+let sudoToken: string | null = null;
+export function readAdminTokenViaSudo(): string {
   if (sudoToken !== null) return sudoToken;
   const cfg = loadConfig();
   if (!cfg.remoteDaemon || !cfg.recorderHome || !cfg.recorderUser) return (sudoToken = '');
   try {
-    const out = require('child_process').execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
+    // loaded here: every hook imports this module, and only the CLI ever gets this far
+    const { execFileSync } = require('child_process') as typeof import('child_process');
+    const out = execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
     return (sudoToken = out.toString('utf8').trim());
   } catch { return (sudoToken = ''); }
 }
 
-/** @returns {import('./types').Config} */
 /**
  * The token the CLI presents to the recorder. Recorder as the same user: the
  * admin token if there is one, else the ingest token. Recorder as its own user:
  * a leftover admin-token file in this folder belongs to a recorder that is gone
  * and would be refused, so reads use the admin token fetched through sudo and
- * everything else the ingest token.
- * @param {boolean} [admin] does this call read, verify or erase?
+ * everything else the ingest token. `admin`: does this call read, verify or erase?
  */
-function cliToken(admin = true) {
+export function cliToken(admin = true): string {
   if (loadConfig().remoteDaemon) return (admin ? readAdminTokenViaSudo() : '') || readToken();
   return readAdminToken() || readToken();
 }
 
-function loadConfig() {
+export function loadConfig(): Config {
   let user = {};
   try { user = JSON.parse(fs.readFileSync(P.config, 'utf8')); } catch { /* defaults */ }
   return { ...DEFAULT_CONFIG, ...user };
 }
 
-/** @param {import('./types').Config} cfg */
-function saveConfig(cfg) {
+export function saveConfig(cfg: Config): void {
   fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
-
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, cliToken, loadConfig, saveConfig };

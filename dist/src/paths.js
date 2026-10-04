@@ -1,13 +1,21 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_CONFIG = exports.P = void 0;
+exports.ensureDirs = ensureDirs;
+exports.readToken = readToken;
+exports.readAdminToken = readAdminToken;
+exports.readAdminTokenViaSudo = readAdminTokenViaSudo;
+exports.cliToken = cliToken;
+exports.loadConfig = loadConfig;
+exports.saveConfig = saveConfig;
 // Where agent-blackbox keeps its evidence, keys and config.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
 const HOME = process.env.BLACKBOX_HOME || path.join(os.homedir(), '.blackbox');
 const PORT = Number(process.env.BLACKBOX_PORT || 7071);
-/** @type {import('./types').Paths} */
-const P = {
+exports.P = {
     home: HOME,
     port: PORT,
     ledger: path.join(HOME, 'ledger.jsonl'),
@@ -27,8 +35,7 @@ const P = {
     bodies: path.join(HOME, 'api-bodies'),
     anchors: path.join(HOME, 'anchors.jsonl'),
 };
-/** @type {import('./types').Config} */
-const DEFAULT_CONFIG = {
+exports.DEFAULT_CONFIG = {
     // ask = make Claude Code prompt the human; deny = block; monitor = log only
     mode: 'ask',
     // encrypt payloads at rest with one key per session (purge = crypto-erasure)
@@ -62,19 +69,19 @@ const DEFAULT_CONFIG = {
     privateMcpServers: [],
 };
 function ensureDirs() {
-    for (const d of [P.home, P.keys])
+    for (const d of [exports.P.home, exports.P.keys])
         fs.mkdirSync(d, { recursive: true, mode: 0o700 });
-    for (const d of [P.blobs, P.bodies])
+    for (const d of [exports.P.blobs, exports.P.bodies])
         fs.mkdirSync(d, { recursive: true, mode: 0o700 });
     // with the recorder as its own user, the admin token lives with the recorder, not here
-    for (const f of loadConfig().remoteDaemon ? [P.token] : [P.token, P.adminToken]) {
+    for (const f of loadConfig().remoteDaemon ? [exports.P.token] : [exports.P.token, exports.P.adminToken]) {
         if (!fs.existsSync(f))
             fs.writeFileSync(f, crypto.randomBytes(24).toString('hex'), { mode: 0o600 });
     }
 }
 function readToken() {
     try {
-        return fs.readFileSync(P.token, 'utf8').trim();
+        return fs.readFileSync(exports.P.token, 'utf8').trim();
     }
     catch {
         return '';
@@ -84,7 +91,7 @@ function readToken() {
 // in the human's folder and this returns ''; reads then go through sudo.
 function readAdminToken() {
     try {
-        return fs.readFileSync(P.adminToken, 'utf8').trim();
+        return fs.readFileSync(exports.P.adminToken, 'utf8').trim();
     }
     catch { /* not ours to read */ }
     return '';
@@ -92,7 +99,6 @@ function readAdminToken() {
 // With the recorder as a dedicated user, the admin token is read through sudo,
 // which asks the human for a password the agent cannot type. Only the CLI
 // calls this, and only for commands that read, verify or erase.
-/** @type {string | null} */
 let sudoToken = null;
 function readAdminTokenViaSudo() {
     if (sudoToken !== null)
@@ -101,21 +107,21 @@ function readAdminTokenViaSudo() {
     if (!cfg.remoteDaemon || !cfg.recorderHome || !cfg.recorderUser)
         return (sudoToken = '');
     try {
-        const out = require('child_process').execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
+        // loaded here: every hook imports this module, and only the CLI ever gets this far
+        const { execFileSync } = require('child_process');
+        const out = execFileSync('sudo', ['-u', cfg.recorderUser, 'cat', path.join(cfg.recorderHome, 'keys', 'admin-token')], { stdio: ['inherit', 'pipe', 'inherit'] });
         return (sudoToken = out.toString('utf8').trim());
     }
     catch {
         return (sudoToken = '');
     }
 }
-/** @returns {import('./types').Config} */
 /**
  * The token the CLI presents to the recorder. Recorder as the same user: the
  * admin token if there is one, else the ingest token. Recorder as its own user:
  * a leftover admin-token file in this folder belongs to a recorder that is gone
  * and would be refused, so reads use the admin token fetched through sudo and
- * everything else the ingest token.
- * @param {boolean} [admin] does this call read, verify or erase?
+ * everything else the ingest token. `admin`: does this call read, verify or erase?
  */
 function cliToken(admin = true) {
     if (loadConfig().remoteDaemon)
@@ -125,13 +131,11 @@ function cliToken(admin = true) {
 function loadConfig() {
     let user = {};
     try {
-        user = JSON.parse(fs.readFileSync(P.config, 'utf8'));
+        user = JSON.parse(fs.readFileSync(exports.P.config, 'utf8'));
     }
     catch { /* defaults */ }
-    return { ...DEFAULT_CONFIG, ...user };
+    return { ...exports.DEFAULT_CONFIG, ...user };
 }
-/** @param {import('./types').Config} cfg */
 function saveConfig(cfg) {
-    fs.writeFileSync(P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
+    fs.writeFileSync(exports.P.config, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 }
-module.exports = { P, DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, readAdminTokenViaSudo, cliToken, loadConfig, saveConfig };
