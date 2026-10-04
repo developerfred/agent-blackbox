@@ -121,6 +121,25 @@ test('harden: the service runs the compiled code (dist/), and the script stops e
   assert.match(withDist.stderr, /no ingest token/);
 });
 
+test('harden --check: warns about old keys and hooks that an agent running as the user can still reach', () => {
+  const cfg = { remoteDaemon: true, recorderCode: '/usr/local/lib/agent-blackbox' };
+  const clean = checkHardened({ uid: 309 }, { uid: 501, cfg, legacyKeys: [], hookScripts: ['/usr/local/lib/agent-blackbox/dist/bin/hook.js'] });
+  assert.equal(clean.ok, true);
+  assert.ok(!clean.lines.some((l) => l.startsWith('!')), 'nothing to warn about');
+
+  const w = checkHardened({ uid: 309 }, { uid: 501, cfg, legacyKeys: ['ed25519.key', 'master.key'], hookScripts: ['/Users/me/agent-blackbox/dist/bin/hook.js'] });
+  assert.equal(w.ok, true, 'warnings do not fail the check: the setup itself is sound');
+  const warns = w.lines.filter((l) => l.startsWith('!'));
+  assert.equal(warns.length, 2);
+  assert.match(warns[0], /ed25519\.key, master\.key/);
+  assert.match(warns[0], /blackbox anchor/);
+  assert.match(warns[1], /\/Users\/me\/agent-blackbox\/dist\/bin\/hook\.js/);
+  assert.match(warns[1], /blackbox install/);
+
+  // no recorderCode (a harden from before it existed): no claim about where hooks should run
+  assert.ok(!checkHardened({ uid: 309 }, { uid: 501, cfg: { remoteDaemon: true }, hookScripts: ['/Users/me/x/hook.js'] }).lines.some((l) => l.startsWith('!')));
+});
+
 test('hooks point at the recorder\'s root-owned code once it runs as its own user', () => {
   const { spawnSync } = require('child_process');
   const s = hardenScript({ ...base, platform: 'linux', node: '/usr/bin/node' });

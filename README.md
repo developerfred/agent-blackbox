@@ -133,7 +133,11 @@ What is recorded, where, for how long, and what the defaults do not cover: [docs
   anchors.jsonl    chain heads you exported with `blackbox anchor`
 ```
 
-Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it.
+The format is specified in [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md) (draft, with test vectors), so a verifier does not need this code. `blackbox export` writes the ledger as [OpenTelemetry GenAI](docs/OTEL.md) traces and logs: metadata only, to a local folder unless you pass `--endpoint`.
+
+Each record's `hash` covers its content and the previous record's hash; `sig` signs that hash. `blackbox verify` recomputes everything and names the first broken record. `blackbox anchor` prints the signed head: publish it somewhere the agent cannot write (a git commit, a gist, a transparency log) and any later rewrite of history, including cutting off the last records, will no longer match it. `blackbox anchor --batch` also commits to a batch of records with a Merkle root, so one record can be proven to belong to a published anchor without handing over the rest ([docs/ANCHORING.md](docs/ANCHORING.md)).
+
+The format is an open, versioned specification: [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), with [test vectors](docs/spec/vectors/) and a standalone verifier with no dependencies, [verifier/bb-verify.js](verifier/README.md), so anyone can check a ledger without trusting or installing the recorder.
 
 ## Grounded in research
 
@@ -153,19 +157,22 @@ and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why 
 
 Closed since earlier versions: payloads and summaries are now encrypted per session and erased by `purge` or `retainDays`; prompt and response text through telemetry is opt-in; `install` prints the key and fail-open posture and offers `--fail-closed`; `scan` runs in parallel; and the corpus has no known gaps open. What remains:
 
-- **Same-user processes are not stopped by the OS.** Until you run the recorder as a dedicated user (`sudo sh <(blackbox harden)`: read the script first, it changes nothing by itself; `blackbox harden --check` confirms; `--undo` reverses it), any process running as you, including a command the agent finds a way around the policy to run, can read the master and signing keys, decrypt payloads, and rewrite the ledger and re-sign it. The rules protecting `~/.blackbox` are pattern matching on tool arguments, not an OS boundary. What still holds: a rewrite cannot match a chain head you already published with `blackbox anchor`, and erased session keys stay erased.
+- **Same-user processes are not stopped by the OS, unless you run the recorder as a dedicated user.** `blackbox harden` prints a script (read it first; it changes nothing by itself) that runs the recorder as its own OS user with root-owned code, so an agent running as you can write evidence but not read, rewrite or erase it. It has been run on a real macOS machine (launchd); **the Linux/systemd path has not been run on a real machine yet.** After it: `blackbox harden --check` confirms the setup and warns about what is still reachable (the old `~/.blackbox` keys and ledger from before; hooks that still run from an editable clone: run `blackbox install` so they point at the root-owned copy). Without `harden`, any process running as you can read the master and signing keys, decrypt payloads, and rewrite the ledger and re-sign it; the rules protecting `~/.blackbox` are pattern matching on tool arguments, not an OS boundary. What holds either way: a rewrite cannot match a chain head you already published with `blackbox anchor`, and erased session keys stay erased.
 - **The firewall catches known patterns, not every attack.** It stops naive exfiltration and the evasions in the corpus. An adaptive attacker can get through: injection detection in files is a heuristic on wording, a pre-existing script is only inspected if the recorder can read it (not when it runs as a dedicated user that cannot see your home folder), and a long opaque value in a URL is judged by its shape. Treat it as friction and evidence, not a guarantee.
-- **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it. Removing the hooks or setting `disableAllHooks` is detected and recorded (the daemon checks once a minute and on every session start), but not prevented. To make the hooks admin-owned, put them in Claude Code managed settings: `blackbox managed-settings` prints the block.
+- **Persistent instruction files are protected by path and provenance, not by reading them.** A session that read untrusted content asks before it writes `AGENTS.md`, `CLAUDE.md`, editor rules, agent commands or skills (`memoryWrites`); if such a write goes through, a later session that reads or auto-loads that file starts as untrusted. The list of files is fixed (a "brain" folder under another name is not covered), a marked file stays marked until you declare it reviewed in `trustedDocs` (no content hashing yet), and a poisoned file written outside a session the recorder saw is not known.
+- **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it. Removing the hooks or setting `disableAllHooks` is detected and recorded (the daemon checks once a minute and on every session start), but not prevented. To make the hooks admin-owned, put them in Claude Code managed settings: `blackbox managed-settings` prints the block (it has not been tried on a real machine yet). With the recorder as its own user the daemon cannot see your Claude Code settings, so that periodic check is off; `blackbox status` and `harden --check` run it as you.
 - **Fail-open by default.** If the recorder is unreachable, tools still run (`blackbox install --fail-closed`, or `"failMode": "closed"` in the config, denies instead). `blackbox install` prints which of the two postures you are in, and whether the recorder runs as a dedicated user.
 - **HTTPS payloads of shell commands are not visible**; the command line is, before it runs, and that is where the policy acts.
 - **Heuristics, not proofs.** Secret detection matches patterns and exact values; encoded or split secrets can slip through.
 - **User intent is inferred from your prompt text.** If you name a host, calls to it are not asked about (secrets are still denied).
-- Claude Code only for now.
+- Claude Code only for now. The `skills` and `mcp` audits read the configuration of Cursor, Codex, Copilot and others, but recording and the policy are Claude Code hooks; adapters are Phase 1 of the roadmap.
 
 ## Documentation
 
 - [Project site](https://developerfred.github.io/agent-blackbox/): overview, install, policy and privacy in one page
 - [docs/PRIVACY.md](docs/PRIVACY.md): what is recorded, where, for how long
+- [docs/spec/ledger-v1.md](docs/spec/ledger-v1.md): the open ledger and event format
+- [docs/OTEL.md](docs/OTEL.md): OpenTelemetry GenAI export
 - [SECURITY.md](SECURITY.md): reporting a vulnerability or a policy bypass
 - [ROADMAP.md](ROADMAP.md): phases and gates
 
