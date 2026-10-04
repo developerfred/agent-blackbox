@@ -17,6 +17,7 @@
     "bin/hook.js",
     "src/policy.js",
     "eval/run.js",
-    "eval/corpus.js"
+    "eval/corpus.js",
+    "src/install.js"
   ]
 }
