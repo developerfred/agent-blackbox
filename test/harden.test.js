@@ -98,3 +98,25 @@ test('harden: the guard is real sh: it aborts with exit 1 on a home node and pas
   const past = run({ BLACKBOX_ALLOW_HOME_NODE: '1' });
   assert.doesNotMatch(past.stderr, /cannot enter/);
 });
+
+test('harden: the service runs the compiled code (dist/), and the script stops early if there is none', () => {
+  const { spawnSync } = require('child_process');
+  for (const platform of ['linux', 'darwin']) {
+    const s = hardenScript({ ...base, platform, node: '/usr/bin/node' });
+    shOk(s);
+    assert.match(s, /for f in dist package\.json; do cp -R/);
+    assert.match(s, /\/usr\/local\/lib\/agent-blackbox\/dist\/bin\/blackbox\.js|\$\{CODE\}|dist\/bin\/blackbox\.js/);
+    assert.ok(!/ bin\/blackbox\.js daemon/.test(s.replace(/dist\/bin\/blackbox\.js daemon/g, '')), 'no start from the sources');
+  }
+  // real sh, before any side effect: no dist/bin -> exit 1 with the remedy; with it, the next check (the ingest token) is reached instead
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-harden-pkg-'));
+  const s = hardenScript({ ...base, platform: 'linux', node: '/usr/bin/node', pkgRoot: tmp, humanHome: path.join(tmp, 'nohome') });
+  const run = () => spawnSync('sh', ['-c', s.replace('[ "$(id -u)" -eq 0 ]', 'true')], { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  const without = run();
+  assert.equal(without.status, 1);
+  assert.match(without.stderr, /npm run build/);
+  fs.mkdirSync(path.join(tmp, 'dist', 'bin'), { recursive: true });
+  const withDist = run();
+  assert.doesNotMatch(withDist.stderr, /npm run build/);
+  assert.match(withDist.stderr, /no ingest token/);
+});

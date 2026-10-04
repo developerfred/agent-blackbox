@@ -54,14 +54,14 @@ GROUP=${user}`;
 }
 /** @param {Resolved} o */
 function serviceInstall(o) {
-    const exec = `${o.node} ${o.code}/bin/blackbox.js daemon`;
+    const exec = `${o.node} ${o.code}/dist/bin/blackbox.js daemon`;
     if (o.platform === 'darwin') {
         const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${LABEL}</string>
   <key>UserName</key><string>${xml(o.user)}</string>
-  <key>ProgramArguments</key><array><string>${xml(o.node)}</string><string>${xml(o.code)}/bin/blackbox.js</string><string>daemon</string></array>
+  <key>ProgramArguments</key><array><string>${xml(o.node)}</string><string>${xml(o.code)}/dist/bin/blackbox.js</string><string>daemon</string></array>
   <key>EnvironmentVariables</key><dict><key>BLACKBOX_HOME</key><string>${xml(o.data)}</string><key>BLACKBOX_PORT</key><string>${o.port}</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -166,7 +166,8 @@ DATA=${q(o.data)}
 HUMAN=${q(o.human)}
 HUMAN_HOME=${q(o.humanHome)}
 
-${homeNode}[ -f "$HUMAN_HOME/keys/token" ] || { echo "no ingest token in $HUMAN_HOME/keys: run 'blackbox install' as ${o.human} first" >&2; exit 1; }
+${homeNode}[ -d "$PKG/dist/bin" ] || { echo "no compiled code in $PKG/dist: run 'npm run build' there, or generate this script from a release" >&2; exit 1; }
+[ -f "$HUMAN_HOME/keys/token" ] || { echo "no ingest token in $HUMAN_HOME/keys: run 'blackbox install' as ${o.human} first" >&2; exit 1; }
 
 ${userCreation(o)}
 
@@ -174,7 +175,7 @@ ${runCheck}
 # 1. code the agent cannot change
 rm -rf "$CODE"
 mkdir -p "$CODE"
-for f in bin src hooks eval package.json; do [ -e "$PKG/$f" ] && cp -R "$PKG/$f" "$CODE/"; done
+for f in dist package.json; do cp -R "$PKG/$f" "$CODE/"; done
 chown -R root:$(id -gn root) "$CODE"
 chmod -R go-w "$CODE"
 
