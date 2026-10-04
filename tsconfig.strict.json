@@ -9,7 +9,7 @@
     "src/local-http.js",
     "src/integrity.js",
     "src/vault.js",
-    "src/ledger.js",
+    "src/ledger.ts",
     "src/term.js",
     "src/harden.js",
     "src/mcp-report.js",
