@@ -316,7 +316,8 @@ exists and why the recorder is meant to run as a separate OS user.
   unencrypted blobs are present and hash to the digest; sealed blobs are
   decrypted with the session key and hash to the digest [`BLOB_CHANGED`,
   reported on the line of the record that names the blob; decryption failing
-  counts as changed]; a missing blob is a warning [`BLOB_MISSING`]; erased keys
+  counts as changed]; a missing blob is a warning [`BLOB_MISSING`], and so is a session key that
+  is neither available nor purged [`KEY_MISSING`]; erased keys
   are recognized from `purge` records (section 8). Needs the blob directory
   and the key material.
 
