@@ -27,6 +27,8 @@ export interface Config {
   recorderCode?: string;
   /** set in the recorder's own config when it cannot see the human's settings */
   hardened?: boolean;
+  /** hooks installed into other agents (`blackbox install --agent`) */
+  installedAgents?: Record<string, { file: string; at: string }>;
   installed?: { hooks?: boolean; env: Record<string, string | null>; at?: string; settings?: string };
   [extra: string]: unknown;
 }
@@ -56,7 +58,7 @@ export interface Verdict {
   permission: 'ask' | 'deny' | null;
   /** the detail for the human */
   reason: string;
-  /** the (deliberately uninformative) text the model sees on a denial */
+  /** the (deliberately uninformative) text the model may see when the call is blocked, including an "ask" an agent cannot show */
   agentMessage: string;
   /** a notice for the human that gates nothing */
   notice: string | null;
@@ -77,6 +79,17 @@ export interface AdapterCapabilities {
   session: boolean;
 }
 
+/** Where and how an agent is told to call the hook script. */
+export interface AgentHooksFile {
+  file(): string;
+  /** add our hooks to the parsed file; returns the events registered */
+  add(json: Record<string, any>, command: string): string[];
+  /** remove only our entries */
+  remove(json: Record<string, any>): void;
+  /** what the human must still do, if anything */
+  note?: string;
+}
+
 /** The one place that knows an agent's own hook format. */
 export interface Adapter {
   id: string;
@@ -88,6 +101,8 @@ export interface Adapter {
   encode(res: { stdout?: object | null; verdict?: Verdict } | null, native: Record<string, any>, opts?: { askFallback?: 'deny' | 'allow' }): HookOutput;
   /** the reply when the recorder is down and failMode is "closed" */
   failClosed(ev: HookEvent, reason: string, native: Record<string, any>): HookOutput | null;
+  /** how `blackbox install --agent <id>` wires the hooks; absent when there is nothing to install */
+  hooksFile?: AgentHooksFile;
 }
 
 export interface Taint { why: string; at: string; tool_use_id?: string }

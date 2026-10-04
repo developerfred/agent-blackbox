@@ -398,7 +398,7 @@ class Daemon {
                         permissionDecisionReason: `[agent-blackbox] ${redact(decision.reason)}`,
                     },
                 };
-                Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: stdout.hookSpecificOutput.permissionDecisionReason });
+                Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: AGENT_DENY_MESSAGE });
             }
             else if (!meta.spooled && decision.decision === 'deny') {
                 // "deny" reasons go back to the model: keep them uninformative and

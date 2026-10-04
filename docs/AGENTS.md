@@ -21,6 +21,24 @@ Events recorded for an agent other than Claude Code carry `agent` (`codex`, `cur
 
 The hook script picks its adapter with `--agent <id>` (default `claude`). Adapters load lazily and use no dependencies.
 
+## What each agent can enforce
+
+| Agent | Install | Block before a tool runs | Ask the human | Sees tool results | Notes |
+|---|---|---|---|---|---|
+| Claude Code | `blackbox install` (or the plugin) | yes | yes | yes | 14 lifecycle events, OpenTelemetry too |
+| OpenAI Codex CLI | `blackbox install --agent codex` | yes, for Bash, `apply_patch` and MCP calls | no: an ask becomes a block | yes | see below |
+
+### Codex CLI
+
+Hooks live in `~/.codex/hooks.json` (or `$CODEX_HOME`). The adapter registers `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop`. Codex's payloads follow Claude Code's, so the adapter only renames what differs: an `apply_patch` call becomes an `Edit` of every file in the patch (so the memory-write and hook-tamper rules see all of them), and `web_search` becomes `WebSearch`.
+
+Limits to know before relying on it:
+
+- **`PreToolUse` does not see every tool.** It covers Bash, `apply_patch` and MCP calls. Codex's other built-ins, such as web search, are not gated, and what they return is not seen by the policy.
+- **Codex cannot ask you.** Where Claude Code would show a permission prompt, Codex gets a block (the model sees only the uninformative message, you see the reason). Set `"askFallback": "allow"` in `~/.blackbox/config.json` to let those calls run with a notice instead.
+- **Hooks are experimental in Codex and may need enabling** in `~/.codex/config.toml`; the installer says so. The `PermissionRequest` event is not used.
+- The payload shapes above were taken from third-party write-ups of the Codex hooks, not from OpenAI's own documentation (not reachable when this was written). Check them against your Codex version; a payload the adapter cannot read is skipped, never a reason to stop the agent.
+
 ## Adding an agent
 
 1. `src/adapters/<id>.js` exporting an `Adapter` (see `src/types.d.ts`), and its id in `src/adapters/index.js`.
