@@ -1,4 +1,10 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.VERSION = exports.ENDPOINTS = exports.SCHEMAS = exports.RECORD_KINDS = exports.RULES = exports.SCHEMA = void 0;
+exports.capabilities = capabilities;
+exports.openapi = openapi;
+exports.compact = compact;
+exports.handle = handle;
 // The agent-facing read API: stable, versioned JSON that an AI agent (or an MCP
 // server acting for one) can parse without scraping the CLI or the UI.
 //
@@ -9,9 +15,9 @@
 //   admin   readable with the admin token only: sessions and the decision/taint
 //           trail. No payloads, no hook summaries (those hold prompt text), and
 //           reasons are the already-masked ones the ledger stores in clear.
-const fs = require('fs');
-const path = require('path');
-const SCHEMA = 'blackbox.agent/v1';
+const fs = require("fs");
+const path = require("path");
+exports.SCHEMA = 'blackbox.agent/v1';
 const MAX_LIMIT = 500;
 const pkg = (() => {
     for (const f of [path.join(__dirname, '..', 'package.json'), path.join(__dirname, '..', '..', 'package.json')]) {
@@ -23,7 +29,7 @@ const pkg = (() => {
     return { version: 'unknown' };
 })();
 /** One entry per rule the policy can report; names match `decision.rule` in the ledger. */
-const RULES = [
+exports.RULES = [
     { id: 'secret-egress', decision: 'deny', summary: 'A secret read earlier in the session appears in an outbound call.' },
     { id: 'sensitive-egress', decision: 'deny', summary: 'One command reads a sensitive file and sends data out.' },
     { id: 'lethal-trifecta', decision: 'ask', summary: 'The session touched private data and untrusted content, and now reaches an unnamed host.' },
@@ -36,16 +42,14 @@ const RULES = [
     { id: 'risky-mcp', decision: 'ask', summary: 'A tool of an MCP server whose local configuration has high-risk findings.' },
     { id: 'risky-skill', decision: 'ask', summary: 'A skill with high-risk findings in the local audit is loaded.' },
 ];
-const RECORD_KINDS = ['genesis', 'hook', 'decision', 'intent', 'taint', 'settings', 'otel', 'api_body', 'purge', 'anchor'];
-/** @param {Record<string, unknown>} properties @param {string[]} [required] */
+exports.RECORD_KINDS = ['genesis', 'hook', 'decision', 'intent', 'taint', 'settings', 'otel', 'api_body', 'purge', 'anchor'];
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: true });
 const str = { type: 'string' };
 const int = { type: 'integer' };
 const bool = { type: 'boolean' };
-/** @param {unknown} items */
 const arr = (items) => ({ type: 'array', items });
 /** Response shapes, shared by the OpenAPI document and the tests. */
-const SCHEMAS = {
+exports.SCHEMAS = {
     Capabilities: obj({ schema: str, name: str, version: str, description: str, scopes: obj({ public: arr(str), admin: arr(str) }), endpoints: arr(obj({ method: str, path: str, scope: str, summary: str })), record_kinds: arr(str), rules: arr(str), guarantees: arr(str), docs: obj({ ledger_spec: str, privacy: str }) }),
     Status: obj({ schema: str, recording: bool, ledger_seq: int, chain_ok: bool, encrypted: bool }),
     Rules: obj({ schema: str, rules: arr(obj({ id: str, decision: str, summary: str })) }),
@@ -54,7 +58,7 @@ const SCHEMAS = {
     Error: obj({ error: str }),
 };
 /** The endpoint table drives routing, /capabilities and /openapi.json, so they cannot drift apart. */
-const ENDPOINTS = [
+exports.ENDPOINTS = [
     { method: 'GET', path: '/v1/agent/capabilities', scope: 'public', schema: 'Capabilities', summary: 'What agent-blackbox is, what this API offers and what it never returns. Start here.' },
     { method: 'GET', path: '/v1/agent/openapi.json', scope: 'public', schema: null, summary: 'This API as an OpenAPI 3.1 document.' },
     { method: 'GET', path: '/v1/agent/status', scope: 'public', schema: 'Status', summary: 'Is the recorder running and is the ledger chain intact. No mode, no findings.' },
@@ -80,25 +84,24 @@ const GUARANTEES = [
 ];
 function capabilities() {
     return {
-        schema: SCHEMA,
+        schema: exports.SCHEMA,
         name: 'agent-blackbox',
         version: pkg.version,
         description: 'A local, tamper-evident flight recorder and lethal-trifecta firewall for AI coding agents.',
         scopes: {
-            public: ENDPOINTS.filter((e) => e.scope === 'public').map((e) => e.path),
-            admin: ENDPOINTS.filter((e) => e.scope === 'admin').map((e) => e.path),
+            public: exports.ENDPOINTS.filter((e) => e.scope === 'public').map((e) => e.path),
+            admin: exports.ENDPOINTS.filter((e) => e.scope === 'admin').map((e) => e.path),
         },
-        endpoints: ENDPOINTS.map(({ method, path: p, scope, summary }) => ({ method, path: p, scope, summary })),
-        record_kinds: RECORD_KINDS,
-        rules: RULES.map((r) => r.id),
+        endpoints: exports.ENDPOINTS.map(({ method, path: p, scope, summary }) => ({ method, path: p, scope, summary })),
+        record_kinds: exports.RECORD_KINDS,
+        rules: exports.RULES.map((r) => r.id),
         guarantees: GUARANTEES,
         docs: { ledger_spec: 'docs/spec/ledger-v1.md', privacy: 'docs/PRIVACY.md' },
     };
 }
 function openapi() {
-    /** @type {Record<string, any>} */
     const paths = {};
-    for (const e of ENDPOINTS) {
+    for (const e of exports.ENDPOINTS) {
         const ok = e.schema
             ? { description: 'OK', content: { 'application/json': { schema: { $ref: `#/components/schemas/${e.schema}` } } } }
             : { description: 'OK', content: { 'application/json': { schema: { type: 'object' } } } };
@@ -123,17 +126,14 @@ function openapi() {
         security: [{ blackboxToken: [] }],
         components: {
             securitySchemes: { blackboxToken: { type: 'apiKey', in: 'header', name: 'x-blackbox-token', description: 'Ingest token for public endpoints, admin token for all.' } },
-            schemas: SCHEMAS,
+            schemas: exports.SCHEMAS,
         },
         paths,
     };
 }
-/** @param {unknown} v @param {number} dflt */
 const num = (v, dflt) => { const n = Number(v); return v != null && v !== '' && Number.isFinite(n) ? Math.trunc(n) : dflt; };
 /** Drop everything but metadata: no summary, no payload references, no signature. */
-/** @param {Record<string, any>} rec */
 function compact(rec) {
-    /** @type {Record<string, any>} */
     const out = { seq: rec.seq, ts: rec.ts, kind: rec.kind, hash: rec.hash };
     for (const f of ['event', 'session_id', 'prompt_id', 'tool_name', 'tool_use_id', 'decision', 'rule', 'reason', 'flag', 'why', 'hosts', 'via', 'problems', 'from', 'to', 'count', 'root']) {
         if (rec[f] !== undefined)
@@ -141,13 +141,9 @@ function compact(rec) {
     }
     return out;
 }
-/**
- * Route one request. Returns null for a path that is not ours.
- * @param {any} daemon @param {URL} url @param {boolean} admin
- * @returns {{ status: number, body: any } | null}
- */
+/** Route one request. Returns null for a path that is not ours. */
 function handle(daemon, url, admin) {
-    const ep = ENDPOINTS.find((e) => e.path === url.pathname);
+    const ep = exports.ENDPOINTS.find((e) => e.path === url.pathname);
     if (!ep)
         return url.pathname.startsWith('/v1/agent/') ? { status: 404, body: { error: 'not found' } } : null;
     if (ep.scope === 'admin' && !admin)
@@ -155,19 +151,19 @@ function handle(daemon, url, admin) {
     switch (ep.path) {
         case '/v1/agent/capabilities': return { status: 200, body: capabilities() };
         case '/v1/agent/openapi.json': return { status: 200, body: openapi() };
-        case '/v1/agent/rules': return { status: 200, body: { schema: SCHEMA, rules: RULES } };
+        case '/v1/agent/rules': return { status: 200, body: { schema: exports.SCHEMA, rules: exports.RULES } };
         case '/v1/agent/status': {
             const v = daemon.verifyCached();
-            return { status: 200, body: { schema: SCHEMA, recording: true, ledger_seq: daemon.ledger.seq, chain_ok: v.ok, encrypted: !!daemon.vault } };
+            return { status: 200, body: { schema: exports.SCHEMA, recording: true, ledger_seq: daemon.ledger.seq, chain_ok: v.ok, encrypted: !!daemon.vault } };
         }
         case '/v1/agent/sessions': {
             const sessions = [...daemon.sessions.values()].map(({ seqs, flags, ...s }) => ({ ...s, taints: Object.keys(flags) }))
                 .sort((a, b) => (a.last < b.last ? 1 : -1));
-            return { status: 200, body: { schema: SCHEMA, head: { seq: daemon.ledger.seq, hash: daemon.ledger.head }, sessions } };
+            return { status: 200, body: { schema: exports.SCHEMA, head: { seq: daemon.ledger.seq, hash: daemon.ledger.head }, sessions } };
         }
         case '/v1/agent/records': {
             const kinds = new Set((url.searchParams.get('kind') || 'decision,taint').split(',').map((k) => k.trim()).filter(Boolean));
-            const bad = [...kinds].filter((k) => !RECORD_KINDS.includes(k));
+            const bad = [...kinds].filter((k) => !exports.RECORD_KINDS.includes(k));
             if (bad.length)
                 return { status: 400, body: { error: `unknown kind: ${bad.join(', ')}` } };
             const session = url.searchParams.get('session');
@@ -190,7 +186,7 @@ function handle(daemon, url, admin) {
             const out = [];
             let last = after;
             for (let i = 0; i < seqs.length && out.length < limit; i += 200) {
-                const batch = seqs.slice(i, i + 200).filter((/** @type {number} */ q) => q > after);
+                const batch = seqs.slice(i, i + 200).filter((q) => q > after);
                 for (const rec of daemon.readRecords(batch)) {
                     last = rec.seq;
                     if (kinds.has(rec.kind) && (!session || rec.session_id === session)) {
@@ -200,10 +196,10 @@ function handle(daemon, url, admin) {
                     }
                 }
             }
-            const more = out.length >= limit && seqs.some((/** @type {number} */ q) => q > last);
-            return { status: 200, body: { schema: SCHEMA, records: out, next_after: more ? last : null } };
+            const more = out.length >= limit && seqs.some((q) => q > last);
+            return { status: 200, body: { schema: exports.SCHEMA, records: out, next_after: more ? last : null } };
         }
     }
     return { status: 404, body: { error: 'not found' } };
 }
-module.exports = { VERSION: pkg.version, handle, capabilities, openapi, compact, ENDPOINTS, RULES, RECORD_KINDS, SCHEMAS, SCHEMA };
+exports.VERSION = pkg.version;
