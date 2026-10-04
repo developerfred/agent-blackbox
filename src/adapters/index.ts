@@ -1,4 +1,3 @@
-'use strict';
 // Agent adapters. The recorder, the policy and the ledger speak one canonical
 // event format (Claude Code's hook events: PreToolUse, PostToolUse, ... with
 // Claude Code's tool names). An adapter is the only code that knows one
@@ -7,12 +6,12 @@
 //
 // Adapters load lazily: every hook process pays for what it requires.
 
-const IDS = ['claude', 'codex', 'cursor', 'gemini'];
+import type { Adapter } from '../types';
 
-/** @param {string} id @returns {import('../types').Adapter} */
-function getAdapter(id) {
+export const IDS = ['claude', 'codex', 'cursor', 'gemini'];
+
+export function getAdapter(id: string): Adapter {
   if (!IDS.includes(id)) throw new Error(`unknown agent "${id}" (known: ${IDS.join(', ')})`);
-  return require(`./${id}`);
+  // loaded on demand: a hook process pays only for the adapter it uses
+  return require(`./${id}`) as Adapter;
 }
-
-module.exports = { IDS, getAdapter };

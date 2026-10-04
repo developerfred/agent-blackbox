@@ -1,13 +1,15 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.installAgent = installAgent;
+exports.uninstallAgent = uninstallAgent;
 // Wire agent-blackbox into an agent other than Claude Code (`blackbox install --agent <id>`).
 // Only hooks: Claude Code's OpenTelemetry stream has no counterpart there.
-const fs = require('fs');
-const path = require('path');
-const { ensureDirs, loadConfig, saveConfig } = require('./paths');
-const { getAdapter } = require('./adapters');
-const { MARKER } = require('./adapters/shared');
-const { nodePath, hookScriptPath } = require('./install');
-/** @param {string} file @returns {Record<string, any>} */
+const fs = require("fs");
+const path = require("path");
+const paths_1 = require("./paths");
+const adapters_1 = require("./adapters");
+const shared_1 = require("./adapters/shared");
+const install_1 = require("./install");
 function readJsonFile(file) {
     if (!fs.existsSync(file))
         return {};
@@ -16,17 +18,15 @@ function readJsonFile(file) {
         return {};
     return JSON.parse(text); // throws on invalid JSON: never overwrite a file we cannot parse
 }
-/** @param {string} id */
 function hooksFileOf(id) {
-    const a = getAdapter(id);
+    const a = (0, adapters_1.getAdapter)(id);
     if (!a.hooksFile)
         throw new Error(`${a.name}: nothing to install (no hook file support yet)`);
     return { a, hf: a.hooksFile };
 }
-/** @param {string} id @param {{ mode?: import('./types').Mode, log?: (msg: string) => void }} [opts] */
 function installAgent(id, { mode, log = console.log } = {}) {
     const { a, hf } = hooksFileOf(id);
-    ensureDirs();
+    (0, paths_1.ensureDirs)();
     const file = hf.file();
     const json = readJsonFile(file);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -36,13 +36,13 @@ function installAgent(id, { mode, log = console.log } = {}) {
         log(`  backup  ${backup}`);
     }
     hf.remove(json);
-    const events = hf.add(json, `"${nodePath()}" "${hookScriptPath()}" --agent ${id} ${MARKER}`);
+    const events = hf.add(json, `"${(0, install_1.nodePath)()}" "${(0, install_1.hookScriptPath)()}" --agent ${id} ${shared_1.MARKER}`);
     fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n');
-    const cfg = loadConfig();
+    const cfg = (0, paths_1.loadConfig)();
     if (mode)
         cfg.mode = mode;
     cfg.installedAgents = { ...cfg.installedAgents, [id]: { file, at: new Date().toISOString() } };
-    saveConfig(cfg);
+    (0, paths_1.saveConfig)(cfg);
     log(`  hooks   ${events.length} events → ${file}`);
     if (!a.capabilities.preTool)
         log(`  note    ${a.name} cannot be blocked before a tool runs: its sessions are recorded, not enforced`);
@@ -52,7 +52,6 @@ function installAgent(id, { mode, log = console.log } = {}) {
         log(`  note    ${hf.note}`);
     return { file, events };
 }
-/** @param {string} id @param {{ log?: (msg: string) => void }} [opts] */
 function uninstallAgent(id, { log = console.log } = {}) {
     const { hf } = hooksFileOf(id);
     const file = hf.file();
@@ -61,11 +60,10 @@ function uninstallAgent(id, { log = console.log } = {}) {
         hf.remove(json);
         fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n');
     }
-    const cfg = loadConfig();
+    const cfg = (0, paths_1.loadConfig)();
     if (cfg.installedAgents) {
         delete cfg.installedAgents[id];
-        saveConfig(cfg);
+        (0, paths_1.saveConfig)(cfg);
     }
     log(`  removed agent-blackbox hooks from ${file}`);
 }
-module.exports = { installAgent, uninstallAgent };

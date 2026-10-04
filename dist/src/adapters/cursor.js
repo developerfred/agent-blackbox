@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 // Cursor (editor and agent). Hooks live in ~/.cursor/hooks.json, one command
 // per event name, each event with its own payload and its own reply:
 //   beforeShellExecution / beforeMCPExecution  { permission: allow|deny|ask, user_message, agent_message }
@@ -10,11 +10,11 @@
 //   - file edits arrive only afterFileEdit: recorded, not gated. The memory-write
 //     rule cannot stop a write in Cursor, it can only be seen afterwards.
 // Only the events above are registered; Cursor's other hook points are left alone.
-const path = require('path');
-const os = require('os');
-const { maybeJson, str, stripOurs } = require('./shared');
+const path = require("path");
+const os = require("os");
+const shared_1 = require("./shared");
 /** native event -> canonical event */
-const EVENTS = /** @type {Record<string, string>} */ ({
+const EVENTS = {
     beforeShellExecution: 'PreToolUse',
     afterShellExecution: 'PostToolUse',
     beforeMCPExecution: 'PreToolUse',
@@ -23,61 +23,58 @@ const EVENTS = /** @type {Record<string, string>} */ ({
     afterFileEdit: 'PostToolUse',
     beforeSubmitPrompt: 'UserPromptSubmit',
     stop: 'Stop',
-});
+};
 const GATED = new Set(['beforeShellExecution', 'beforeMCPExecution']);
-/** The MCP server's name: Cursor names the tool, not always the server.
- * @param {Record<string, any>} n */
+/** The MCP server's name: Cursor names the tool, not always the server. */
 function mcpServer(n) {
-    let name = str(n.server) || str(n.server_name);
-    if (!name && str(n.url)) {
+    let name = (0, shared_1.str)(n.server) || (0, shared_1.str)(n.server_name);
+    if (!name && (0, shared_1.str)(n.url)) {
         try {
             name = new URL(n.url).hostname;
         }
         catch { /* not a URL */ }
     }
-    if (!name && str(n.command))
+    if (!name && (0, shared_1.str)(n.command))
         name = path.basename(n.command.trim().split(/\s+/)[0]);
     return (name || 'cursor').replace(/[^\w.-]/g, '_');
 }
-/** @type {import('../types').Adapter} */
 const adapter = {
     id: 'cursor',
     name: 'Cursor',
     capabilities: { preTool: true, ask: true, postTool: true, prompt: true, session: false },
     decode(native) {
         const event = EVENTS[native.hook_event_name];
-        const sid = str(native.conversation_id) || str(native.session_id);
+        const sid = (0, shared_1.str)(native.conversation_id) || (0, shared_1.str)(native.session_id);
         if (!event || !sid)
             return null;
-        /** @type {import('../types').HookEvent} */
         const ev = {
             hook_event_name: event, agent: 'cursor', session_id: sid,
-            cwd: str(native.cwd) || (Array.isArray(native.workspace_roots) ? str(native.workspace_roots[0]) : '') || undefined,
-            prompt_id: str(native.generation_id) || undefined,
-            tool_use_id: str(native.generation_id) || undefined,
+            cwd: (0, shared_1.str)(native.cwd) || (Array.isArray(native.workspace_roots) ? (0, shared_1.str)(native.workspace_roots[0]) : '') || undefined,
+            prompt_id: (0, shared_1.str)(native.generation_id) || undefined,
+            tool_use_id: (0, shared_1.str)(native.generation_id) || undefined,
         };
         switch (native.hook_event_name) {
             case 'beforeShellExecution':
-                Object.assign(ev, { tool_name: 'Bash', tool_input: { command: str(native.command) } });
+                Object.assign(ev, { tool_name: 'Bash', tool_input: { command: (0, shared_1.str)(native.command) } });
                 break;
             case 'afterShellExecution':
-                Object.assign(ev, { tool_name: 'Bash', tool_input: { command: str(native.command) }, tool_response: native.output });
+                Object.assign(ev, { tool_name: 'Bash', tool_input: { command: (0, shared_1.str)(native.command) }, tool_response: native.output });
                 break;
             case 'beforeMCPExecution':
-                Object.assign(ev, { tool_name: `mcp__${mcpServer(native)}__${str(native.tool_name)}`, tool_input: maybeJson(native.tool_input) });
+                Object.assign(ev, { tool_name: `mcp__${mcpServer(native)}__${(0, shared_1.str)(native.tool_name)}`, tool_input: (0, shared_1.maybeJson)(native.tool_input) });
                 break;
             case 'afterMCPExecution':
-                Object.assign(ev, { tool_name: `mcp__${mcpServer(native)}__${str(native.tool_name)}`, tool_input: maybeJson(native.tool_input), tool_response: maybeJson(native.result_json) });
+                Object.assign(ev, { tool_name: `mcp__${mcpServer(native)}__${(0, shared_1.str)(native.tool_name)}`, tool_input: (0, shared_1.maybeJson)(native.tool_input), tool_response: (0, shared_1.maybeJson)(native.result_json) });
                 break;
             // the content arrives with the request to read, so this is where the session learns what it read
             case 'beforeReadFile':
-                Object.assign(ev, { tool_name: 'Read', tool_input: { file_path: str(native.file_path) }, tool_response: { file: { content: native.content } } });
+                Object.assign(ev, { tool_name: 'Read', tool_input: { file_path: (0, shared_1.str)(native.file_path) }, tool_response: { file: { content: native.content } } });
                 break;
             case 'afterFileEdit':
-                Object.assign(ev, { tool_name: 'Edit', tool_input: { file_path: str(native.file_path), edits: native.edits } });
+                Object.assign(ev, { tool_name: 'Edit', tool_input: { file_path: (0, shared_1.str)(native.file_path), edits: native.edits } });
                 break;
             case 'beforeSubmitPrompt':
-                ev.prompt = str(native.prompt);
+                ev.prompt = (0, shared_1.str)(native.prompt);
                 break;
             default: ev.reason = native.status;
         }
@@ -114,7 +111,7 @@ const adapter = {
                 (json.hooks[e] ||= []).push({ command, timeout: 10 });
             return Object.keys(EVENTS);
         },
-        remove(json) { stripOurs(json, false); },
+        remove(json) { (0, shared_1.stripOurs)(json, false); },
         note: 'Restart Cursor so it reads the new hooks. File edits are recorded after they happen, not gated.',
     },
 };

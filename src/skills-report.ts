@@ -1,16 +1,10 @@
-'use strict';
 // Terminal view of `blackbox skills`.
-const { palette } = require('./term');
+import { palette } from './term';
+import type { SkillAudit } from './types';
 
-/** @type {Record<string, number>} */
-/** @type {Record<string, number>} */
-const SEV_ORDER = { high: 0, medium: 1, low: 2, none: 3 };
+const SEV_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 };
 
-/**
- * @param {import('./types').SkillAudit[]} audits
- * @param {{ color?: boolean, all?: boolean }} [opts]
- */
-function renderSkills(audits, { color = false, all = false } = {}) {
+export function renderSkills(audits: SkillAudit[], { color = false, all = false }: { color?: boolean; all?: boolean } = {}): string {
   const { red, yellow, dim, bold, cyan, bySeverity: sevCol } = palette(color);
   const out = [bold(`agent-blackbox skills · ${audits.length} installed`)];
   if (!audits.length) {
@@ -18,8 +12,7 @@ function renderSkills(audits, { color = false, all = false } = {}) {
     return out.join('\n');
   }
   const sorted = [...audits].sort((a, b) => SEV_ORDER[a.risk] - SEV_ORDER[b.risk] || a.name.localeCompare(b.name));
-  /** @type {Record<string, number>} */
-  const tally = { high: 0, medium: 0, low: 0, none: 0 };
+  const tally: Record<string, number> = { high: 0, medium: 0, low: 0, none: 0 };
   for (const a of audits) tally[a.risk]++;
   out.push(dim(`  ${tally.high} high · ${tally.medium} medium · ${tally.low} low · ${tally.none} clean`));
   out.push('');
@@ -39,5 +32,3 @@ function renderSkills(audits, { color = false, all = false } = {}) {
   if (!all && audits.some((a) => a.counts.low)) out.push(dim('  Low-severity notes hidden; show them with --all.'));
   return out.join('\n');
 }
-
-module.exports = { renderSkills };

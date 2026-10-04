@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 // OpenAI Codex CLI. Its hooks (~/.codex/hooks.json) deliberately follow Claude
 // Code's: the same event names, snake_case payloads with session_id, cwd,
 // tool_name, tool_input, tool_response, and the same PreToolUse deny reply.
@@ -6,22 +6,19 @@
 //   - PreToolUse covers Bash, apply_patch and MCP tool calls, not every tool
 //     Codex has (web search and other built-ins do not reach it);
 //   - a hook cannot hand a decision to the human, so an "ask" becomes a block.
-const path = require('path');
-const os = require('os');
-const { failClosedVerdict, withAskFallback, stripOurs } = require('./shared');
+const path = require("path");
+const os = require("os");
+const shared_1 = require("./shared");
 const EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop'];
 const TOOL_EVENTS = new Set(['PreToolUse', 'PostToolUse']);
 const codexHome = () => process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-/** The files an apply_patch patch adds, updates, deletes or moves to.
- * @param {string} patch @returns {string[]} */
+/** The files an apply_patch patch adds, updates, deletes or moves to. */
 function patchFiles(patch) {
-    /** @type {string[]} */
     const files = [];
     for (const m of patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm))
         files.push(m[1].trim());
     return files;
 }
-/** @param {Record<string, any>} input */
 function patchText(input) {
     for (const k of ['command', 'patch', 'input'])
         if (typeof input[k] === 'string')
@@ -30,7 +27,6 @@ function patchText(input) {
         return input.command.join('\n'); // argv form: ["apply_patch", "<patch>"]
     return '';
 }
-/** @type {import('../types').Adapter} */
 const adapter = {
     id: 'codex',
     name: 'OpenAI Codex CLI',
@@ -39,7 +35,6 @@ const adapter = {
         const event = native.hook_event_name;
         if (!EVENTS.includes(event) || !native.session_id)
             return null;
-        /** @type {import('../types').HookEvent} */
         const ev = { ...native, agent: 'codex', session_id: String(native.session_id), prompt_id: native.turn_id };
         if (TOOL_EVENTS.has(event) && native.tool_name === 'apply_patch') {
             const input = native.tool_input || {};
@@ -55,10 +50,9 @@ const adapter = {
         return ev;
     },
     encode(res, native, opts = {}) {
-        const v = withAskFallback(res && res.verdict, adapter.capabilities.ask, opts.askFallback || 'deny');
+        const v = (0, shared_1.withAskFallback)(res && res.verdict, adapter.capabilities.ask, opts.askFallback || 'deny');
         if (!v)
             return {};
-        /** @type {Record<string, any>} */
         const out = {};
         if (v.permission === 'deny' && native.hook_event_name === 'PreToolUse') {
             out.hookSpecificOutput = { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: v.agentMessage };
@@ -68,7 +62,7 @@ const adapter = {
             out.systemMessage = v.notice;
         return Object.keys(out).length ? { stdout: out } : {};
     },
-    failClosed(ev, reason) { return ev.hook_event_name === 'PreToolUse' ? { stdout: failClosedVerdict(reason) } : null; },
+    failClosed(ev, reason) { return ev.hook_event_name === 'PreToolUse' ? { stdout: (0, shared_1.failClosedVerdict)(reason) } : null; },
     hooksFile: {
         file: () => path.join(codexHome(), 'hooks.json'),
         add(json, command) {
@@ -79,7 +73,7 @@ const adapter = {
             }
             return EVENTS;
         },
-        remove(json) { stripOurs(json, true); },
+        remove(json) { (0, shared_1.stripOurs)(json, true); },
         note: 'Codex hooks are experimental. If yours is off, enable them (the `codex_hooks` feature in ~/.codex/config.toml) and restart Codex.',
     },
 };

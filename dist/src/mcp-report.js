@@ -1,38 +1,29 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.renderMcp = renderMcp;
 // Terminal view of `blackbox mcp`: configured servers joined with real usage.
-const { palette } = require('./term');
-const { configFor } = require('./mcp');
-/** @typedef {{ name: string, calls: number, outbound?: boolean }} McpTool */
-/** @type {Record<string, number>} */
+const term_1 = require("./term");
+const mcp_1 = require("./mcp");
 const SEV = { high: 3, medium: 2, low: 1, none: 0 };
-/**
- * @param {import('./types').McpAudit[]} audits
- * @param {any} summary result of scan() with the mcp section
- * @param {{ color?: boolean, all?: boolean }} [opts]
- */
+/** `summary` is the result of scan() with the mcp section. */
 function renderMcp(audits, summary, { color = false, all = false } = {}) {
-    const { red, yellow, green, dim, bold, cyan, bySeverity } = palette(color);
-    /** @param {unknown} x */
+    const { red, yellow, green, dim, bold, cyan, bySeverity } = (0, term_1.palette)(color);
     const n = (x) => Number(x || 0).toLocaleString('en-US');
     const used = (summary.mcp && summary.mcp.used) || [];
     const out = [bold(`agent-blackbox mcp · ${used.length} servers used in the last ${summary.days} days · ${audits.length} configured`)];
-    /** @param {string} r */
     const riskTag = (r) => (r === 'high' ? red('high risk') : r === 'medium' ? yellow('medium risk') : r === 'low' ? dim('low') : green('clean'));
-    /** @param {import('./types').McpAudit} a */
     const defLine = (a) => (a.command ? `${a.transport} · ${[a.command, ...a.args].join(' ')}` : `${a.transport} · ${a.url || ''}`);
-    /** @param {import('./types').McpAudit} a */
     const findingsOf = (a) => a.findings.filter((f) => all || f.severity !== 'low');
-    /** @param {import('./types').Finding} f */
     const findingLine = (f) => `        ${bySeverity[f.severity]('•')} ${f.rule}: ${f.message}${f.detail ? dim(`  [${f.detail}]`) : ''}`;
     if (used.length) {
         out.push('');
         out.push(bold('  used') + dim('   (↗ = tool that sends or changes data)'));
         for (const m of used) {
-            const cfgs = configFor(audits, m.server);
+            const cfgs = (0, mcp_1.configFor)(audits, m.server);
             const worst = cfgs.sort((a, b) => SEV[b.risk] - SEV[a.risk])[0];
             out.push(`  ${bold(m.server)}${m.plugin ? dim(` (plugin ${m.plugin})`) : ''}  ${worst ? riskTag(worst.risk) : dim('not in a local config: claude.ai connector, managed or removed')}`);
             out.push(`      ${n(m.calls)} ${m.calls === 1 ? "call" : "calls"} · ${n(m.sessions)} ${m.sessions === 1 ? "session" : "sessions"} · last ${String(m.lastUsed || '').slice(0, 10)}${m.outboundCalls ? ' · ' + yellow(`${n(m.outboundCalls)} sent or changed data`) : ' · ' + dim('read-only')}${m.errors ? ' · ' + red(`${n(m.errors)} failed`) : ''}`);
-            out.push(dim(`      tools: ${m.tools.slice(0, 8).map((/** @type {McpTool} */ t) => `${t.name}${t.outbound ? '↗' : ''} ${t.calls}`).join(' · ')}${m.tools.length > 8 ? ` · +${m.tools.length - 8} more` : ''}`));
+            out.push(dim(`      tools: ${m.tools.slice(0, 8).map((t) => `${t.name}${t.outbound ? '↗' : ''} ${t.calls}`).join(' · ')}${m.tools.length > 8 ? ` · +${m.tools.length - 8} more` : ''}`));
             for (const a of cfgs) {
                 out.push(dim(`      ${a.client} ${a.scope} · ${defLine(a).slice(0, 110)}`));
                 for (const f of findingsOf(a))
@@ -61,4 +52,3 @@ function renderMcp(audits, summary, { color = false, all = false } = {}) {
         out.push(`  Record today's definitions so later changes are flagged: ${cyan('blackbox mcp --pin')}`);
     return out.join('\n');
 }
-module.exports = { renderMcp };

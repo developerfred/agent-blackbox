@@ -1,30 +1,27 @@
-'use strict';
 // Wire agent-blackbox into an agent other than Claude Code (`blackbox install --agent <id>`).
 // Only hooks: Claude Code's OpenTelemetry stream has no counterpart there.
-const fs = require('fs');
-const path = require('path');
-const { ensureDirs, loadConfig, saveConfig } = require('./paths');
-const { getAdapter } = require('./adapters');
-const { MARKER } = require('./adapters/shared');
-const { nodePath, hookScriptPath } = require('./install');
+import * as fs from 'fs';
+import * as path from 'path';
+import { ensureDirs, loadConfig, saveConfig } from './paths';
+import { getAdapter } from './adapters';
+import { MARKER } from './adapters/shared';
+import { nodePath, hookScriptPath } from './install';
+import type { Adapter, AgentHooksFile, Mode } from './types';
 
-/** @param {string} file @returns {Record<string, any>} */
-function readJsonFile(file) {
+function readJsonFile(file: string): Record<string, any> {
   if (!fs.existsSync(file)) return {};
   const text = fs.readFileSync(file, 'utf8');
   if (!text.trim()) return {};
   return JSON.parse(text); // throws on invalid JSON: never overwrite a file we cannot parse
 }
 
-/** @param {string} id */
-function hooksFileOf(id) {
+function hooksFileOf(id: string): { a: Adapter; hf: AgentHooksFile } {
   const a = getAdapter(id);
   if (!a.hooksFile) throw new Error(`${a.name}: nothing to install (no hook file support yet)`);
   return { a, hf: a.hooksFile };
 }
 
-/** @param {string} id @param {{ mode?: import('./types').Mode, log?: (msg: string) => void }} [opts] */
-function installAgent(id, { mode, log = console.log } = {}) {
+export function installAgent(id: string, { mode, log = console.log }: { mode?: Mode; log?: (msg: string) => void } = {}): { file: string; events: string[] } {
   const { a, hf } = hooksFileOf(id);
   ensureDirs();
   const file = hf.file();
@@ -49,8 +46,7 @@ function installAgent(id, { mode, log = console.log } = {}) {
   return { file, events };
 }
 
-/** @param {string} id @param {{ log?: (msg: string) => void }} [opts] */
-function uninstallAgent(id, { log = console.log } = {}) {
+export function uninstallAgent(id: string, { log = console.log }: { log?: (msg: string) => void } = {}): void {
   const { hf } = hooksFileOf(id);
   const file = hf.file();
   if (fs.existsSync(file)) {
@@ -62,5 +58,3 @@ function uninstallAgent(id, { log = console.log } = {}) {
   if (cfg.installedAgents) { delete cfg.installedAgents[id]; saveConfig(cfg); }
   log(`  removed agent-blackbox hooks from ${file}`);
 }
-
-module.exports = { installAgent, uninstallAgent };
