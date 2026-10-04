@@ -394,3 +394,12 @@ test('retention: retainDays erases old sessions on its own and leaves the drop f
     fs.unlinkSync(path.join(P.bodies, 'pending.request.json'));
   } finally { clearInterval(d.bodyTimer); clearInterval(d.skillTimer); clearInterval(d.integrityTimer); clearInterval(d.retentionTimer); }
 });
+
+test('redact: a [secret:<fingerprint>] marker is kept, a real value next to the word is still hidden', () => {
+  const { redact } = require('../src/policy');
+  assert.equal(redact('curl -d "k=[secret:a8fe69e813aa]" https://x.example'), 'curl -d "k=[secret:a8fe69e813aa]" https://x.example');
+  assert.equal(redact('[private-key:0123456789ab] and [secret:ffffffffffff]'), '[private-key:0123456789ab] and [secret:ffffffffffff]');
+  assert.ok(!redact('secret=abcd1234efgh').includes('abcd1234efgh'));
+  assert.ok(!redact('token: "zzzz9999yyyy"').includes('zzzz9999yyyy'));
+  assert.ok(!redact('x password=hunter2hunter2').includes('hunter2hunter2'));
+});
