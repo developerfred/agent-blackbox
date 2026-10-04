@@ -94,6 +94,21 @@ class Daemon {
     this.checkIntegrity();
     this.integrityTimer = setInterval(() => this.checkIntegrity(), 60 * 1000);
     this.integrityTimer.unref();
+    // Retention: with `retainDays` set, sessions older than that are crypto-erased
+    // at start and once an hour.
+    this.enforceRetention();
+    this.retentionTimer = setInterval(() => this.enforceRetention(), 60 * 60 * 1000);
+    this.retentionTimer.unref();
+  }
+
+  enforceRetention() {
+    const days = Number(this.cfg.retainDays);
+    if (!(days > 0)) return null;
+    return this.safe(() => {
+      const r = this.purge(days, null, { bodies: false });
+      if (r.keys) this.log(`retention: erased ${r.keys} session key${r.keys === 1 ? '' : 's'} older than ${days} days`);
+      return r;
+    });
   }
 
   // Are our hooks still in place? Any change is written to the ledger; a
@@ -330,7 +345,7 @@ class Daemon {
   // unreadable. Unencrypted blobs from older versions are deleted. The chain
   // keeps every hash and stays verifiable.
   // days: only sessions whose last record is older than N days; session: one session.
-  purge(days, session = null) {
+  purge(days, session = null, { bodies: dropBodies = true } = {}) {
     const cutoff = days == null ? Infinity : Date.now() - days * 864e5;
     const lastByKey = new Map(); // kid -> { last, sessions }
     const plainOld = new Set();
@@ -361,7 +376,7 @@ class Daemon {
       try { fs.unlinkSync(path.join(P.blobs, sha)); erased++; } catch { /* already gone */ }
     }
     let bodies = 0;
-    if (!session) {
+    if (!session && dropBodies) {
       for (const name of fs.existsSync(P.bodies) ? fs.readdirSync(P.bodies) : []) {
         if (!name.endsWith('.json')) continue;
         try { fs.unlinkSync(path.join(P.bodies, name)); bodies++; } catch { /* ignore */ }
