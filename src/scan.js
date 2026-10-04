@@ -128,7 +128,7 @@ function humanPrompt(content) {
  * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
  */
 function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null, mcpAudits = null } = {}) {
-  const { parseToolName, configFor } = require('./mcp');
+  const { parseToolName, configFor, normName } = require('./mcp');
   const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
   const policy = new Policy(cfg, { sessions: {} }, crypto.randomBytes(32));
   const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
@@ -312,8 +312,8 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
           configured: cfgs.map((c) => ({ client: c.client, scope: c.scope, transport: c.transport, risk: c.risk, rules: c.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) })),
         };
       });
-      const usedNames = new Set(used.map((u) => u.server.toLowerCase().replace(/[^a-z0-9]+/g, '_')));
-      const unused = (mcpAudits || []).filter((a) => !usedNames.has(a.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')))
+      const usedNames = new Set(used.map((u) => normName(u.server)));
+      const unused = (mcpAudits || []).filter((a) => !usedNames.has(normName(a.name)))
         .map((a) => ({ server: a.name, client: a.client, scope: a.scope, transport: a.transport, risk: a.risk, rules: a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule) }));
       return { used, unused };
     })(),

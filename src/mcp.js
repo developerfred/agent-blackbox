@@ -16,14 +16,21 @@ const SECRET_VALUE = [/\bAKIA[0-9A-Z]{16}\b/, /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]
 const SECRET_KEY = /(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE|CREDENTIAL|AUTH)/i;
 
 const { readJson, sha256 } = require('./util');
+/** @param {string} f */
 const exists = (f) => { try { fs.accessSync(f); return true; } catch { return false; } };
 
 // Tiny TOML reader for Codex's [mcp_servers.<name>] tables.
+/** @param {string} file @returns {Record<string, any>} */
 function codexServers(file) {
   let text;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return {}; }
+  /** @type {Record<string, any>} */
   const out = {};
-  let cur = null, sub = null;
+  /** @type {Record<string, any> | null} */
+  let cur = null;
+  /** @type {string | null} */
+  let sub = null;
+  /** @param {string} v @returns {string | string[]} */
   const val = (v) => {
     v = v.trim();
     if (v.startsWith('[')) return [...v.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((m) => m[1] ?? m[2]);
@@ -40,30 +47,41 @@ function codexServers(file) {
   return out;
 }
 
+/**
+ * @typedef {{ client: string, scope: string, file: string, toml?: boolean, pick?: (json: any) => Record<string, any> | undefined }} ConfigSource
+ */
+
+/** @param {string} [home] @param {string} [cwd] @returns {ConfigSource[]} */
 function candidateConfigs(home = os.homedir(), cwd = process.cwd()) {
   const claudeJson = process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json');
   const lib = path.join(home, 'Library', 'Application Support');
+  // most clients keep their servers under "mcpServers"
+  /** @param {string} client @param {string} scope @param {string} file @param {ConfigSource['pick']} [pick] @returns {ConfigSource} */
+  const src = (client, scope, file, pick = (j) => j.mcpServers) => ({ client, scope, file, pick });
   return [
-    { client: 'Claude Code', scope: 'user', file: claudeJson, pick: (j) => j.mcpServers },
-    { client: 'Claude Code', scope: 'local', file: claudeJson, pick: (j) => (j.projects && j.projects[cwd] && j.projects[cwd].mcpServers) },
-    { client: 'Claude Code', scope: 'project', file: path.join(cwd, '.mcp.json'), pick: (j) => j.mcpServers },
-    { client: 'Claude Desktop', scope: 'user', file: path.join(lib, 'Claude', 'claude_desktop_config.json'), pick: (j) => j.mcpServers },
-    { client: 'Claude Desktop', scope: 'user', file: path.join(home, '.config', 'Claude', 'claude_desktop_config.json'), pick: (j) => j.mcpServers },
-    { client: 'Cursor', scope: 'user', file: path.join(home, '.cursor', 'mcp.json'), pick: (j) => j.mcpServers },
-    { client: 'Cursor', scope: 'project', file: path.join(cwd, '.cursor', 'mcp.json'), pick: (j) => j.mcpServers },
+    src('Claude Code', 'user', claudeJson),
+    src('Claude Code', 'local', claudeJson, (j) => j.projects && j.projects[cwd] && j.projects[cwd].mcpServers),
+    src('Claude Code', 'project', path.join(cwd, '.mcp.json')),
+    src('Claude Desktop', 'user', path.join(lib, 'Claude', 'claude_desktop_config.json')),
+    src('Claude Desktop', 'user', path.join(home, '.config', 'Claude', 'claude_desktop_config.json')),
+    src('Cursor', 'user', path.join(home, '.cursor', 'mcp.json')),
+    src('Cursor', 'project', path.join(cwd, '.cursor', 'mcp.json')),
     { client: 'Codex', scope: 'user', file: path.join(home, '.codex', 'config.toml'), toml: true },
-    { client: 'Gemini CLI', scope: 'user', file: path.join(home, '.gemini', 'settings.json'), pick: (j) => j.mcpServers },
-    { client: 'Gemini CLI', scope: 'project', file: path.join(cwd, '.gemini', 'settings.json'), pick: (j) => j.mcpServers },
-    { client: 'VS Code', scope: 'project', file: path.join(cwd, '.vscode', 'mcp.json'), pick: (j) => j.servers || j.mcpServers },
-    { client: 'Windsurf', scope: 'user', file: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'), pick: (j) => j.mcpServers },
-    { client: 'Copilot CLI', scope: 'user', file: path.join(home, '.copilot', 'mcp-config.json'), pick: (j) => j.mcpServers },
+    src('Gemini CLI', 'user', path.join(home, '.gemini', 'settings.json')),
+    src('Gemini CLI', 'project', path.join(cwd, '.gemini', 'settings.json')),
+    src('VS Code', 'project', path.join(cwd, '.vscode', 'mcp.json'), (j) => j.servers || j.mcpServers),
+    src('Windsurf', 'user', path.join(home, '.codeium', 'windsurf', 'mcp_config.json')),
+    src('Copilot CLI', 'user', path.join(home, '.copilot', 'mcp-config.json')),
   ];
 }
 
 // Plugin-provided servers: <plugin>/.mcp.json or plugin.json "mcpServers".
+/** @param {string} home @returns {(ConfigSource & { plugin: string })[]} */
 function pluginConfigs(home) {
   const root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'plugins');
+  /** @type {(ConfigSource & { plugin: string })[]} */
   const out = [];
+  /** @param {string} dir @param {number} depth */
   const walk = (dir, depth) => {
     if (depth > 6) return;
     let entries = [];
@@ -79,6 +97,7 @@ function pluginConfigs(home) {
   return out;
 }
 
+/** @param {{ home?: string, cwd?: string }} [opts] */
 function discoverServers({ home = os.homedir(), cwd = process.cwd() } = {}) {
   const servers = [];
   for (const c of [...candidateConfigs(home, cwd), ...pluginConfigs(home)]) {
@@ -106,11 +125,19 @@ function discoverServers({ home = os.homedir(), cwd = process.cwd() } = {}) {
 
 // ---------- audit ----------
 
+/** @param {unknown} v */
 const isRef = (v) => /^\$\{[^}]+\}$|^\$[A-Z_][A-Z0-9_]*$|^env:|^\{env:/.test(String(v).trim());
+/** @param {unknown} v */
 const mask = (v) => { const s = String(v); return s.length <= 8 ? '•••' : s.slice(0, 4) + '…' + `(${s.length} chars)`; };
 
+/**
+ * @param {ReturnType<typeof discoverServers>[number]} s
+ * @param {{ home?: string }} [opts]
+ */
 function auditServer(s, { home: homeDir = os.homedir() } = {}) {
+  /** @type {import('./types').Finding[]} */
   const f = [];
+  /** @param {import('./types').Severity} severity @param {string} rule @param {string} message @param {string | null | undefined} detail */
   const add = (severity, rule, message, detail) => f.push({ severity, rule, message, detail: detail ? redact(detail) : null });
   // literal secrets in env or headers
   for (const [where, obj] of [['env', s.env], ['headers', s.headers]]) {
@@ -176,6 +203,7 @@ function auditServers({ home, cwd, pinsFile } = {}) {
   });
 }
 
+/** @param {string} file @param {import('./types').McpAudit[]} audits */
 function saveMcpPins(file, audits) {
   const pins = readJson(file) || {};
   for (const a of audits) pins[a.pinKey] = a.hash;
@@ -184,6 +212,7 @@ function saveMcpPins(file, audits) {
 }
 
 // mcp__<server>__<tool>; plugin servers are mcp__plugin_<plugin>_<server>__<tool>.
+/** @param {string | undefined} name */
 function parseToolName(name) {
   const m = /^mcp__(.+)__([^_].*)$/.exec(name || '');
   if (!m) return null;
@@ -195,11 +224,14 @@ function parseToolName(name) {
   return { server, tool, plugin, outbound: OUTBOUND.test(tool) };
 }
 
+/** Clients normalize server names: spaces and dots become underscores. @param {unknown} x */
+const normName = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
 // Match a used server name to configured definitions (names are normalized
 // by clients: spaces and dots become underscores).
+/** @param {import('./types').McpAudit[]} audits @param {string} server */
 function configFor(audits, server) {
-  const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return audits.filter((a) => norm(a.name) === norm(server));
+  return audits.filter((a) => normName(a.name) === normName(server));
 }
 
-module.exports = { discoverServers, auditServer, auditServers, saveMcpPins, parseToolName, configFor, codexServers, SEV };
+module.exports = { discoverServers, auditServer, auditServers, saveMcpPins, parseToolName, configFor, normName, codexServers, SEV };
