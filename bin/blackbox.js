@@ -229,10 +229,10 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               (docs/AGENTS.md says what each one can enforce)
   blackbox uninstall [--agent <id>]
                               remove them (evidence is kept)
-  blackbox start | stop | status
-  blackbox sessions           list recorded sessions
-  blackbox timeline [id|--last] [--otel]
-  blackbox verify [ledger] [--chain-only]
+  blackbox start | stop | status [--json]
+  blackbox sessions [--json]  list recorded sessions
+  blackbox timeline [id|--last] [--otel] [--json]
+  blackbox verify [ledger] [--chain-only] [--json]
                               check hashes, chain links, signatures, and decrypt-and-check payloads
   blackbox show <n>           print the (decrypted) payload of record #n
   blackbox anchor             print the signed chain head to publish elsewhere
@@ -246,6 +246,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                               writes files by default, sends only to the --endpoint you name
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
+  blackbox serve-mcp [--admin]
+                              local MCP server (stdio) exposing the read-only agent API as tools
+                              (docs/AGENT-API.md); --admin adds sessions and records
   blackbox mcp [--days N] [--all] [--json] [--pin] [--fail-on high|medium]
                               MCP servers: where configured, how they run, what was used, config risks
   blackbox skills [--path dir] [--all] [--json] [--pin] [--fail-on high|medium]
@@ -253,7 +256,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox harden [--out file] [--user NAME] [--node PATH] [--undo | --check]
                               print a reviewable root script that runs the recorder as its own OS user
                               (agent can write evidence but not read or erase it); --check tells if it does
-  blackbox docs [--clear PATH | --clear-all]
+  blackbox docs [--json] [--clear PATH | --clear-all]
                               instruction/memory files a tainted session wrote (they mark later sessions); clear a reviewed one
   blackbox managed-settings    print the hooks block for Claude Code managed settings (admin-owned hooks)
   blackbox mode ask|deny|monitor
@@ -275,14 +278,23 @@ async function main() {
 
   switch (cmd) {
     case 'daemon': return require('../src/daemon').runDaemon();
+    case 'serve-mcp': {
+      // stdout is the protocol channel: no banners. The ingest token reads the public tier only.
+      require('../src/mcp-server').serve({ admin: flag('--admin'), port: P.port, token: flag('--admin') ? cliToken(true) : require('../src/paths').readToken() });
+      return;
+    }
     case 'start': return start();
     case 'stop': return stop();
     case 'status': {
       const h = await health();
       const cfg = loadConfig();
-      console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       const { checkHooks } = require('../src/integrity');
       const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
+      if (flag('--json')) {
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', recording: !!h, ledger_seq: h ? h.seq : null, mode: h ? h.mode : cfg.mode, encrypted: h ? !!h.encrypted : cfg.encrypt !== false, hooks: { via: ig.via || null, problems: ig.problems }, data: cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home }, null, 2));
+        return;
+      }
+      console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
       console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home}`);
       for (const p of ig.problems) console.log(red(`  ✘ ${p}`));
       return;
@@ -333,6 +345,10 @@ async function main() {
     }
     case 'sessions': {
       const list = sessionsOf(await readRecords());
+      if (flag('--json')) {
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', sessions: list.slice(0, Number(opt('-n') || 20)).map(({ n, flags, ...s }) => ({ ...s, events: n, taints: [...flags] })) }, null, 2));
+        return;
+      }
       if (!list.length) { console.log('no sessions recorded yet'); return; }
       for (const s of list.slice(0, Number(opt('-n') || 20))) {
         const flags = [...s.flags].map((f) => yellow(f)).join(',');
@@ -345,7 +361,13 @@ async function main() {
       const recs = await readRecords();
       let id = args.find((a) => !a.startsWith('-'));
       if (!id || flag('--last')) id = (sessionsOf(recs)[0] || {}).id;
-      if (!id) { console.log('no sessions recorded yet'); return; }
+      if (!id) { if (flag('--json')) console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: null, records: [] })); else console.log('no sessions recorded yet'); return; }
+      if (flag('--json')) {
+        // metadata only, like the agent API: `blackbox show <seq>` is the way to a payload
+        const { compact } = require('../src/agent-api');
+        console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: id, records: recs.filter((r) => r.session_id === id && (flag('--otel') || r.kind !== 'otel')).map(compact) }, null, 2));
+        return;
+      }
       printTimeline(recs, id, { otel: flag('--otel') });
       return;
     }
@@ -353,14 +375,14 @@ async function main() {
       if (remote() && !args.find((x) => !x.startsWith('-'))) {
         const r = await call('GET', '/api/verify');
         if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
-        report({ ...r.body, sessions: r.body.sessions, warnings: r.body.warnings || [] });
+        if (flag('--json')) console.log(JSON.stringify(r.body, null, 2)); else report({ ...r.body, sessions: r.body.sessions, warnings: r.body.warnings || [] });
         process.exitCode = r.body.ok ? 0 : 1;
         return;
       }
       const ledgerPath = args.find((x) => !x.startsWith('-')) || P.ledger;
       const pubPem = fs.existsSync(P.pubKey) ? fs.readFileSync(P.pubKey, 'utf8') : null;
       const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs, vault: flag('--chain-only') ? null : localVault() });
-      report(r);
+      if (flag('--json')) console.log(JSON.stringify(r, null, 2)); else report(r);
       process.exitCode = r.ok ? 0 : 1;
       return;
     }
@@ -522,6 +544,7 @@ async function main() {
       }
       const r = await call('GET', '/api/docs');
       if (r.status !== 200) throw new Error(`the recorder refused (${r.status})`);
+      if (flag('--json')) { console.log(JSON.stringify({ schema: 'blackbox.cli/v1', docs: r.body }, null, 2)); return; }
       if (!r.body.length) { console.log(dim('no marked documents')); return; }
       for (const d of r.body) console.log(`${yellow(d.path)}\n  ${dim(`written ${d.at} by session ${String(d.session).slice(0, 12)} · ${d.why}`)}`);
       console.log(dim('\nA session that reads or loads these starts as untrusted. After you review one: blackbox docs --clear PATH (or declare it in trustedDocs).'));

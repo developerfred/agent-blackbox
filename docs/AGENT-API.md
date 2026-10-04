@@ -46,3 +46,25 @@ curl -s -H "x-blackbox-token: $TOKEN" http://127.0.0.1:7071/v1/agent/capabilitie
 curl -s -H "x-blackbox-token: $(cat ~/.blackbox/keys/admin-token)" \
   "http://127.0.0.1:7071/v1/agent/records?kind=decision&limit=20"
 ```
+
+## MCP server
+
+`blackbox serve-mcp` is a local MCP server (stdio, newline-delimited JSON-RPC, protocol 2025-06-18, no dependencies) that exposes the same API as read-only tools, so a coding agent can use it like any other tool:
+
+```json
+{ "mcpServers": { "blackbox": { "command": "blackbox", "args": ["serve-mcp"] } } }
+```
+
+| Tool | Endpoint | Offered |
+| --- | --- | --- |
+| `blackbox_capabilities` | `/v1/agent/capabilities` | always |
+| `blackbox_status` | `/v1/agent/status` | always |
+| `blackbox_rules` | `/v1/agent/rules` | always |
+| `blackbox_sessions` | `/v1/agent/sessions` | only with `--admin` |
+| `blackbox_records` | `/v1/agent/records` | only with `--admin` |
+
+Without `--admin` the server uses the ingest token and can only reach the public tier. `--admin` is for a person who wants to give an agent the decision trail; with the default same-user install the agent could read that token anyway (see [PRIVACY.md](PRIVACY.md)). Every tool is annotated `readOnlyHint`, returns the JSON as `structuredContent` and declares its `outputSchema`. Note that `serve-mcp` is separate from `blackbox mcp`, which audits the MCP servers you have configured.
+
+## CLI `--json`
+
+For scripts and agents that prefer a command: `blackbox status|sessions|timeline|verify|docs --json` print one JSON document (`schema: blackbox.cli/v1`, except `verify`, which prints the verifier's own result). `timeline --json` has the same metadata-only records as the API; use `blackbox show <n>` to open a payload. `scan`, `mcp`, `skills` and `eval` already had `--json`.
