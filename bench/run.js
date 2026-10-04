@@ -24,6 +24,7 @@ const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
 /** @type {Record<string, { p50: number, p95: number, n: number, unit: string, budget: number | null }>} */
 const results = {};
 
+/** @param {number[]} xs @param {number} p */
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
 const now = () => Number(process.hrtime.bigint()) / 1e6; // ms
 /** @param {string} name @param {number[]} samples @param {string} [unit] @param {number | null} [budget] */
@@ -35,6 +36,7 @@ function record(name, samples, unit = 'ms', budget = null) {
     console.log(`${name.padEnd(34)} p50 ${r.p50.toFixed(3).padStart(9)} ${unit}   p95 ${r.p95.toFixed(3).padStart(9)} ${unit}   n=${r.n}${budget != null ? `   budget ${budget}` : ''}${flag}`);
   }
 }
+/** @param {string} n */
 const want = (n) => !only || only === n;
 
 function benchPolicy() {
@@ -50,6 +52,7 @@ function benchPolicy() {
     }
     return sid;
   });
+  /** @type {number[]} */
   const samples = [];
   for (let rep = 0; rep < 40; rep++) {
     calls.forEach((c, i) => {
@@ -74,6 +77,7 @@ function benchPolicy() {
   record('policy.scrub (140 KB response)', scrub);
 }
 
+/** @param {string} p @param {unknown} body @param {string} token @returns {Promise<number | undefined>} */
 function post(p, body, token) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
@@ -84,9 +88,11 @@ function post(p, body, token) {
     req.end(data);
   });
 }
+/** @param {string} p @param {string} token @returns {Promise<{ status: number | undefined, body: string }>} */
 function get(p, token) {
   return new Promise((resolve, reject) => {
     http.get({ host: '127.0.0.1', port: PORT, path: p, headers: { host: `127.0.0.1:${PORT}`, 'x-blackbox-token': token }, agent: false }, (res) => {
+      /** @type {Buffer[]} */
       const out = []; res.on('data', (d) => out.push(d)); res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(out).toString() }));
     }).on('error', reject);
   });
