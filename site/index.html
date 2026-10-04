@@ -3,8 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agent-blackbox</title>
-<meta name="description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Local-first, no telemetry.">
+<title>agent-blackbox: flight recorder and firewall for AI coding agents</title>
+<meta name="description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<link rel="canonical" href="https://developerfred.github.io/agent-blackbox/">
+<link rel="alternate" hreflang="en" href="https://developerfred.github.io/agent-blackbox/">
+<link rel="alternate" hreflang="pt-BR" href="https://developerfred.github.io/agent-blackbox/pt.html">
+<link rel="alternate" hreflang="x-default" href="https://developerfred.github.io/agent-blackbox/">
+<meta name="theme-color" content="#0f1113">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="agent-blackbox">
+<meta property="og:title" content="agent-blackbox: flight recorder and firewall for AI coding agents">
+<meta property="og:description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<meta property="og:url" content="https://developerfred.github.io/agent-blackbox/">
+<meta property="og:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="agent-blackbox: see what your AI agent did, stop it before it leaks">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="pt_BR">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="agent-blackbox: flight recorder and firewall for AI coding agents">
+<meta name="twitter:description" content="A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.">
+<meta name="twitter:image" content="https://developerfred.github.io/agent-blackbox/media/og.png">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "agent-blackbox", "applicationCategory": "SecurityApplication", "operatingSystem": "macOS, Linux", "description": "A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. Everything runs locally: no account, no cloud, no telemetry.", "url": "https://developerfred.github.io/agent-blackbox/", "downloadUrl": "https://www.npmjs.com/package/agent-blackbox", "codeRepository": "https://github.com/developerfred/agent-blackbox", "license": "https://www.apache.org/licenses/LICENSE-2.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "isAccessibleForFree": true, "author": {"@type": "Person", "name": "Frederick Silva", "url": "https://github.com/developerfred"}}</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -92,6 +113,7 @@ blackbox verify             # prove nothing was changed</code></pre>
 <div><dt>Secrets never stored</dt><dd>Replaced by HMAC fingerprints before anything is written.</dd></div>
 <div><dt>Real erasure</dt><dd>Per-session keys: <code>purge</code> or <code>retainDays</code> makes old sessions unreadable, backups included.</dd></div>
 <div><dt>Web3 aware</dt><dd>Seed phrases, keystores and transaction signing count as sensitive.</dd></div>
+<div><dt>Open format and OTel export</dt><dd>The <a href="https://github.com/developerfred/agent-blackbox/blob/main/docs/spec/ledger-v1.md">ledger format</a> is specified with test vectors. <code>blackbox export</code> writes OpenTelemetry GenAI traces, metadata only.</dd></div>
 <div><dt>Measured</dt><dd><code>blackbox eval</code>: 62 of 62 known attacks caught, 0 of 20 false alarms.</dd></div>
 </dl>
 </div>

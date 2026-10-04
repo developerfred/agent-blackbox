@@ -339,15 +339,16 @@ numbered as drafts and then as 1.x with a changelog at the end.
 
 ## Reference implementation notes
 
-Where the code in this repository differs from this document today:
+`blackbox verify` (`src/ledger.js`) reports the same errors as this document
+for every ledger case in `docs/spec/vectors/` (checked by
+`test/spec-vectors.test.js`); it does not check anchors or the `KEY_MISSING`
+warning, which the standalone verifier (`verifier/bb-verify.js`) does.
+Its error list carries the codes of section 11 in a `code` field next to the
+human-readable `problem`.
 
-- `blackbox verify` accepts a second `genesis` record in the middle of a
-  chain as a key change when no trusted key is given. Section 6 forbids it.
-- `blackbox verify` does not check that `key_id` matches `public_key`, does
-  not reject duplicate keys in a line, and does not check `v`.
-- `canon()` in `src/ledger.js` is RFC 8785 for the values that occur in
-  records, but it also drops keys whose value is `undefined`, which cannot
-  occur in parsed JSON.
+`canon()` in `src/ledger.js` is RFC 8785 for the values that occur in
+records, but it also drops keys whose value is `undefined`, which cannot
+occur in parsed JSON.
 
 ## Open questions
 
