@@ -4,6 +4,7 @@
 - [spec/ledger-v1.md](spec/ledger-v1.md): the open ledger and event format (hash chain, signatures, sealed payloads, crypto-erase)
 - [OTEL.md](OTEL.md): `blackbox export`, the ledger as OpenTelemetry GenAI traces and logs (metadata only, local by default)
 - [../verifier/](../verifier/README.md): `bb-verify.js`, a standalone verifier for that format (no dependencies)
+- [AGENT-GUIDE.md](AGENT-GUIDE.md): for AI agents: what to do when a call is blocked, safe commands, installing it for a person (also served as `/llms.txt` on the site)
 - [../README.md](../README.md): install, policy rules, evidence format, limitations
 - [../SECURITY.md](../SECURITY.md): reporting a vulnerability or a policy bypass
 - [../ROADMAP.md](../ROADMAP.md): phases, gates and the engineering track
