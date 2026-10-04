@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { checkHooks } = require('../src/integrity');
+const { checkHooks } = require('../dist/src/integrity');
 
 const EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse'];
 const cmd = '"/usr/bin/node" "/x/bin/hook.js" # agent-blackbox-hook';

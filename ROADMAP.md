@@ -73,6 +73,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 Runs alongside the phases. The rule: no runtime dependencies, and nothing gets slower without a benchmark saying so.
 
 - [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). Next: turn on `noImplicitAny` (about 470 untyped parameters, mostly in skills, scan, policy and daemon)
+- [x] Build step for the TypeScript move: `npm run build` compiles `src/`, `bin/` and `eval/` (`.js` and `.ts`) into a committed `dist/`, which the plugin hooks, the Homebrew formula and the npm `bin` run, so nothing needs a build at install time. CI fails when `dist/` is stale (`npm run build:check`). Migrating a module is `git mv x.js x.ts`, fix its types, rebuild.
 - [ ] Move to TypeScript module by module (policy, ledger, vault first), compiled to plain JS for npm and the plugin, so users still need only Node
 - [ ] Shared types for the canonical event (hooks, Cursor, Codex, OpenTelemetry GenAI) and for the rules file
 - [x] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second (`npm run bench`; the CI job prints the numbers and does not fail on them, shared runners are too noisy)

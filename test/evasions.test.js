@@ -1,8 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { CASES } = require('../eval/corpus');
-const { runCase, runAll } = require('../eval/run');
+const { CASES } = require('../dist/eval/corpus');
+const { runCase, runAll } = require('../dist/eval/run');
 
 for (const c of CASES.filter((x) => !x.gap)) {
   test(`evasion corpus: ${c.id} → ${c.expect}`, () => {

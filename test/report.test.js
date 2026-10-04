@@ -4,8 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fx = require('./fixtures/report');
 const golden = require('./fixtures/report-golden.json');
-const { renderMcp } = require('../src/mcp-report');
-const { renderSkills } = require('../src/skills-report');
+const { renderMcp } = require('../dist/src/mcp-report');
+const { renderSkills } = require('../dist/src/skills-report');
 
 test('blackbox mcp report: plain, colored with --all, and ordering', () => {
   assert.equal(renderMcp(fx.mcpAudits, fx.summary, {}), golden.mcp);

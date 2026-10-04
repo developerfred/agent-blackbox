@@ -12,11 +12,11 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-perf-'));
 process.env.BLACKBOX_HOME = path.join(HOME, 'bb');
 process.env.BLACKBOX_PORT = String(30000 + Math.floor(Math.random() * 20000));
 
-const { Policy } = require('../src/policy');
-const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../src/paths');
-const { Daemon } = require('../src/daemon');
-const { request } = require('../src/local-http');
-const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists } = require('../src/util');
+const { Policy } = require('../dist/src/policy');
+const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken, P } = require('../dist/src/paths');
+const { Daemon } = require('../dist/src/daemon');
+const { request } = require('../dist/src/local-http');
+const { readJsonl, readJson, parseLine, defined, pushCapped, baseName, isDir, isFile, exists } = require('../dist/src/util');
 
 test('util: tolerant JSONL, JSON fallbacks, capped lists, base names', () => {
   const f = path.join(HOME, 'x.jsonl');
