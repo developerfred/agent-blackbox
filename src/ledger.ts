@@ -1,30 +1,33 @@
-'use strict';
 // Append-only, hash-chained, Ed25519-signed evidence ledger.
 // Each line is one record. hash = sha256(canonical(record without hash/sig)),
 // sig = Ed25519(hash). Payloads live in a content-addressed blob store; the
 // record only carries their sha256, so content can be crypto-erased later
 // without breaking the chain.
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+import { sha256, parseLine } from './util';
+import { merkleRoot, MERKLE_ALG } from './merkle';
+import type { Paths, LedgerRecord } from './types';
+import type { Vault } from './vault';
 
-const GENESIS = '0'.repeat(64);
+// the spec vectors and tests read the hash helper from here
+export { sha256 };
 
-/** Canonical JSON: sorted keys, no undefined, so a record always hashes the same.
- * @param {unknown} v @returns {string} */
-function canon(v) {
+export const GENESIS = '0'.repeat(64);
+
+/** Canonical JSON: sorted keys, no undefined, so a record always hashes the same. */
+export function canon(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v === undefined ? null : v);
   if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
-  const o = /** @type {Record<string, unknown>} */ (v);
+  const o = v as Record<string, unknown>;
   return '{' + Object.keys(o).filter((k) => o[k] !== undefined).sort()
     .map((k) => JSON.stringify(k) + ':' + canon(o[k])).join(',') + '}';
 }
 
-const { sha256, parseLine } = require('./util');
-const { merkleRoot, MERKLE_ALG } = require('./merkle');
+interface Keys { priv: crypto.KeyObject; pub: crypto.KeyObject; pubPem: string; keyId: string }
 
-/** @param {import('./types').Paths} P */
-function loadOrCreateKeys(P) {
+function loadOrCreateKeys(P: Paths): Keys {
   if (!fs.existsSync(P.privKey)) {
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
     fs.writeFileSync(P.privKey, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
@@ -37,8 +40,7 @@ function loadOrCreateKeys(P) {
   return { priv, pub, pubPem, keyId };
 }
 
-/** @param {string} file @returns {string | null} */
-function readLastLine(file) {
+function readLastLine(file: string): string | null {
   if (!fs.existsSync(file)) return null;
   const size = fs.statSync(file).size;
   if (!size) return null;
@@ -51,16 +53,19 @@ function readLastLine(file) {
   return lines.length ? lines[lines.length - 1] : null;
 }
 
-class Ledger {
-  /** @type {number} */ seq = 0;
-  /** @type {string} */ head = GENESIS;
-  /** @type {import('./types').LedgerRecord | null} */ last = null;
-  /** bytes written so far @type {number} */ size = 0;
+export class Ledger {
+  seq = 0;
+  head: string = GENESIS;
+  last: LedgerRecord | null = null;
+  /** bytes written so far */
+  size = 0;
+  P: Paths;
+  vault: Vault | null;
+  keys: Keys;
 
   // vault (optional): a Vault; when set, payload blobs are sealed with the key
   // of their session and stored under blobs/<kid>/<sha>.
-  /** @param {import('./types').Paths} P @param {{ vault?: import('./vault').Vault | null }} [opts] */
-  constructor(P, { vault = null } = {}) {
+  constructor(P: Paths, { vault = null }: { vault?: Vault | null } = {}) {
     this.P = P;
     this.vault = vault;
     this.keys = loadOrCreateKeys(P);
@@ -80,8 +85,7 @@ class Ledger {
 
   // Store content by its hash; returns the digest recorded in the chain (the
   // sha256 of the plaintext) and, when encrypted, the id of the key used.
-  /** @param {unknown} content @param {string | null} [scope] */
-  putBlob(content, scope = null) {
+  putBlob(content: unknown, scope: string | null = null): { sha: string; size: number; key?: string } {
     const buf = Buffer.isBuffer(content) ? content
       : Buffer.from(typeof content === 'string' ? content : canon(content));
     const digest = sha256(buf);
@@ -101,16 +105,14 @@ class Ledger {
   }
 
   // Read a payload back (decrypting it if needed). Throws if it was erased.
-  /** @param {string} sha @param {string} [kid] */
-  getBlob(sha, kid) {
+  getBlob(sha: string, kid?: string): Buffer {
     const file = blobPath(this.P.blobs, sha, kid);
     const raw = fs.readFileSync(file);
     return this.vault ? this.vault.open(raw) : raw;
   }
 
   // Move a file into the blob store (used for raw API bodies).
-  /** @param {string} src */
-  adoptFile(src) {
+  adoptFile(src: string): { sha: string; size: number } {
     const buf = fs.readFileSync(src);
     const digest = sha256(buf);
     const file = path.join(this.P.blobs, digest);
@@ -119,16 +121,11 @@ class Ledger {
     return { sha: digest, size: buf.length };
   }
 
-  /**
-   * @param {string} kind
-   * @param {Record<string, unknown>} fields
-   * @returns {import('./types').LedgerRecord}
-   */
-  append(kind, fields) {
+  append(kind: string, fields: Record<string, unknown>): LedgerRecord {
     const rec = { v: 1, seq: this.seq + 1, ts: new Date().toISOString(), kind, ...fields, prev: this.head };
     const hash = sha256(canon(rec));
     const sig = crypto.sign(null, Buffer.from(hash, 'hex'), this.keys.priv).toString('base64');
-    const full = { ...rec, hash, sig };
+    const full = { ...rec, hash, sig } as LedgerRecord;
     const line = JSON.stringify(full) + '\n';
     fs.appendFileSync(this.P.ledger, line, { mode: 0o600 });
     this.size += Buffer.byteLength(line);
@@ -143,10 +140,8 @@ const BLOB_FIELDS = ['payload', 'request_blob', 'response_blob'];
 
 // Does a line of valid JSON repeat a key inside one object? JSON.parse keeps
 // the last value silently, so two readers of the same line could disagree.
-/** @param {string} text */
-function hasDuplicateKeys(text) {
-  /** @type {{ keys: Set<string> | null, expectKey: boolean }[]} */
-  const stack = [];
+function hasDuplicateKeys(text: string): boolean {
+  const stack: { keys: Set<string> | null; expectKey: boolean }[] = [];
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     const top = stack[stack.length - 1];
@@ -167,29 +162,35 @@ function hasDuplicateKeys(text) {
   }
   return false;
 }
-/** @param {string} dir @param {string} sha @param {string} [kid] */
-const blobPath = (dir, sha, kid) => (kid ? path.join(dir, kid, sha) : path.join(dir, sha));
+export const blobPath = (dir: string, sha: string, kid?: string): string => (kid ? path.join(dir, kid, sha) : path.join(dir, sha));
 
 // Walk the whole chain. Integrity proves nothing recorded was changed,
 // removed or reordered; it does not prove that everything was recorded.
 // With a vault, encrypted payloads are decrypted and checked against their
 // hash; without one (a third party checking the chain), they are counted as
 // sealed and their content is not checked.
-/**
- * @param {{ ledgerPath: string, pubPem?: string | null, blobsDir: string, vault?: import('./vault').Vault | null }} opts
- */
-function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
-  /** @type {{ ok: boolean, records: number, errors: { line: number, problem: string, code?: string }[], warnings: string[], head: { seq: number, hash: string } | null, sessions: number, sealed: number, erasedKeys: number }} */
-  const out = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: 0, sealed: 0, erasedKeys: 0 };
-  const sessions = new Set();
-  const erasedSeen = new Set();
-  let text;
+export interface VerifyResult {
+  ok: boolean;
+  records: number;
+  errors: { line: number; problem: string; code?: string }[];
+  warnings: string[];
+  head: { seq: number; hash: string } | null;
+  sessions: number;
+  sealed: number;
+  erasedKeys: number;
+}
+
+export function verify({ ledgerPath, pubPem, blobsDir, vault = null }: { ledgerPath: string; pubPem?: string | null; blobsDir: string; vault?: Vault | null }): VerifyResult {
+  const out: VerifyResult = { ok: true, records: 0, errors: [], warnings: [], head: null, sessions: 0, sealed: 0, erasedKeys: 0 };
+  const sessions = new Set<string>();
+  const erasedSeen = new Set<string>();
+  let text: string;
   try { text = fs.readFileSync(ledgerPath, 'utf8'); } catch {
     out.ok = false; out.errors.push({ line: 0, problem: 'ledger not found' }); return out;
   }
   const lines = text.split('\n');
   // purge records come after the records they erase, so look ahead once
-  const purgedKeys = new Set();
+  const purgedKeys = new Set<string>();
   for (const l of lines) {
     if (!l.includes('"kind":"purge"')) continue;
     for (const k of (parseLine(l) || {}).erased_keys || []) purgedKeys.add(k);
@@ -198,14 +199,13 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
   let prev = GENESIS;
   let expectSeq = 1;
   let chainPub = pub;
-  /** record hashes by position, for checking anchor batches @type {string[]} */
-  const hashes = [];
+  /** record hashes by position, for checking anchor batches */
+  const hashes: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line) continue;
     // codes are those of docs/spec/ledger-v1.md, section 11
-    /** @param {string} problem @param {string} [code] */
-    const fail = (problem, code) => { out.ok = false; out.errors.push({ line: i + 1, problem, code }); };
+    const fail = (problem: string, code?: string): void => { out.ok = false; out.errors.push({ line: i + 1, problem, code }); };
     const rec = parseLine(line);
     if (!rec || typeof rec !== 'object' || Array.isArray(rec)) { fail('not valid JSON', 'INVALID_JSON'); continue; }
     if (hasDuplicateKeys(line)) fail('a key appears twice in the record', 'DUPLICATE_KEY');
@@ -219,8 +219,7 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
     if (first && rec.kind !== 'genesis') fail(`seq ${rec.seq}: the first record must be genesis`, 'GENESIS_REQUIRED');
     if (!first && rec.kind === 'genesis') fail(`seq ${rec.seq}: only the first record may be genesis`, 'GENESIS_DUPLICATE');
     if (first && rec.kind === 'genesis') {
-      /** @type {crypto.KeyObject | null} */
-      let gpub = null;
+      let gpub: crypto.KeyObject | null = null;
       try { gpub = crypto.createPublicKey(rec.public_key); } catch { /* reported below */ }
       if (!gpub || sha256(gpub.export({ type: 'spki', format: 'der' })).slice(0, 16) !== rec.key_id) {
         fail(`seq ${rec.seq}: key_id does not match public_key`, 'KEY_ID_MISMATCH');
@@ -256,7 +255,7 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
       if (!fs.existsSync(file)) { out.warnings.push(`seq ${rec.seq}: ${f} blob missing (erased or not copied)`); continue; }
       if (rec.key) {
         if (!vault) { out.sealed++; continue; }
-        let plain;
+        let plain: Buffer;
         try { plain = vault.open(fs.readFileSync(file)); } catch { fail(`seq ${rec.seq}: ${f} blob content changed (decryption failed)`); continue; }
         if (sha256(plain) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
       } else if (sha256(fs.readFileSync(file)) !== d) fail(`seq ${rec.seq}: ${f} blob content changed`);
@@ -279,4 +278,3 @@ function verify({ ledgerPath, pubPem, blobsDir, vault = null }) {
   return out;
 }
 
-module.exports = { Ledger, verify, canon, sha256, blobPath, GENESIS };
