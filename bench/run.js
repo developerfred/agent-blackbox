@@ -100,7 +100,7 @@ function get(p, token) {
 
 async function benchDaemon() {
   ensureDirs();
-  const child = spawn(process.execPath, [path.join(__dirname, '..', 'dist', 'bin', 'blackbox.js'), 'daemon'], { stdio: 'ignore', env: process.env });
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'blackbox.js'), 'daemon'], { stdio: 'ignore', env: process.env });
   const token = readToken(), admin = readAdminToken();
   for (let i = 0; i < 50; i++) { try { if ((await get('/health', token)).status === 200) break; } catch { /* starting */ } await new Promise((r) => setTimeout(r, 100)); }
   try {

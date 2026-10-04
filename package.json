@@ -19,7 +19,8 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "bench": "node bench/run.js",
+    "bench": "node dist/bench/run.js",
+    "eval": "node dist/bin/blackbox.js eval",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.strict.json",
     "build": "node scripts/build.js",
     "build:check": "node scripts/build.js --check",

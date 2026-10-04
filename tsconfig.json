@@ -18,6 +18,10 @@
     "src/**/*.js",
     "bin/**/*.js",
     "eval/**/*.js",
-    "bench/**/*.js"
+    "bench/**/*.js",
+    "src/**/*.ts",
+    "bin/**/*.ts",
+    "eval/**/*.ts",
+    "bench/**/*.ts"
   ]
 }

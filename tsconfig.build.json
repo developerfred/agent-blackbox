@@ -16,6 +16,8 @@
     "bin/**/*.js",
     "bin/**/*.ts",
     "eval/**/*.js",
-    "eval/**/*.ts"
+    "eval/**/*.ts",
+    "bench/**/*.js",
+    "bench/**/*.ts"
   ]
 }
