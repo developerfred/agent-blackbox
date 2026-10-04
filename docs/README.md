@@ -1,6 +1,7 @@
 # Documentation
 
 - [PRIVACY.md](PRIVACY.md): what is recorded, where it is kept, retention, and what the defaults do not protect against
+- [AGENTS.md](AGENTS.md): how agents plug in (adapters), and what each one can enforce
 - [spec/ledger-v1.md](spec/ledger-v1.md): the open ledger and event format (hash chain, signatures, sealed payloads, crypto-erase)
 - [OTEL.md](OTEL.md): `blackbox export`, the ledger as OpenTelemetry GenAI traces and logs (metadata only, local by default)
 - [../verifier/](../verifier/README.md): `bb-verify.js`, a standalone verifier for that format (no dependencies)

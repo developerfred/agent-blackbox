@@ -193,6 +193,11 @@ class Daemon {
   }
 
   safe(fn) { try { return fn(); } catch (e) { this.log('error', e.stack || String(e)); } }
+  // What /hook answers: Claude Code's stdout (kept for older hooks) and the neutral verdict.
+  hookReply(ev) {
+    const r = this.safe(() => this.processHook(ev));
+    return { stdout: (r && r.stdout) || null, verdict: r ? r.verdict : null };
+  }
   log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
 
   loadState() {
@@ -308,7 +313,10 @@ class Daemon {
   // ---- hooks ----
   // Order matters: the policy sees the raw event (it must learn which values
   // are secrets), then only a scrubbed copy is ever written to disk.
-  handleHook(ev, meta = {}) {
+  handleHook(ev, meta = {}) { return this.processHook(ev, meta).stdout; }
+
+  // The same, with the verdict in the agent-neutral form adapters encode.
+  processHook(ev, meta = {}) {
     const event = ev.hook_event_name || 'unknown';
     const sid = ev.session_id;
     let decision = null;
@@ -334,6 +342,7 @@ class Daemon {
       agent_id: ev.agent_id,
       tool_name: ev.tool_name,
       tool_use_id: ev.tool_use_id,
+      agent: ev.agent,
       cwd: event === 'SessionStart' ? ev.cwd : undefined,
       summary: this.sealSummary(summarize(clean), sid),
       payload: blob.sha,
@@ -344,6 +353,8 @@ class Daemon {
     });
 
     let stdout = null;
+    /** @type {import('./types').Verdict} */
+    const verdict = { permission: null, reason: '', agentMessage: '', notice: null };
     if (decision) {
       this.append('decision', {
         session_id: sid, prompt_id: ev.prompt_id, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name,
@@ -359,6 +370,7 @@ class Daemon {
             permissionDecisionReason: `[agent-blackbox] ${redact(decision.reason)}`,
           },
         };
+        Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: stdout.hookSpecificOutput.permissionDecisionReason });
       } else if (!meta.spooled && decision.decision === 'deny') {
         // "deny" reasons go back to the model: keep them uninformative and
         // tell the human the full story out of band.
@@ -366,6 +378,7 @@ class Daemon {
           systemMessage: `[agent-blackbox] blocked ${ev.tool_name}: ${redact(decision.reason)}`,
           hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: AGENT_DENY_MESSAGE },
         };
+        Object.assign(verdict, { permission: 'deny', reason: stdout.systemMessage, agentMessage: AGENT_DENY_MESSAGE });
       }
       if (decision.decision === 'deny') this.saveState();
     }
@@ -397,7 +410,8 @@ class Daemon {
       stdout = { ...(stdout || {}), systemMessage: `[agent-blackbox] ${this.pendingWarning}${stdout && stdout.systemMessage ? '\n' + stdout.systemMessage : ''}` };
       this.pendingWarning = null;
     }
-    return stdout;
+    verdict.notice = stdout && stdout.systemMessage ? stdout.systemMessage : null;
+    return { stdout, verdict };
   }
 
   // Store a raw API body with its secrets scrubbed, then delete the original.
@@ -664,7 +678,7 @@ class Daemon {
         try {
           if (req.headers['content-encoding'] === 'gzip') raw = zlib.gunzipSync(raw);
           const body = raw.length ? JSON.parse(raw.toString('utf8')) : {};
-          if (url.pathname === '/hook') return send(200, { stdout: this.safe(() => this.handleHook(body)) || null });
+          if (url.pathname === '/hook') return send(200, this.hookReply(body));
           if (url.pathname === '/v1/logs') { this.safe(() => this.handleOtlp(body)); return send(200, {}); }
           if (url.pathname === '/spool') {
             // events a hook queued while the recorder was down (dedicated-user mode)

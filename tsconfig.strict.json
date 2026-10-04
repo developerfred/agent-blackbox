@@ -22,6 +22,7 @@
     "src/install.js",
     "src/scan-html.js",
     "src/share.js",
-    "src/scan.js"
+    "src/scan.js",
+    "src/adapters/*.js"
   ]
 }
