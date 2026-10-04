@@ -205,7 +205,7 @@ class Daemon {
   }
 
   openSummary(text) {
-    if (!text.startsWith(SEALED_PREFIX)) return text;
+    if (!text.startsWith(SEALED_PREFIX) || !this.vault) return text;
     try { return this.vault.open(Buffer.from(text.slice(SEALED_PREFIX.length), 'base64')).toString('utf8'); } catch { return '[erased]'; }
   }
 
