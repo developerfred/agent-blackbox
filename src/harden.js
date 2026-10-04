@@ -247,9 +247,10 @@ echo "service removed. The user ${o.user} and ${o.data} are kept; remove them by
 // body of GET /health.
 /**
  * @param {{ uid?: number | null } | null} health body of GET /health
- * @param {{ uid?: number | null, cfg?: Partial<import('./types').Config> }} [opts]
+ * @param {{ uid?: number | null, cfg?: Partial<import('./types').Config>, legacyKeys?: string[], hookScripts?: string[] }} [opts]
+ *   legacyKeys: key files still in the human's own folder; hookScripts: where the installed hooks run from
  */
-function checkHardened(health, { uid = typeof process.getuid === 'function' ? process.getuid() : null, cfg = {} } = {}) {
+function checkHardened(health, { uid = typeof process.getuid === 'function' ? process.getuid() : null, cfg = {}, legacyKeys = [], hookScripts = [] } = {}) {
   /** @type {string[]} */
   const lines = [];
   let ok = true;
@@ -261,6 +262,10 @@ function checkHardened(health, { uid = typeof process.getuid === 'function' ? pr
   else lines.push(`✔ the recorder runs as uid ${health.uid}, not yours (${uid})`);
   if (!cfg.remoteDaemon) bad('hooks are not set to forward to a separate recorder (remoteDaemon is off)');
   else lines.push('✔ hooks forward to the service and never start a recorder of their own');
+  // warnings: not a failure of the setup, but evidence or code the agent can still reach
+  if (legacyKeys.length) lines.push(`! your own recorder folder still holds ${legacyKeys.join(', ')} from before harden: an agent running as you can read them. Run blackbox anchor, then move that folder away.`);
+  const outside = cfg.recorderCode ? hookScripts.find((s) => !s.startsWith(cfg.recorderCode + '/')) : undefined;
+  if (outside) lines.push(`! the hooks still run from ${outside}, which an agent running as you can edit. Run: blackbox install`);
   return { ok, lines };
 }
 

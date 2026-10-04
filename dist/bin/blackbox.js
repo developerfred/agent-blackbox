@@ -451,9 +451,10 @@ async function main() {
         case 'harden': {
             const h = require('../src/harden');
             if (flag('--check')) {
-                const r = h.checkHardened(await health(), { cfg: loadConfig() });
+                const legacyKeys = ['ed25519.key', 'master.key'].filter((f) => require('fs').existsSync(path.join(P.keys, f)));
+                const r = h.checkHardened(await health(), { cfg: loadConfig(), legacyKeys, hookScripts: require('../src/install').installedHookScripts() });
                 for (const l of r.lines)
-                    console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : dim(l));
+                    console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : l.startsWith('!') ? yellow(l) : dim(l));
                 process.exitCode = r.ok ? 0 : 1;
                 return;
             }
