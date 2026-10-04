@@ -218,9 +218,10 @@ function assertOutsideClaudeDir(out) {
 
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
-  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--force] [--telemetry-only]
+  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--fail-closed] [--force] [--telemetry-only]
                               add hooks + telemetry to ~/.claude/settings.json, start recorder
                               (--prompts also logs prompt and response text through telemetry, off by default;
+                               --fail-closed denies tool calls while the recorder is unreachable;
                                --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
   blackbox uninstall          remove them (evidence is kept)
@@ -277,8 +278,12 @@ async function main() {
       if (mode) parseMode(mode);
       console.log(bold('Installing agent-blackbox into Claude Code'));
       require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+      if (flag('--fail-closed')) saveConfig({ ...loadConfig(), failMode: 'closed' });
       await stop().catch(() => {});
       await start();
+      const posture = loadConfig();
+      console.log(`\n  ${posture.remoteDaemon ? green('●') : yellow('!')} keys and ledger: ${posture.remoteDaemon ? 'recorder runs as a dedicated user' : `readable by any process running as you; ${cyan('blackbox harden')} moves them out of reach`}`);
+      console.log(`  ${posture.failMode === 'closed' ? green('●') : yellow('!')} if the recorder is down: tool calls ${posture.failMode === 'closed' ? 'are denied' : `still run; ${cyan('blackbox install --fail-closed')} denies them instead`}`);
       console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
       console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
       return;
