@@ -21,10 +21,20 @@ const chunks = [];
 process.stdin.on('data', (c) => chunks.push(c));
 process.stdin.on('end', () => {
   if (shadowed) process.exit(0);
-  const raw = Buffer.concat(chunks).toString('utf8');
+  let raw = Buffer.concat(chunks).toString('utf8');
   /** @type {Partial<import('../src/types').HookEvent>} */
   let ev = {};
   try { ev = JSON.parse(raw); } catch { process.exit(0); }
+  // The recorder may run as another user and not see our settings: at the start of a session
+  // we look at our own installation and report what we found with the event.
+  if (ev.hook_event_name === 'SessionStart') {
+    try {
+      const { checkHooks } = require('../src/integrity');
+      const { HOOK_EVENTS } = require('../src/install');
+      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null });
+      raw = JSON.stringify({ ...ev, blackbox_integrity: { via: r.via, fingerprint: r.fingerprint, problems: r.problems } });
+    } catch { /* never block the event on a failed self-check */ }
+  }
 
   /** @param {object | null} out what Claude Code reads from the hook's stdout */
   const done = (out) => {

@@ -235,6 +235,9 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox anchor --batch     also commit to all records since the last anchor with one Merkle root
   blackbox anchor --prove <seq> | --verify-proof <file>
                               inclusion proof for one record; check one offline against a published root
+  blackbox export [--session ID] [--out dir] [--endpoint URL]
+                              OpenTelemetry GenAI traces and logs (OTLP/JSON, metadata only) from the ledger;
+                              writes files by default, sends only to the --endpoint you name
   blackbox share [--days N] [--out dir] [--no-video]
                               images and a 10 s video for X / TikTok / Reels (numbers only)
   blackbox mcp [--days N] [--all] [--json] [--pin] [--fail-on high|medium]
@@ -389,6 +392,30 @@ async function main() {
       console.log(JSON.stringify(a, null, 2));
       console.log(dim('\nPublish this somewhere the agent cannot edit (a git commit, a gist, a transparency log).'));
       console.log(dim('Later, any rewrite of history before this point will no longer match it.'));
+      return;
+    }
+    case 'export': {
+      const { toOtlpTraces, toOtlpLogs } = require('../src/otel-genai');
+      const pkgFile = [path.join(__dirname, '..', 'package.json'), path.join(__dirname, '..', '..', 'package.json')].find((f) => fs.existsSync(f));
+      const version = (pkgFile && require('../src/util').readJson(pkgFile, {}).version) || '0';
+      let recs = await readRecords();
+      const sid = opt('--session');
+      if (sid) recs = recs.filter((r) => r.session_id === sid || r.kind === 'genesis');
+      const out = { traces: toOtlpTraces(recs, { version }), logs: toOtlpLogs(recs, { version }) };
+      const endpoint = opt('--endpoint');
+      if (endpoint) {
+        if (!/^https?:\/\//.test(endpoint)) { console.error(red('--endpoint must be an http(s) URL')); process.exit(1); }
+        for (const [name, body] of Object.entries(out)) {
+          const res = await fetch(endpoint.replace(/\/$/, '') + '/v1/' + name, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+          console.log(`${name}: ${res.status} ${endpoint}`);
+          if (!res.ok) process.exitCode = 1;
+        }
+        return;
+      }
+      const dir = opt('--out') || path.join(process.cwd(), 'blackbox-otlp');
+      fs.mkdirSync(dir, { recursive: true });
+      for (const [name, body] of Object.entries(out)) fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(body, null, 2));
+      console.log(`wrote ${path.join(dir, 'traces.json')} and ${path.join(dir, 'logs.json')} (nothing was sent anywhere)`);
       return;
     }
     case 'demo': {
