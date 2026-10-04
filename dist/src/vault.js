@@ -1,4 +1,8 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Vault = exports.KeyErased = void 0;
+exports.shred = shred;
+exports.scopeOf = scopeOf;
 // Encryption at rest for payload blobs, with one data key per session.
 //
 // Each session (or, for records with no session, each month) gets its own
@@ -12,17 +16,18 @@
 // another tool that indexes your disk) and selective erasure. What it does not:
 // a process running as the same OS user can read the master key too. Running
 // the recorder as a dedicated user (`blackbox harden`) closes that gap.
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 const MAGIC = Buffer.from('BBX1');
 const KID_BYTES = 8;
 const HEADER = MAGIC.length + KID_BYTES + 12 + 16;
 class KeyErased extends Error {
-    /** @param {string} kid */
+    code;
+    kid;
     constructor(kid) { super(`key ${kid} was erased`); this.code = 'ERASED'; this.kid = kid; }
 }
-/** @param {Buffer} key @param {Buffer} plain @param {Buffer} aad */
+exports.KeyErased = KeyErased;
 function aesSeal(key, plain, aad) {
     const iv = crypto.randomBytes(12);
     const c = crypto.createCipheriv('aes-256-gcm', key, iv);
@@ -30,7 +35,6 @@ function aesSeal(key, plain, aad) {
     const ct = Buffer.concat([c.update(plain), c.final()]);
     return { iv, tag: c.getAuthTag(), ct };
 }
-/** @param {Buffer} key @param {Buffer} iv @param {Buffer} tag @param {Buffer} ct @param {Buffer} aad */
 function aesOpen(key, iv, tag, ct, aad) {
     const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
     d.setAAD(aad);
@@ -40,7 +44,6 @@ function aesOpen(key, iv, tag, ct, aad) {
 // Overwrite before unlinking. On SSDs and copy-on-write filesystems this is
 // not a guarantee, which is why the key is small and wrapped: what matters is
 // that no copy of the unwrapped key ever touches the disk.
-/** @param {string} file */
 function shred(file) {
     try {
         const { size } = fs.statSync(file);
@@ -53,7 +56,10 @@ function shred(file) {
     }
 }
 class Vault {
-    /** @param {{ keysDir: string, masterKey?: string }} opts */
+    dir;
+    masterFile;
+    master;
+    cache;
     constructor({ keysDir, masterKey }) {
         this.dir = path.join(keysDir, 'sessions');
         this.masterFile = path.join(keysDir, 'master.key');
@@ -73,16 +79,14 @@ class Vault {
     }
     // The key id is derived from the scope with the master key, so file names
     // in keys/sessions and blobs/ do not reveal session ids.
-    /** @param {string} scope */
     kid(scope) {
         return crypto.createHmac('sha256', this.master).update('kid:' + scope).digest('hex').slice(0, KID_BYTES * 2);
     }
-    /** @param {string} kid */
     keyFile(kid) { return path.join(this.dir, `${kid}.key`); }
-    /** @param {string} kid @param {boolean} [create] @returns {Buffer} */
     dataKey(kid, create) {
-        if (this.cache.has(kid))
-            return this.cache.get(kid);
+        const hit = this.cache.get(kid);
+        if (hit)
+            return hit;
         const f = this.keyFile(kid);
         let key;
         if (fs.existsSync(f)) {
@@ -100,7 +104,6 @@ class Vault {
         this.cache.set(kid, key);
         return key;
     }
-    /** @param {string} scope @param {Buffer} plain @returns {{ kid: string, data: Buffer }} */
     seal(scope, plain) {
         const kid = this.kid(scope);
         const key = this.dataKey(kid, true);
@@ -111,7 +114,6 @@ class Vault {
     }
     // Throws KeyErased if the session key is gone, or an auth error if the
     // ciphertext was altered.
-    /** @param {Buffer} sealed @returns {Buffer} */
     open(sealed) {
         if (!Vault.isSealed(sealed))
             return sealed;
@@ -121,19 +123,15 @@ class Vault {
         const tag = sealed.subarray(MAGIC.length + KID_BYTES + 12, HEADER);
         return aesOpen(this.dataKey(kid, false), iv, tag, sealed.subarray(HEADER), Buffer.concat([MAGIC, kidBuf]));
     }
-    /** @param {string} kid */
     hasKey(kid) { return this.cache.has(kid) || fs.existsSync(this.keyFile(kid)); }
-    /** @param {string} kid */
     erase(kid) {
         this.cache.delete(kid);
         return shred(this.keyFile(kid));
     }
-    /** @param {Buffer} buf */
     static isSealed(buf) { return buf.length >= HEADER && buf.subarray(0, MAGIC.length).equals(MAGIC); }
 }
+exports.Vault = Vault;
 // The scope that decides which key protects a record's payloads.
-/** @param {string | undefined | null} sessionId @param {Date | string | number} [ts] */
 function scopeOf(sessionId, ts = new Date()) {
     return sessionId ? `session:${sessionId}` : `month:${new Date(ts).toISOString().slice(0, 7)}`;
 }
-module.exports = { Vault, KeyErased, scopeOf, shred };
