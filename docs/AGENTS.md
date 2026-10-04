@@ -27,6 +27,7 @@ The hook script picks its adapter with `--agent <id>` (default `claude`). Adapte
 |---|---|---|---|---|---|
 | Claude Code | `blackbox install` (or the plugin) | yes | yes | yes | 14 lifecycle events, OpenTelemetry too |
 | OpenAI Codex CLI | `blackbox install --agent codex` | yes, for Bash, `apply_patch` and MCP calls | no: an ask becomes a block | yes | see below |
+| Cursor | `blackbox install --agent cursor` | yes, for shell and MCP calls | yes | shell, MCP and file reads (with content) | file edits are recorded after the fact; see below |
 
 ### Codex CLI
 
@@ -38,6 +39,17 @@ Limits to know before relying on it:
 - **Codex cannot ask you.** Where Claude Code would show a permission prompt, Codex gets a block (the model sees only the uninformative message, you see the reason). Set `"askFallback": "allow"` in `~/.blackbox/config.json` to let those calls run with a notice instead.
 - **Hooks are experimental in Codex and may need enabling** in `~/.codex/config.toml`; the installer says so. The `PermissionRequest` event is not used.
 - The payload shapes above were taken from third-party write-ups of the Codex hooks, not from OpenAI's own documentation (not reachable when this was written). Check them against your Codex version; a payload the adapter cannot read is skipped, never a reason to stop the agent.
+
+### Cursor
+
+Hooks live in `~/.cursor/hooks.json`, one command per event name. The adapter registers `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `beforeReadFile`, `afterFileEdit`, `beforeSubmitPrompt` and `stop`, and maps them to the canonical events (`beforeShellExecution` is a `PreToolUse` of `Bash`, an MCP call is `mcp__<server>__<tool>`, and so on). Cursor names the MCP tool but not always the server, so the server is taken from the payload's server name, else the URL's host, else the command's name.
+
+Limits to know before relying on it:
+
+- **File edits are not gated.** Cursor's edit hook runs after the edit (`afterFileEdit`), so the memory-write rule and the hook-tamper rule on an edit are seen and recorded, but cannot stop the write. Shell commands, including `sed -i` and redirects, are gated as usual.
+- **File reads are never blocked.** The read hook carries the file's content, so the session learns what it read (private data, injected text), and the trifecta rule fires later on the egress.
+- **Other Cursor hook points are not used.** Newer events (a generic tool hook, session start and end, subagents) are not registered until they have been checked against a real Cursor.
+- The reply fields are written in both `snake_case` and `camelCase` (`user_message` and `userMessage`), because the documentation and the type definitions I could reach disagree. As with Codex, the payload shapes come from third-party examples; the official page was not reachable. Restart Cursor after installing.
 
 ## Adding an agent
 

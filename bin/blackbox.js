@@ -224,7 +224,7 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
                                --fail-closed denies tool calls while the recorder is unreachable;
                                --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
-  blackbox install --agent codex
+  blackbox install --agent codex|cursor
                               record another agent too: hooks only, in that agent's own settings
                               (docs/AGENTS.md says what each one can enforce)
   blackbox uninstall [--agent <id>]

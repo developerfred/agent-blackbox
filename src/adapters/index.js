@@ -7,7 +7,7 @@
 //
 // Adapters load lazily: every hook process pays for what it requires.
 
-const IDS = ['claude', 'codex'];
+const IDS = ['claude', 'codex', 'cursor'];
 
 /** @param {string} id @returns {import('../types').Adapter} */
 function getAdapter(id) {
