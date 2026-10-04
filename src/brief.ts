@@ -1,28 +1,26 @@
-'use strict';
 // `blackbox brief`: a deterministic Markdown summary of one session, built only
 // from ledger records. Same records in, same text out: no clock, no locale, no
 // model. Meant to be pasted into a PR, a ticket or an AGENTS.md-style handoff.
+
+import type { LedgerRecord } from './types';
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const SEALED = 'bbx1:';
 const MAX_ROWS = 12;
 
-/** Inline-code safe: no backticks, no newlines, bounded.
- * @param {unknown} s @param {number} [n] */
-const code = (s, n = 120) => {
+/** Inline-code safe: no backticks, no newlines, bounded. */
+const code = (s: unknown, n = 120): string => {
   const t = String(s ?? '').replace(/[`\r\n]+/g, ' ').trim();
   return '`' + (t.length > n ? t.slice(0, n - 1) + '…' : t) + '`';
 };
 
-/** @param {string} s a table cell */
-const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
+/** A table cell. */
+const cell = (s: unknown): string => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
 
-/** The text of a record's summary, or '' when it is sealed and not opened.
- * @param {import('./types').LedgerRecord} r */
-const text = (r) => (typeof r.summary === 'string' && !r.summary.startsWith(SEALED) ? r.summary : '');
+/** The text of a record's summary, or '' when it is sealed and not opened. */
+const text = (r: LedgerRecord): string => (typeof r.summary === 'string' && !r.summary.startsWith(SEALED) ? r.summary : '');
 
-/** @param {string} a @param {string} b @returns {string} */
-function span(a, b) {
+function span(a: string, b: string): string {
   const ms = Date.parse(b) - Date.parse(a);
   if (!Number.isFinite(ms) || ms < 0) return '';
   const s = Math.round(ms / 1000);
@@ -31,12 +29,8 @@ function span(a, b) {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-/**
- * @param {import('./types').LedgerRecord[]} records every record of the ledger, or of one session
- * @param {string} session
- * @returns {string | null} null when the session has no records
- */
-function brief(records, session) {
+/** `records`: every record of the ledger, or of one session. Null when the session has none. */
+export function brief(records: LedgerRecord[], session: string): string | null {
   const rows = records.filter((r) => r.session_id === session && r.kind !== 'otel').sort((a, b) => a.seq - b.seq);
   if (!rows.length) return null;
   const first = rows[0];
@@ -45,10 +39,8 @@ function brief(records, session) {
   const agent = rows.map((r) => r.agent).find((a) => typeof a === 'string') || 'claude';
 
   const prompts = rows.filter((r) => r.event === 'UserPromptSubmit' && text(r));
-  /** @type {Map<string, number>} */
-  const tools = new Map();
-  /** @type {Map<string, number>} */
-  const files = new Map();
+  const tools = new Map<string, number>();
+  const files = new Map<string, number>();
   for (const r of rows) {
     if (r.event !== 'PreToolUse' || typeof r.tool_name !== 'string') continue;
     tools.set(r.tool_name, (tools.get(r.tool_name) || 0) + 1);
@@ -62,7 +54,7 @@ function brief(records, session) {
   const taints = rows.filter((r) => r.kind === 'taint');
   const hosts = [...new Set(rows.filter((r) => r.kind === 'intent').flatMap((r) => (Array.isArray(r.hosts) ? r.hosts.map(String) : [])))].sort();
 
-  const out = [];
+  const out: string[] = [];
   out.push(`# Session brief: ${code(session, 80)}`, '');
   out.push(blocked.length
     ? `**${blocked.length} decision${blocked.length > 1 ? 's' : ''} needed attention** (${[...new Set(blocked.map((r) => r.rule))].sort().join(', ')}).`
@@ -108,5 +100,3 @@ function brief(records, session) {
   out.push('## Verify', '', `Check the chain with ${code('blackbox verify')}; read the events with ${code(`blackbox timeline ${session}`)}.`, '');
   return out.join('\n');
 }
-
-module.exports = { brief };

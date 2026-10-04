@@ -1,4 +1,9 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TOOLS = exports.ENDPOINTS = void 0;
+exports.listTools = listTools;
+exports.createHandler = createHandler;
+exports.serve = serve;
 // A local MCP server (stdio) that exposes the agent API as read-only tools, so a
 // coding agent can ask blackbox what it is, whether it is recording and what the
 // rules are, in the way agents already consume tools.
@@ -7,11 +12,12 @@
 // 127.0.0.1 with a token. By default that is the ingest token (the public tier);
 // the record and session tools are offered only when started with `--admin`,
 // i.e. by the human who is willing to hand the agent that view.
-const { request } = require('./local-http');
-const { ENDPOINTS, SCHEMAS, VERSION } = require('./agent-api');
+const local_http_1 = require("./local-http");
+const agent_api_1 = require("./agent-api");
+Object.defineProperty(exports, "ENDPOINTS", { enumerable: true, get: function () { return agent_api_1.ENDPOINTS; } });
 const PROTOCOL = '2025-06-18';
 const NAME = 'agent-blackbox';
-const TOOLS = [
+exports.TOOLS = [
     { name: 'blackbox_capabilities', path: '/v1/agent/capabilities', description: 'What agent-blackbox is, which tools and endpoints exist, rule ids, record kinds and what it never returns. Call this first.', schema: 'Capabilities' },
     { name: 'blackbox_status', path: '/v1/agent/status', description: 'Whether the recorder is running and the ledger chain is intact.', schema: 'Status' },
     { name: 'blackbox_rules', path: '/v1/agent/rules', description: 'The policy rules that can block or question a tool call, with their usual decision.', schema: 'Rules' },
@@ -22,25 +28,19 @@ const TOOLS = [
         props: { session: { type: 'string', description: 'only this session id' }, kind: { type: 'string', description: 'comma-separated record kinds, default decision,taint' }, after: { type: 'integer', description: 'cursor: records with seq greater than this' }, limit: { type: 'integer', minimum: 1, maximum: 500 } },
     },
 ];
-/** @param {{ admin?: boolean }} opts */
 function listTools({ admin = false } = {}) {
-    return TOOLS.filter((t) => admin || !t.admin).map((t) => ({
+    return exports.TOOLS.filter((t) => admin || !t.admin).map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: { type: 'object', properties: t.props || {}, additionalProperties: false },
-        outputSchema: /** @type {Record<string, unknown>} */ (SCHEMAS)[t.schema],
+        outputSchema: agent_api_1.SCHEMAS[t.schema],
         annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }));
 }
-/**
- * @param {{ admin?: boolean, fetch: (path: string) => Promise<{ status: number, body: any }> }} opts
- * @returns {(msg: any) => Promise<any | null>} handles one JSON-RPC message; null means no response
- */
+/** Returns a function that handles one JSON-RPC message; null means no response. */
 function createHandler({ admin = false, fetch }) {
-    const tools = new Map(TOOLS.filter((t) => admin || !t.admin).map((t) => [t.name, t]));
-    /** @param {unknown} id @param {unknown} result */
+    const tools = new Map(exports.TOOLS.filter((t) => admin || !t.admin).map((t) => [t.name, t]));
     const ok = (id, result) => ({ jsonrpc: '2.0', id, result });
-    /** @param {unknown} id @param {number} code @param {string} message */
     const err = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
     return async (msg) => {
         if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string')
@@ -50,7 +50,7 @@ function createHandler({ admin = false, fetch }) {
             return null; // notifications (initialized, cancelled…) need no answer
         switch (method) {
             case 'initialize':
-                return ok(id, { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: NAME, version: VERSION }, instructions: 'Read-only view of the local agent-blackbox recorder. Start with blackbox_capabilities.' });
+                return ok(id, { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: NAME, version: agent_api_1.VERSION }, instructions: 'Read-only view of the local agent-blackbox recorder. Start with blackbox_capabilities.' });
             case 'ping': return ok(id, {});
             case 'tools/list': return ok(id, { tools: listTools({ admin }) });
             case 'tools/call': {
@@ -77,11 +77,10 @@ function createHandler({ admin = false, fetch }) {
         }
     };
 }
-/** Serve on stdio until stdin closes. @param {{ admin?: boolean, port: number, token: string }} opts */
+/** Serve on stdio until stdin closes. */
 function serve({ admin = false, port, token }) {
-    const handle = createHandler({ admin, fetch: (path) => request({ port, path, token }) });
+    const handle = createHandler({ admin, fetch: (path) => (0, local_http_1.request)({ port, path, token }) });
     let buf = '';
-    /** @param {unknown} m */
     const send = (m) => process.stdout.write(JSON.stringify(m) + '\n');
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => {
@@ -105,4 +104,3 @@ function serve({ admin = false, port, token }) {
         }
     });
 }
-module.exports = { serve, createHandler, listTools, TOOLS, ENDPOINTS };

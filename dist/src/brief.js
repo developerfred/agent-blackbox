@@ -1,22 +1,21 @@
-'use strict';
+"use strict";
 // `blackbox brief`: a deterministic Markdown summary of one session, built only
 // from ledger records. Same records in, same text out: no clock, no locale, no
 // model. Meant to be pasted into a PR, a ticket or an AGENTS.md-style handoff.
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.brief = brief;
 const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 const SEALED = 'bbx1:';
 const MAX_ROWS = 12;
-/** Inline-code safe: no backticks, no newlines, bounded.
- * @param {unknown} s @param {number} [n] */
+/** Inline-code safe: no backticks, no newlines, bounded. */
 const code = (s, n = 120) => {
     const t = String(s ?? '').replace(/[`\r\n]+/g, ' ').trim();
     return '`' + (t.length > n ? t.slice(0, n - 1) + '…' : t) + '`';
 };
-/** @param {string} s a table cell */
+/** A table cell. */
 const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
-/** The text of a record's summary, or '' when it is sealed and not opened.
- * @param {import('./types').LedgerRecord} r */
+/** The text of a record's summary, or '' when it is sealed and not opened. */
 const text = (r) => (typeof r.summary === 'string' && !r.summary.startsWith(SEALED) ? r.summary : '');
-/** @param {string} a @param {string} b @returns {string} */
 function span(a, b) {
     const ms = Date.parse(b) - Date.parse(a);
     if (!Number.isFinite(ms) || ms < 0)
@@ -28,11 +27,7 @@ function span(a, b) {
         return `${Math.floor(s / 60)}m ${s % 60}s`;
     return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
-/**
- * @param {import('./types').LedgerRecord[]} records every record of the ledger, or of one session
- * @param {string} session
- * @returns {string | null} null when the session has no records
- */
+/** `records`: every record of the ledger, or of one session. Null when the session has none. */
 function brief(records, session) {
     const rows = records.filter((r) => r.session_id === session && r.kind !== 'otel').sort((a, b) => a.seq - b.seq);
     if (!rows.length)
@@ -42,9 +37,7 @@ function brief(records, session) {
     const start = rows.find((r) => r.event === 'SessionStart');
     const agent = rows.map((r) => r.agent).find((a) => typeof a === 'string') || 'claude';
     const prompts = rows.filter((r) => r.event === 'UserPromptSubmit' && text(r));
-    /** @type {Map<string, number>} */
     const tools = new Map();
-    /** @type {Map<string, number>} */
     const files = new Map();
     for (const r of rows) {
         if (r.event !== 'PreToolUse' || typeof r.tool_name !== 'string')
@@ -116,4 +109,3 @@ function brief(records, session) {
     out.push('## Verify', '', `Check the chain with ${code('blackbox verify')}; read the events with ${code(`blackbox timeline ${session}`)}.`, '');
     return out.join('\n');
 }
-module.exports = { brief };
