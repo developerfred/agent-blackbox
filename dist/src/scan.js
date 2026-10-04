@@ -1,18 +1,30 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.defaultJobs = exports.CATEGORIES = void 0;
+exports.categoryOf = categoryOf;
+exports.programsOf = programsOf;
+exports.defaultProjectsDir = defaultProjectsDir;
+exports.collect = collect;
+exports.mergeParts = mergeParts;
+exports.scan = scan;
+exports.groupFiles = groupFiles;
+exports.scanParallel = scanParallel;
+exports.renderReport = renderReport;
+exports.renderCard = renderCard;
 // `blackbox scan`: a retroactive audit of existing Claude Code transcripts.
 // Each past session is replayed offline through the same Policy the live hook
 // uses, so the user sees what the firewall *would* have done, without
 // installing anything. Read-only: nothing is written under ~/.claude and no
 // network request is made. Only aggregate numbers leave this module, except
 // for the opt-in --details list, whose reason text goes through redact().
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { Policy, redact, hostsIn } = require('./policy');
-const { loadConfig, DEFAULT_CONFIG } = require('./paths');
-const { claudeDir, baseName } = require('./util');
-const { palette } = require('./term');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
+const policy_1 = require("./policy");
+const paths_1 = require("./paths");
+const util_1 = require("./util");
+const term_1 = require("./term");
 const DAY = 86400000;
 const EGRESS_RULES = new Set(['egress', 'secret-egress', 'sensitive-egress', 'lethal-trifecta']);
 const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
@@ -20,7 +32,7 @@ const DENY_RULES = new Set(['secret-egress', 'sensitive-egress']);
 const FLAG_RULES = new Set(['secret-egress', 'sensitive-egress', 'lethal-trifecta', 'self-protection', 'hook-tamper', 'web3-transaction']);
 // Tool categories, in a fixed order: the order is also the color order in the
 // HTML report, so a category keeps its color everywhere.
-const CATEGORIES = [
+exports.CATEGORIES = [
     { id: 'shell', label: 'Shell' },
     { id: 'read', label: 'Read & search' },
     { id: 'edit', label: 'Edit & write' },
@@ -29,7 +41,6 @@ const CATEGORIES = [
     { id: 'agents', label: 'Agents & planning' },
     { id: 'other', label: 'Other' },
 ];
-/** @param {string} name */
 function categoryOf(name) {
     if (/^mcp__/.test(name))
         return 'mcp';
@@ -47,7 +58,6 @@ function categoryOf(name) {
 }
 // First program of each segment of a shell command (`cd x && npm test | tee`
 // -> cd, npm, tee). Names only: arguments never leave this function.
-/** @param {string} cmd @returns {string[]} */
 function programsOf(cmd) {
     const out = [];
     // Inline scripts are not programs: drop heredoc bodies and quoted strings.
@@ -61,26 +71,23 @@ function programsOf(cmd) {
             w = words[1];
         if (!w)
             continue;
-        w = baseName(w.replace(/^["']|["']$/g, ''));
+        w = (0, util_1.baseName)(w.replace(/^["']|["']$/g, ''));
         if (/^[A-Za-z0-9._+-]{1,32}$/.test(w))
             out.push(w);
     }
     return out;
 }
-/** @template K @param {Map<K, number>} map @param {K} key @param {number} [by] */
 const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
 // Ties break on the key so the order does not depend on which file came first.
-/** @param {[string, number]} a @param {[string, number]} b */
 const byCountThenKey = (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-/** The k biggest entries of a counter, ties by key. @param {Map<string, number>} map @param {number} k */
+/** The k biggest entries of a counter, ties by key. */
 const top = (map, k) => [...map.entries()].sort(byCountThenKey).slice(0, k);
 function defaultProjectsDir() {
-    const base = claudeDir();
+    const base = (0, util_1.claudeDir)();
     return path.join(base, 'projects');
 }
 // Session files live at projects/<cwd>/<id>.jsonl; subagent transcripts sit
 // deeper (<id>/subagents/agent-*.jsonl), so walk a few levels.
-/** @param {string} dir @param {number} minMtime @param {number} [depth] @param {{ file: string, mtime: number }[]} [out] */
 function findFiles(dir, minMtime, depth = 0, out = []) {
     let entries;
     try {
@@ -106,7 +113,6 @@ function findFiles(dir, minMtime, depth = 0, out = []) {
 }
 // Line iterator over a file in fixed-size chunks: transcripts can be far
 // larger than we want to hold as one string.
-/** @param {string} file @returns {Generator<string>} */
 function* lines(file) {
     let fd;
     try {
@@ -136,20 +142,17 @@ function* lines(file) {
 }
 // Note: a multi-byte UTF-8 char split across chunks decodes as U+FFFD on both
 // sides; that only touches text content, never the JSON structure we rely on.
-/** @param {unknown} content @returns {string} */
 const textOfResult = (content) => (typeof content === 'string' ? content
     : Array.isArray(content) ? content.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n')
         : '');
 // Transcripts store Read output with "   12\t" (or "12→") line-number prefixes.
 // The live hook gets { file: { content } } without them, and KEY=value
 // detection is anchored at line start, so rebuild that shape.
-/** @param {string} tool @param {string} text */
 function toolResponse(tool, text) {
     if (tool === 'Read')
         return { file: { content: text.replace(/^ *\d+(?:\t|→)/gm, '') } };
     return text;
 }
-/** @param {any} content @returns {string | null} */
 function humanPrompt(content) {
     if (typeof content === 'string')
         return content;
@@ -163,14 +166,12 @@ function humanPrompt(content) {
  * mergeable aggregates (Maps and Sets, structured-cloneable so a worker thread
  * can post them back). Files are processed in the order given, so a session
  * that spans files must be handled by one call (see groupFiles).
- * @param {string[]} files
- * @param {import('./types').Config} cfg
- * @param {Buffer} [salt] HMAC salt for secret fingerprints; shared by all workers of one scan so they agree
+ * `salt`: HMAC salt for secret fingerprints; shared by all workers of one scan so they agree.
  */
 function collect(files, cfg, salt = crypto.randomBytes(32)) {
     const { parseToolName } = require('./mcp');
     const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
-    const policy = new Policy(cfg, { sessions: {} }, salt);
+    const policy = new policy_1.Policy(cfg, { sessions: {} }, salt);
     const sessions = new Map(); // id -> { first, last, tools, private, untrusted, rules:Set }
     // A session can move between directories (and span files), so project
     // numbers follow each entry's own cwd rather than one cwd per session.
@@ -181,7 +182,6 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
     const programs = new Map();
     const hosts = new Map(); // host -> { calls, kind }
     const skillUse = new Map(); // name -> { model, user, sessions:Set }
-    /** @param {string} name @param {'model' | 'user'} who @param {string} sid */
     const useSkill = (name, who, sid) => {
         const k = String(name).replace(/^\//, '').trim();
         if (!k)
@@ -191,19 +191,13 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
         r.sessions.add(sid);
         skillUse.set(k, r);
     };
-    /** @param {string} h */
     const allowed = (h) => (cfg.allowHosts || []).some((a) => h === a || h.endsWith('.' + a));
     const flagged = [];
     const flaggedKey = new Set();
-    /** @type {Record<string, number>} */
     const t = { toolCalls: 0, outboundCalls: 0, wouldDenyCalls: 0, wouldAskCalls: 0, malformedLines: 0 };
-    /** @type {Record<string, number>} */
     const ruleCounts = {};
-    /** @type {string | null} */
     let first = null;
-    /** @type {string | null} */
     let last = null;
-    /** @param {string} id @param {any} e */
     const sess = (id, e) => {
         let s = sessions.get(id);
         if (!s)
@@ -286,10 +280,10 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
                         for (const prog of programsOf(tool_input.command))
                             bump(programs, prog);
                     }
-                    const targets = b.name === 'WebFetch' && typeof tool_input.url === 'string' ? hostsIn(tool_input.url)
-                        : cat === 'shell' && typeof tool_input.command === 'string' ? hostsIn(tool_input.command) : [];
+                    const targets = b.name === 'WebFetch' && typeof tool_input.url === 'string' ? (0, policy_1.hostsIn)(tool_input.url)
+                        : cat === 'shell' && typeof tool_input.command === 'string' ? (0, policy_1.hostsIn)(tool_input.command) : [];
                     for (const h of new Set(targets)) {
-                        const rec = hosts.get(h) || { calls: 0, kind: null };
+                        const rec = hosts.get(h) || { calls: 0, kind: 'external' }; // kind is set right below
                         rec.calls++;
                         const intent = (policy.session(session_id).intentHosts || []).some((a) => h === a || h.endsWith('.' + a));
                         rec.kind = allowed(h) ? 'allowlisted' : intent ? 'named by you' : 'external';
@@ -316,7 +310,7 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
                         const k = `${session_id}\0${d.rule}`;
                         if (!flaggedKey.has(k)) {
                             flaggedKey.add(k);
-                            flagged.push({ session: session_id, date: e.timestamp || null, project, rule: d.rule, reason: redact(d.reason || '') });
+                            flagged.push({ session: session_id, date: e.timestamp || null, project, rule: d.rule, reason: (0, policy_1.redact)(d.reason || '') });
                         }
                     }
                 }
@@ -369,19 +363,15 @@ function collect(files, cfg, salt = crypto.randomBytes(32)) {
             }
         }
     }
-    return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first: /** @type {string | null} */ (first), last: /** @type {string | null} */ (last) };
+    return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first: first, last: last };
 }
-/** @param {string | null} a @param {string | null} b */
 const minTs = (a, b) => (!a || (b && b < a) ? b || a : a);
-/** @param {string | null} a @param {string | null} b */
 const maxTs = (a, b) => (!a || (b && b > a) ? b || a : a);
-/** @param {Map<string, number>} to @param {Map<string, number>} from */
 const addInto = (to, from) => { for (const [k, v] of from)
     to.set(k, (to.get(k) || 0) + v); };
 /** Folds partial aggregates (in file order) into one, as if scanned in a single pass. */
-/** @param {any[]} parts */
 function mergeParts(parts) {
-    const M = collect([], DEFAULT_CONFIG);
+    const M = collect([], paths_1.DEFAULT_CONFIG);
     for (const P of parts) {
         for (const [id, s] of P.sessions) {
             const m = M.sessions.get(id);
@@ -470,17 +460,10 @@ function mergeParts(parts) {
     }
     return M;
 }
-/** @typedef {import('./types').Finding} Finding */
-/** @typedef {ReturnType<typeof summarize>} ScanSummary what scan() returns and the renderers take */
-/**
- * @param {ReturnType<typeof collect>} P
- * @param {{ files: number, days: number, now: number, audits?: any[] | null, mcpAudits?: any[] | null }} o
- */
 function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
     const { parseToolName, configFor, normName } = require('./mcp');
     const { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last } = P;
     const list = [...sessions.values()];
-    /** @param {(s: any) => unknown} fn */
     const count = (fn) => list.filter(fn).length;
     return {
         scannedAt: new Date(now).toISOString(),
@@ -500,15 +483,15 @@ function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
         flaggedSessions: count((s) => s.rules.size > 0),
         rules: ruleCounts,
         topTools: top(toolCounts, 15).map(([name, count]) => ({ name, count, category: categoryOf(name) })),
-        categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, catCounts.get(c.id) || 0])),
-        daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
+        categories: Object.fromEntries(exports.CATEGORIES.map((c) => [c.id, catCounts.get(c.id) || 0])),
+        daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(exports.CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
         shellPrograms: top(programs, 15).map(([name, count]) => ({ name, count })),
         hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
         skills: [...skillUse.entries()].sort((a, b) => (b[1].model + b[1].user) - (a[1].model + a[1].user) || (a[0] < b[0] ? -1 : 1)).slice(0, 25).map(([name, r]) => {
             const a = audits ? require('./skills').riskFor(audits, name) : null;
             return { name, calls: r.model + r.user, byModel: r.model, byUser: r.user, sessions: r.sessions.size,
                 risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
-                rules: a ? [...new Set(a.findings.filter((/** @type {Finding} */ f) => f.severity !== 'low').map((/** @type {Finding} */ f) => f.rule))] : [] };
+                rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
         }),
         mcp: (() => {
             const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).map(([server, r]) => {
@@ -527,16 +510,13 @@ function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
         })(),
         projects: Object.fromEntries([...projects].map(([name, p]) => [name, {
                 sessions: p.sessions.size, toolCalls: p.toolCalls, flagged: p.flagged.size,
-                categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
+                categories: Object.fromEntries(exports.CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
             }])),
         malformedLines: t.malformedLines,
         flagged: flagged.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.session.localeCompare(b.session) || a.rule.localeCompare(b.rule)),
     };
 }
-const scanDefaults = () => ({ projectsDir: defaultProjectsDir(), days: 30, now: Date.now(), cfg: loadConfig(), audits: null, mcpAudits: null });
-/**
- * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
- */
+const scanDefaults = () => ({ projectsDir: defaultProjectsDir(), days: 30, now: Date.now(), cfg: (0, paths_1.loadConfig)(), audits: null, mcpAudits: null });
 function scan(opts = {}) {
     const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
     const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
@@ -546,17 +526,13 @@ function scan(opts = {}) {
 // Policy's taint state follows the session, so files that share a session must
 // be replayed by the same worker. Group them by the sessionIds near the top of
 // each file plus the <id>/subagents/ directory layout.
-/** @param {{ file: string, mtime: number }[]} files @returns {{ file: string, mtime: number }[][]} */
 function groupFiles(files) {
-    /** @type {Map<string, string>} */
     const parent = new Map();
-    /** @param {string} k */
-    const up = (k) => /** @type {string} */ (parent.get(k));
-    const find = (/** @type {string} */ x) => { while (up(x) !== x) {
+    const up = (k) => parent.get(k);
+    const find = (x) => { while (up(x) !== x) {
         parent.set(x, up(up(x)));
         x = up(x);
     } return x; };
-    /** @param {string} a @param {string} b */
     const union = (a, b) => { if (!parent.has(a))
         parent.set(a, a); if (!parent.has(b))
         parent.set(b, b); parent.set(find(a), find(b)); };
@@ -587,10 +563,7 @@ function groupFiles(files) {
     }
     return [...groups.values()];
 }
-/**
- * Splits files into at most `jobs` batches of whole groups, balanced by bytes.
- * @param {{ file: string, mtime: number }[]} files @param {number} jobs @returns {{ file: string, mtime: number }[][]}
- */
+/** Splits files into at most `jobs` batches of whole groups, balanced by bytes. */
 function partition(files, jobs) {
     const sized = groupFiles(files).map((g) => {
         let bytes = 0;
@@ -602,7 +575,6 @@ function partition(files, jobs) {
         }
         return { g, bytes };
     }).sort((a, b) => b.bytes - a.bytes);
-    /** @type {{ bytes: number, files: { file: string, mtime: number }[] }[]} */
     const bins = Array.from({ length: Math.min(jobs, sized.length) }, () => ({ bytes: 0, files: [] }));
     for (const s of sized) {
         const bin = bins.reduce((m, b) => (b.bytes < m.bytes ? b : m));
@@ -611,21 +583,17 @@ function partition(files, jobs) {
     }
     return bins.map((b) => b.files.sort((x, y) => x.mtime - y.mtime));
 }
-/**
- * Same result as scan(), with the transcripts replayed on worker threads.
- * @param {Parameters<typeof scan>[0] & { jobs?: number }} [opts]
- * @returns {Promise<ReturnType<typeof summarize>>}
- */
+/** Same result as scan(), with the transcripts replayed on worker threads. */
 async function scanParallel(opts = {}) {
     const { Worker } = require('worker_threads');
     const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
-    const jobs = Math.max(1, Math.floor(opts.jobs || defaultJobs()));
+    const jobs = Math.max(1, Math.floor(opts.jobs || (0, exports.defaultJobs)()));
     const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
     const salt = crypto.randomBytes(32);
     const batches = jobs > 1 && files.length > 1 ? partition(files, jobs) : [files];
     if (batches.length < 2)
         return summarize(collect(files.map((f) => f.file), cfg, salt), { files: files.length, days, now, audits, mcpAudits });
-    const parts = await Promise.all(batches.map((b) => new Promise((/** @type {(p: ReturnType<typeof collect>) => void} */ resolve, reject) => {
+    const parts = await Promise.all(batches.map((b) => new Promise((resolve, reject) => {
         const w = new Worker(path.join(__dirname, 'scan-worker.js'), { workerData: { files: b.map((f) => f.file), cfg, salt } });
         w.once('message', resolve);
         w.once('error', reject);
@@ -636,16 +604,13 @@ async function scanParallel(opts = {}) {
     return summarize(mergeParts(order.map((i) => parts[i])), { files: files.length, days, now, audits, mcpAudits });
 }
 const defaultJobs = () => Math.min(8, typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length);
+exports.defaultJobs = defaultJobs;
 // ---------- terminal report ----------
-/** @param {unknown} ts */
 const day = (ts) => (ts ? String(ts).slice(0, 10) : '?');
-/** @param {ScanSummary} summary @param {{ color?: boolean, details?: boolean }} [opts] */
 function renderReport(summary, { color = (process.stdout.isTTY ? true : false), details = false } = {}) {
-    const { red, green, yellow, dim, bold, cyan } = palette(color);
+    const { red, green, yellow, dim, bold, cyan } = (0, term_1.palette)(color);
     const S = summary;
-    /** @param {unknown} x */
     const n = (x) => Number(x).toLocaleString('en-US');
-    /** @param {number} x @param {(s: unknown) => string} col */
     const warn = (x, col) => (x ? col(n(x)) : green(n(x)));
     const out = [];
     out.push(bold(`agent-blackbox scan · last ${S.days} days`));
@@ -655,7 +620,6 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
     }
     out.push(dim(`  ${n(S.sessions)} sessions · ${day(S.range.first)} → ${day(S.range.last)} · ${n(S.toolCalls)} tool calls`));
     out.push('');
-    /** @param {string} label @param {string} val */
     const row = (label, val) => out.push(`  ${label.padEnd(46)} ${val}`);
     row('sessions that read private data', warn(S.privateSessions, yellow));
     row('sessions that ingested untrusted content', warn(S.untrustedSessions, yellow));
@@ -667,9 +631,8 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
     }
     // 256-color approximations of the report's category colors, same order
     const CAT_ANSI = [33, 208, 36, 214, 211, 28, 99];
-    /** @param {number} i @param {string} str */
     const paint = (i, str) => (color ? `\x1b[38;5;${CAT_ANSI[i]}m${str}\x1b[0m` : str);
-    const cats = CATEGORIES.map((cdef, i) => ({ ...cdef, i, v: (S.categories || {})[cdef.id] || 0 }));
+    const cats = exports.CATEGORIES.map((cdef, i) => ({ ...cdef, i, v: (S.categories || {})[cdef.id] || 0 }));
     const catMax = Math.max(1, ...cats.map((x) => x.v));
     if (S.toolCalls) {
         out.push('');
@@ -684,7 +647,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
         out.push('');
         out.push(bold('  top tools'));
         for (const t of S.topTools.slice(0, 8)) {
-            const ci = CATEGORIES.findIndex((cdef) => cdef.id === t.category);
+            const ci = exports.CATEGORIES.findIndex((cdef) => cdef.id === t.category);
             out.push(`    ${String(n(t.count)).padStart(7)}  ${paint(ci < 0 ? 6 : ci, '■')} ${t.name}`);
         }
     }
@@ -730,7 +693,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
             let bar = '';
             if (p.toolCalls) {
                 let used = 0;
-                CATEGORIES.forEach((cdef, i) => {
+                exports.CATEGORIES.forEach((cdef, i) => {
                     const v = pc[cdef.id] || 0;
                     if (!v)
                         return;
@@ -740,7 +703,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
                 });
                 bar += ' '.repeat(Math.max(0, 18 - used));
             }
-            const main = CATEGORIES.map((cdef) => [cdef.label, pc[cdef.id] || 0]).filter(([, v]) => v).sort((a, b) => b[1] - a[1]).slice(0, 2)
+            const main = exports.CATEGORIES.map((cdef) => [cdef.label, pc[cdef.id] || 0]).filter(([, v]) => v).sort((a, b) => b[1] - a[1]).slice(0, 2)
                 .map(([l, v]) => `${l.split(' ')[0].toLowerCase()} ${Math.round((v / (p.toolCalls || 1)) * 100)}%`).join(', ');
             out.push(`    ${name.slice(0, 28).padEnd(28)} ${String(p.sessions).padStart(3)} sess ${String(n(p.toolCalls)).padStart(6)} calls  ${color ? bar : ''}${dim(main)}${p.flagged ? '  ' + red(`${p.flagged} flagged`) : ''}`);
         }
@@ -756,7 +719,7 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
             const col = DENY_RULES.has(f.rule) ? red : yellow;
             out.push(`    ${day(f.date)}  ${f.session}  ${f.project || '(unknown)'}  ${col(f.rule)}`);
             if (f.reason)
-                out.push(dim(`      ${redact(f.reason)}`));
+                out.push(dim(`      ${(0, policy_1.redact)(f.reason)}`));
         }
     }
     else if (S.flagged.length) {
@@ -770,14 +733,11 @@ function renderReport(summary, { color = (process.stdout.isTTY ? true : false), 
     return out.join('\n');
 }
 // ---------- shareable SVG card ----------
-/** @param {unknown} s */
-const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ( /** @type {Record<string, string>} */({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }))[ch]);
+const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 // Numbers and fixed labels only: no paths, project names, tools, commands,
 // prompts or session ids, so the card is safe to post publicly.
-/** @param {ScanSummary} summary */
 function renderCard(summary) {
     const S = summary;
-    /** @param {unknown} x */
     const n = (x) => Number(x || 0).toLocaleString('en-US');
     const tiles = [
         { v: S.sessions, l: 'sessions scanned', c: '#e6edf3' },
@@ -808,4 +768,3 @@ ${body}
 </svg>
 `;
 }
-module.exports = { scan, scanParallel, collect, mergeParts, groupFiles, defaultJobs, renderReport, renderCard, defaultProjectsDir, CATEGORIES, categoryOf, programsOf };

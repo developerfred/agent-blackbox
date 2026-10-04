@@ -58,7 +58,7 @@ function categoryChart(S: ScanSummary): string {
 // so each bar shows its own composition (100%) and the total is a number:
 // a shared scale would turn small projects into unreadable slivers.
 function projectChart(S: ScanSummary): string {
-  const list = Object.entries(S.projects as Record<string, any>).sort((a, b) => b[1].toolCalls - a[1].toolCalls).slice(0, 12);
+  const list = Object.entries(S.projects).sort((a, b) => b[1].toolCalls - a[1].toolCalls).slice(0, 12);
   if (!list.length) return '<p class="muted">No projects.</p>';
   const W = 760, L = 190, R = 150, rowH = 32, barH = 18, gap = 2;
   const H = list.length * rowH + 8;
