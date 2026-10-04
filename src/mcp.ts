@@ -1,35 +1,28 @@
-'use strict';
 // MCP servers: where they are configured (for every agent on this machine),
 // how they run, what the agent actually did with them, and what in their
 // configuration is risky. Read-only; secret values are never printed.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { redact } = require('./policy');
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { redact } from './policy';
+import { readJson, sha256, exists } from './util';
+import type { McpAudit, Finding, Severity } from './types';
 
-const SEV = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
+export const SEV: Record<string, number> = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
 // Tool-name verbs that send data somewhere or change state.
 const OUTBOUND = /(send|post|create|write|upload|publish|email|mail|message|comment|reply|push|share|invite|update|delete|remove|merge|deploy|execute|exec|run|bash|shell|insert|transfer|pay|commit|stage|move|rename|grant|approve|kill|set_|batch|request_\w*access)/i;
 const SECRET_VALUE = [/\bAKIA[0-9A-Z]{16}\b/, /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/, /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/, /\bgh[pousr]_[A-Za-z0-9]{30,}/,
   /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bxox[abpr]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /\bglpat-[A-Za-z0-9_-]{20,}/, /\bnpm_[A-Za-z0-9]{36}\b/];
 const SECRET_KEY = /(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE|CREDENTIAL|AUTH)/i;
 
-const { readJson, sha256, exists } = require('./util');
-
 // Tiny TOML reader for Codex's [mcp_servers.<name>] tables.
-/** @param {string} file @returns {Record<string, any>} */
-function codexServers(file) {
-  let text;
+export function codexServers(file: string): Record<string, any> {
+  let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return {}; }
-  /** @type {Record<string, any>} */
-  const out = {};
-  /** @type {Record<string, any> | null} */
-  let cur = null;
-  /** @type {string | null} */
-  let sub = null;
-  /** @param {string} v @returns {string | string[]} */
-  const val = (v) => {
+  const out: Record<string, any> = {};
+  let cur: Record<string, any> | null = null;
+  let sub: string | null = null;
+  const val = (v: string): string | string[] => {
     v = v.trim();
     if (v.startsWith('[')) return [...v.matchAll(/"((?:\\.|[^"\\])*)"|'([^']*)'/g)].map((m) => m[1] ?? m[2]);
     const m = /^"((?:\\.|[^"\\])*)"|^'([^']*)'/.exec(v);
@@ -45,17 +38,13 @@ function codexServers(file) {
   return out;
 }
 
-/**
- * @typedef {{ client: string, scope: string, file: string, toml?: boolean, plugin?: string, pick?: (json: any) => Record<string, any> | undefined }} ConfigSource
- */
+interface ConfigSource { client: string; scope: string; file: string; toml?: boolean; plugin?: string; pick?: (json: any) => Record<string, any> | undefined }
 
-/** @param {string} [home] @param {string} [cwd] @returns {ConfigSource[]} */
-function candidateConfigs(home = os.homedir(), cwd = process.cwd()) {
+function candidateConfigs(home = os.homedir(), cwd = process.cwd()): ConfigSource[] {
   const claudeJson = process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(home, '.claude.json');
   const lib = path.join(home, 'Library', 'Application Support');
   // most clients keep their servers under "mcpServers"
-  /** @param {string} client @param {string} scope @param {string} file @param {ConfigSource['pick']} [pick] @returns {ConfigSource} */
-  const src = (client, scope, file, pick = (j) => j.mcpServers) => ({ client, scope, file, pick });
+  const src = (client: string, scope: string, file: string, pick: ConfigSource['pick'] = (j) => j.mcpServers): ConfigSource => ({ client, scope, file, pick });
   return [
     src('Claude Code', 'user', claudeJson),
     src('Claude Code', 'local', claudeJson, (j) => j.projects && j.projects[cwd] && j.projects[cwd].mcpServers),
@@ -74,15 +63,12 @@ function candidateConfigs(home = os.homedir(), cwd = process.cwd()) {
 }
 
 // Plugin-provided servers: <plugin>/.mcp.json or plugin.json "mcpServers".
-/** @param {string} home @returns {(ConfigSource & { plugin: string })[]} */
-function pluginConfigs(home) {
+function pluginConfigs(home: string): (ConfigSource & { plugin: string })[] {
   const root = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'plugins');
-  /** @type {(ConfigSource & { plugin: string })[]} */
-  const out = [];
-  /** @param {string} dir @param {number} depth */
-  const walk = (dir, depth) => {
+  const out: (ConfigSource & { plugin: string })[] = [];
+  const walk = (dir: string, depth: number): void => {
     if (depth > 6) return;
-    let entries = [];
+    let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       const p = path.join(dir, e.name);
@@ -95,15 +81,13 @@ function pluginConfigs(home) {
   return out;
 }
 
-/** @typedef {{ name: string, client: string, scope: string, plugin?: string, file: string, transport: string, command: string | null, args: string[], url: string | null, env: Record<string, any>, headers: Record<string, any>, disabled: boolean }} McpServer */
+export interface McpServer { name: string; client: string; scope: string; plugin?: string; file: string; transport: string; command: string | null; args: string[]; url: string | null; env: Record<string, any>; headers: Record<string, any>; disabled: boolean }
 
-/** @param {{ home?: string, cwd?: string }} [opts] @returns {McpServer[]} */
-function discoverServers({ home = os.homedir(), cwd = process.cwd() } = {}) {
-  /** @type {McpServer[]} */
-  const servers = [];
+export function discoverServers({ home = os.homedir(), cwd = process.cwd() }: { home?: string; cwd?: string } = {}): McpServer[] {
+  const servers: McpServer[] = [];
   for (const c of [...candidateConfigs(home, cwd), ...pluginConfigs(home)]) {
     if (!exists(c.file)) continue;
-    let map = null;
+    let map: Record<string, any> | null = null;
     if (c.toml) map = codexServers(c.file);
     else { const j = readJson(c.file); map = j && c.pick && c.pick(j); }
     if (!map || typeof map !== 'object') continue;
@@ -126,23 +110,14 @@ function discoverServers({ home = os.homedir(), cwd = process.cwd() } = {}) {
 
 // ---------- audit ----------
 
-/** @param {unknown} v */
-const isRef = (v) => /^\$\{[^}]+\}$|^\$[A-Z_][A-Z0-9_]*$|^env:|^\{env:/.test(String(v).trim());
-/** @param {unknown} v */
-const mask = (v) => { const s = String(v); return s.length <= 8 ? '•••' : s.slice(0, 4) + '…' + `(${s.length} chars)`; };
+const isRef = (v: unknown): boolean => /^\$\{[^}]+\}$|^\$[A-Z_][A-Z0-9_]*$|^env:|^\{env:/.test(String(v).trim());
+const mask = (v: unknown): string => { const s = String(v); return s.length <= 8 ? '•••' : s.slice(0, 4) + '…' + `(${s.length} chars)`; };
 
-/**
- * @param {McpServer} s
- * @param {{ home?: string }} [opts]
- * @returns {import('./types').McpAudit}
- */
-function auditServer(s, { home: homeDir = os.homedir() } = {}) {
-  /** @type {import('./types').Finding[]} */
-  const f = [];
-  /** @param {import('./types').Severity} severity @param {string} rule @param {string} message @param {string | null | undefined} detail */
-  const add = (severity, rule, message, detail) => f.push({ severity, rule, message, detail: detail ? redact(detail) : null });
+export function auditServer(s: McpServer, { home: homeDir = os.homedir() }: { home?: string } = {}): McpAudit {
+  const f: Finding[] = [];
+  const add = (severity: Severity, rule: string, message: string, detail: string | null | undefined): number => f.push({ severity, rule, message, detail: detail ? redact(detail) : null });
   // literal secrets in env or headers
-  for (const [where, obj] of [['env', s.env], ['headers', s.headers]]) {
+  for (const [where, obj] of [['env', s.env], ['headers', s.headers]] as [string, Record<string, any>][]) {
     for (const [k, v] of Object.entries(obj || {})) {
       const val = String(v);
       if (!val || isRef(val)) continue;
@@ -162,7 +137,7 @@ function auditServer(s, { home: homeDir = os.homedir() } = {}) {
     }
   }
   if (s.url) {
-    let u = null;
+    let u: URL | null = null;
     try { u = new URL(String(s.url).replace(/\$\{[^}]+\}/g, 'x')); } catch { /* templated */ }
     if (u && u.protocol === 'http:' && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname)) add('high', 'insecure-transport', `talks to ${u.hostname} over plain HTTP: tokens and data travel unencrypted`, null);
     if (u && /[?&](key|token|api_key|apikey|access_token)=/i.test(u.search)) add('high', 'secret-in-url', 'the server URL carries a credential in its query string', null);
@@ -182,15 +157,13 @@ function auditServer(s, { home: homeDir = os.homedir() } = {}) {
   }
   if (s.scope === 'project' && s.command && !runner && /^\.{0,2}\//.test(s.command)) add('medium', 'repo-executable', "runs a program from the repository: anyone who can change the repo changes what runs on your machine", s.command);
   const counts = { high: 0, medium: 0, low: 0 };
-  for (const x of f) if (x.severity in counts) counts[/** @type {keyof typeof counts} */ (x.severity)]++;
-  /** @type {import('./types').Severity} */
-  const risk = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
+  for (const x of f) if (x.severity in counts) counts[x.severity as keyof typeof counts]++;
+  const risk: Severity = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
   const hash = sha256(JSON.stringify({ c: s.command, a: s.args, u: s.url, e: Object.keys(s.env).sort(), h: Object.keys(s.headers).sort(), t: s.transport }));
   return { ...s, env: Object.keys(s.env), headers: Object.keys(s.headers), findings: f, counts, risk, hash };
 }
 
-/** @param {{ home?: string, cwd?: string, pinsFile?: string }} [opts] */
-function auditServers({ home, cwd, pinsFile } = {}) {
+export function auditServers({ home, cwd, pinsFile }: { home?: string; cwd?: string; pinsFile?: string } = {}): McpAudit[] {
   const pins = pinsFile ? (readJson(pinsFile) || {}) : {};
   return discoverServers({ home, cwd }).map((s) => {
     const a = auditServer(s, { home: home || os.homedir() });
@@ -206,8 +179,7 @@ function auditServers({ home, cwd, pinsFile } = {}) {
   });
 }
 
-/** @param {string} file @param {import('./types').McpAudit[]} audits */
-function saveMcpPins(file, audits) {
+export function saveMcpPins(file: string, audits: McpAudit[]): void {
   const pins = readJson(file) || {};
   for (const a of audits) if (a.pinKey) pins[a.pinKey] = a.hash;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -215,26 +187,22 @@ function saveMcpPins(file, audits) {
 }
 
 // mcp__<server>__<tool>; plugin servers are mcp__plugin_<plugin>_<server>__<tool>.
-/** @param {string | undefined} name */
-function parseToolName(name) {
+export function parseToolName(name: string | undefined): { server: string; tool: string; plugin: string | null; outbound: boolean } | null {
   const m = /^mcp__(.+)__([^_].*)$/.exec(name || '');
   if (!m) return null;
   let server = m[1];
   const tool = m[2];
-  let plugin = null;
+  let plugin: string | null = null;
   const pm = /^plugin_([^_]+)_(.+)$/.exec(server);
   if (pm) { plugin = pm[1]; server = pm[2]; }
   return { server, tool, plugin, outbound: OUTBOUND.test(tool) };
 }
 
-/** Clients normalize server names: spaces and dots become underscores. @param {unknown} x */
-const normName = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '_');
+/** Clients normalize server names: spaces and dots become underscores. */
+export const normName = (x: unknown): string => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '_');
 
 // Match a used server name to configured definitions (names are normalized
 // by clients: spaces and dots become underscores).
-/** @param {import('./types').McpAudit[]} audits @param {string} server */
-function configFor(audits, server) {
+export function configFor(audits: McpAudit[], server: string): McpAudit[] {
   return audits.filter((a) => normName(a.name) === normName(server));
 }
-
-module.exports = { discoverServers, auditServer, auditServers, saveMcpPins, parseToolName, configFor, normName, codexServers, SEV };
