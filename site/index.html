@@ -10,7 +10,7 @@
 <body>
 <header class="top"><div class="wrap"><nav>
 <strong>agent-blackbox</strong>
-<a href="#scan">Scan</a><a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a>
+<a href="#demo">Demo</a><a href="#scan">Scan</a><a href="#install">Install</a><a href="#policy">Policy</a><a href="#privacy">Privacy</a><a href="#limits">Limits</a>
 <a href="pt.html">Português</a>
 <a href="https://github.com/developerfred/agent-blackbox">GitHub</a>
 </nav></div></header>
@@ -42,6 +42,17 @@
 </div>
 
 <div class="wrap">
+<section class="block" id="demo">
+<div class="label">Demo</div>
+<div class="content">
+<h2>Watch it stop an attack</h2>
+<div class="videos">
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/attack-denied.png"><source src="media/attack-denied.webm" type="video/webm"></video><figcaption>A planted instruction tries to send a secret out. The call is denied before it runs. Recorded from a real <code>blackbox demo</code> run.</figcaption></figure>
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/tamper-detected.png"><source src="media/tamper-detected.webm" type="video/webm"></video><figcaption>Editing one record breaks the chain, and <code>blackbox verify</code> names it. Same run, <code>--tamper</code>.</figcaption></figure>
+</div>
+</div>
+</section>
+
 <section class="block" id="scan">
 <div class="label">Audit</div>
 <div class="content">
@@ -129,6 +140,12 @@ blackbox verify             # prove nothing was changed</code></pre>
 <p style="margin-top:14px">Full list in the <a href="https://github.com/developerfred/agent-blackbox#honest-limitations-v03">README</a>. Plans in the <a href="https://github.com/developerfred/agent-blackbox/blob/main/ROADMAP.md">ROADMAP</a>.</p>
 </div>
 </section>
+</div>
+<div class="wrap">
+<div class="cta-band">
+<div><h2>Useful? Give it a star.</h2><p>A star helps other developers find it. A fork lets you add your own rules and attacks to the eval corpus.</p></div>
+<div class="cta"><a class="btn primary" href="https://github.com/developerfred/agent-blackbox">Star on GitHub</a><a class="btn" href="https://github.com/developerfred/agent-blackbox/fork">Fork</a></div>
+</div>
 </div>
 </main>
 <footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">source</a> · This page loads no scripts, fonts or trackers.</div></footer>

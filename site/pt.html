@@ -39,6 +39,17 @@
 </div>
 
 <div class="wrap">
+<section class="block" id="demo">
+<div class="label">Demo</div>
+<div class="content">
+<h2>Veja ele barrar um ataque</h2>
+<div class="videos">
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/attack-denied.png"><source src="media/attack-denied.webm" type="video/webm"></video><figcaption>Uma instrução plantada tenta enviar um segredo para fora. A chamada é negada antes de rodar. Gravado de uma execução real de <code>blackbox demo</code>.</figcaption></figure>
+<figure class="clip"><video controls preload="none" playsinline muted poster="media/tamper-detected.png"><source src="media/tamper-detected.webm" type="video/webm"></video><figcaption>Alterar um registro quebra a cadeia, e o <code>blackbox verify</code> aponta qual. Mesma execução, com <code>--tamper</code>.</figcaption></figure>
+</div>
+</div>
+</section>
+
 <section class="block" id="scan">
 <div class="label">Auditoria</div>
 <div class="content">
@@ -92,6 +103,12 @@ blackbox verify</code></pre>
 </ul>
 </div>
 </section>
+</div>
+<div class="wrap">
+<div class="cta-band">
+<div><h2>Gostou? Deixe uma estrela.</h2><p>Uma estrela ajuda outros desenvolvedores a encontrar o projeto. Um fork permite incluir suas próprias regras e ataques no corpus de avaliação.</p></div>
+<div class="cta"><a class="btn primary" href="https://github.com/developerfred/agent-blackbox">Dar estrela no GitHub</a><a class="btn" href="https://github.com/developerfred/agent-blackbox/fork">Fork</a></div>
+</div>
 </div>
 </main>
 <footer><div class="wrap">Apache-2.0 · <a href="https://github.com/developerfred/agent-blackbox">código</a> · Esta página não carrega scripts, fontes nem rastreadores.</div></footer>

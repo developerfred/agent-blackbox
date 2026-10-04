@@ -85,3 +85,13 @@ td:first-child{white-space:nowrap}
 td:first-child code{background:none;padding:0;font-weight:600}
 
 footer{border-top:1px solid var(--line);padding-block:28px;color:var(--muted);font-size:.88rem}
+
+.videos{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:20px}
+figure.clip{margin:0;min-width:0}
+figure.clip video{display:block;width:100%;height:auto;aspect-ratio:16/9;border:1px solid var(--line);border-radius:8px;background:#0f1113}
+figure.clip figcaption{font-size:.9rem;color:var(--muted);margin-top:8px}
+.cta-band{border-top:1px solid var(--line);padding-block:48px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px 32px;align-items:center}
+@media (max-width:700px){.cta-band{grid-template-columns:minmax(0,1fr)}}
+.cta-band h2{margin:0 0 6px}
+.cta-band p{margin:0}
+.cta-band .cta{margin:0}
