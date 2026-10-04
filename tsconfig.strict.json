@@ -20,6 +20,7 @@
     "eval/corpus.js",
     "src/skills.js",
     "src/install.js",
-    "src/scan.js"
+    "src/scan.js",
+    "src/daemon.js"
   ]
 }
