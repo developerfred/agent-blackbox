@@ -30,6 +30,19 @@ function readScript(file, cwd) {
   return fs.readFileSync(p, 'utf8');
 }
 
+/**
+ * What a hook reported about its own installation, bounded and typed (it came over the ingest token).
+ * @param {any} r @returns {{ via: string | null, fingerprint?: string, problems: string[] } | null}
+ */
+function reportedIntegrity(r) {
+  if (!r || typeof r !== 'object' || !Array.isArray(r.problems)) return null;
+  return {
+    via: typeof r.via === 'string' ? r.via.slice(0, 32) : null,
+    fingerprint: typeof r.fingerprint === 'string' ? r.fingerprint.slice(0, 64) : undefined,
+    problems: r.problems.slice(0, 10).map((/** @type {unknown} */ p) => String(p).slice(0, 300)),
+  };
+}
+
 function summarize(ev) {
   const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
   switch (ev.hook_event_name) {
@@ -114,16 +127,24 @@ class Daemon {
 
   // Are our hooks still in place? Any change is written to the ledger; a
   // removal or disableAllHooks is also shown to the human on the next event.
-  checkIntegrity() {
+  //
+  // Running as a dedicated user this process cannot see the human's Claude Code
+  // settings, so the hook (which runs as the human) looks and reports its result
+  // with the SessionStart event: that is `reported`. Anything with the ingest
+  // token can send a report, so it can hide a removal but never invent trust the
+  // recorder does not already give an event.
+  /** @param {{ via: string | null, fingerprint?: string, problems: string[] } | null} [reported] */
+  checkIntegrity(reported = null) {
     return this.safe(() => {
-      // Running as a dedicated user, this process cannot see the human's
-      // Claude Code settings; `blackbox status` checks them as the human, and
-      // managed settings make removal impossible in the first place.
-      if (this.cfg.hardened) return { problems: [] };
-      const { checkHooks } = require('./integrity');
-      const { HOOK_EVENTS } = require('./install');
       const prev = this.state.integrity;
-      const r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
+      /** @type {{ via?: string | null, fingerprint?: string, problems: string[] } | null} */
+      let r = reported;
+      if (!this.cfg.hardened) {
+        const { checkHooks } = require('./integrity');
+        const { HOOK_EVENTS } = require('./install');
+        r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
+      }
+      if (!r) return { problems: [] };
       if (r.fingerprint === prev?.fingerprint && r.problems.length === (prev?.problems || []).length) return r;
       this.append('settings', { via: r.via, fingerprint: r.fingerprint, problems: r.problems.length ? r.problems : undefined, previous: prev?.fingerprint || undefined });
       if (r.problems.length) {
@@ -334,7 +355,7 @@ class Daemon {
       }
     }
     if (event === 'SessionStart' && !meta.spooled) {
-      this.checkIntegrity();
+      this.checkIntegrity(reportedIntegrity(ev.blackbox_integrity));
       stdout = { systemMessage: `agent-blackbox is recording this session (mode: ${this.cfg.mode}, ledger #${this.ledger.seq}).` };
     } else if (event === 'SessionEnd') {
       this.saveState();
