@@ -302,9 +302,15 @@ test('install and uninstall keep the user\'s own settings', () => {
   run('install', '--raw');
   let s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.ok(s.env.OTEL_LOG_RAW_API_BODIES, 'raw bodies only with --raw');
+  assert.equal(s.env.OTEL_LOG_ASSISTANT_RESPONSES, undefined, 'prompt and response text only with --prompts');
+  run('install', '--prompts');
+  s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(s.env.OTEL_LOG_ASSISTANT_RESPONSES, '1');
+  assert.equal(s.env.OTEL_LOG_USER_PROMPTS, '0', 'user value kept without --force');
   run('install'); run('install'); // idempotent, and turning raw off removes the key
   s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(s.env.OTEL_LOG_RAW_API_BODIES, undefined);
+  assert.equal(s.env.OTEL_LOG_ASSISTANT_RESPONSES, undefined, 'turning --prompts off removes the key');
   assert.equal(s.hooks.PreToolUse.length, 2, 'my hook + one blackbox hook');
   assert.equal(s.env.OTEL_LOG_USER_PROMPTS, '0', 'user value kept without --force');
   assert.equal(s.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');

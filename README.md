@@ -103,6 +103,7 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | --- | --- | --- |
 | Hooks | 13 Claude Code lifecycle events | Every prompt, tool call with arguments, tool result, subagent, stop |
 | Native telemetry | Claude Code OpenTelemetry logs (OTLP/HTTP JSON) | Cost, tokens, permission decisions, hook runs, MCP connections |
+| Prompt and response text via telemetry (opt-in, `install --prompts`) | `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES` | The text of prompts and answers (the hooks already record each prompt) |
 | Raw model I/O (opt-in, `install --raw`) | `OTEL_LOG_RAW_API_BODIES=file:` | The full request and response of every model call |
 
 All three are linked by `session_id`, `prompt_id` and `tool_use_id`.

@@ -218,9 +218,10 @@ function assertOutsideClaudeDir(out) {
 
 const HELP = `agent-blackbox · a flight recorder for AI coding agents
 
-  blackbox install [--mode ask|deny|monitor] [--raw] [--force] [--telemetry-only]
+  blackbox install [--mode ask|deny|monitor] [--raw] [--prompts] [--force] [--telemetry-only]
                               add hooks + telemetry to ~/.claude/settings.json, start recorder
-                              (--raw also keeps full model request/response bodies, scrubbed;
+                              (--prompts also logs prompt and response text through telemetry, off by default;
+                               --raw also keeps full model request/response bodies, scrubbed;
                                --telemetry-only when the hooks come from the Claude Code plugin)
   blackbox uninstall          remove them (evidence is kept)
   blackbox start | stop | status
@@ -275,7 +276,7 @@ async function main() {
       const mode = opt('--mode');
       if (mode) parseMode(mode);
       console.log(bold('Installing agent-blackbox into Claude Code'));
-      require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+      require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
       await stop().catch(() => {});
       await start();
       console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
