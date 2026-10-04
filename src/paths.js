@@ -43,6 +43,9 @@ const DEFAULT_CONFIG = {
   // signing or broadcasting a transaction (cast send, forge script --broadcast,
   // solana transfer, key material on a command line): 'ask' (default), 'alert' or 'off'
   web3: 'ask',
+  // a session that read untrusted content changing AGENTS.md, CLAUDE.md, editor rules,
+  // agent commands or skills (files later sessions trust): 'ask' (default), 'alert' or 'off'
+  memoryWrites: 'ask',
   // what the hook does for PreToolUse when the daemon is unreachable
   failMode: 'open',
   // erase sessions older than this many days, automatically (same as `blackbox purge --days N`); null keeps everything

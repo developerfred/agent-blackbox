@@ -403,3 +403,26 @@ test('redact: a [secret:<fingerprint>] marker is kept, a real value next to the 
   assert.ok(!redact('token: "zzzz9999yyyy"').includes('zzzz9999yyyy'));
   assert.ok(!redact('x password=hunter2hunter2').includes('hunter2hunter2'));
 });
+
+test('memory guard: untrusted content then a write to a file later sessions trust', () => {
+  const { isMemoryDoc } = require('../src/policy');
+  for (const f of ['AGENTS.md', '/r/CLAUDE.md', '/r/sub/CLAUDE.local.md', '/h/.claude/CLAUDE.md', '/r/.claude/commands/x.md', '/r/.claude/skills/a/SKILL.md', '/r/.cursor/rules/a.mdc', '/r/.cursorrules', '/r/.github/copilot-instructions.md', 'C:\\proj\\AGENTS.md']) assert.ok(isMemoryDoc(f), f);
+  for (const f of ['README.md', '/r/docs/agents.md.txt', '/r/src/claude.js', '/r/.claude/settings.json', '/r/MY-AGENTS.md']) assert.ok(!isMemoryDoc(f), f);
+
+  const write = (p, file, sid = 's') => p.preToolUse({ session_id: sid, tool_name: 'Write', tool_input: { file_path: file, content: 'x' } });
+  const p = policy();
+  assert.equal(write(p, '/r/AGENTS.md'), null, 'a clean session may update its notes');
+  fetchWeb(p);
+  const d = write(p, '/r/AGENTS.md');
+  assert.equal(d.decision, 'ask');
+  assert.equal(d.rule, 'memory-write');
+  assert.match(d.reason, /\/r\/AGENTS\.md/);
+  assert.equal(write(p, '/r/README.md'), null, 'other files are untouched');
+  assert.equal(write(p, '/r/AGENTS.md', 'other-session'), null, 'sessions are isolated');
+
+  assert.equal(write(policy({ memoryWrites: 'off' }), '/r/AGENTS.md'), null);
+  const alert = policy({ memoryWrites: 'alert' }); fetchWeb(alert);
+  assert.equal(write(alert, '/r/AGENTS.md').decision, 'alert');
+  const mon = policy({ mode: 'monitor' }); fetchWeb(mon);
+  assert.equal(write(mon, '/r/AGENTS.md').decision, 'alert');
+});
