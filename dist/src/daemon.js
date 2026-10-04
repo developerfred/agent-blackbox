@@ -292,6 +292,8 @@ class Daemon {
             post = this.policy.postToolUse(ev);
         else if (event === 'UserPromptSubmit')
             intent = this.policy.userPrompt(ev);
+        else if (event === 'SessionStart')
+            post = this.policy.sessionStart(ev);
         const clean = this.policy.scrub(ev, sid);
         const blob = this.ledger.putBlob(clean, scopeOf(sid));
         this.append('hook', {

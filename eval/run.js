@@ -10,11 +10,15 @@ function runCase(c, mode = 'ask') {
   const state = { sessions: {} };
   const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
   const session_id = `eval-${c.id}`;
+  // events may name another session (ev.session) and its folder (ev.cwd); { start: true } is a SessionStart
   for (const ev of c.before || []) {
-    if (ev.prompt) policy.userPrompt({ session_id, prompt: ev.prompt });
-    else policy.postToolUse({ session_id, tool_name: ev.post, tool_input: ev.input, tool_response: ev.response });
+    const sid = ev.session ? `${session_id}-${ev.session}` : session_id;
+    if (ev.start) policy.sessionStart({ session_id: sid, cwd: ev.cwd });
+    else if (ev.prompt) policy.userPrompt({ session_id: sid, prompt: ev.prompt });
+    else policy.postToolUse({ session_id: sid, cwd: ev.cwd, tool_name: ev.post, tool_input: ev.input, tool_response: ev.response });
   }
-  const d = policy.preToolUse({ session_id, tool_name: c.call.tool, tool_input: c.call.input });
+  const sid = c.call.session ? `${session_id}-${c.call.session}` : session_id;
+  const d = policy.preToolUse({ session_id: sid, tool_name: c.call.tool, tool_input: c.call.input });
   const blocked = !!d && ['ask', 'deny'].includes(d.decision);
   return { id: c.id, expect: c.expect, gap: c.gap || null, decision: d ? d.decision : 'none', rule: d ? d.rule : null, blocked, pass: (c.expect === 'block') === blocked };
 }

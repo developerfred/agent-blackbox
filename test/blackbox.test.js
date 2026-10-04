@@ -426,3 +426,50 @@ test('memory guard: untrusted content then a write to a file later sessions trus
   const mon = policy({ mode: 'monitor' }); fetchWeb(mon);
   assert.equal(write(mon, '/r/AGENTS.md').decision, 'alert');
 });
+
+test('memory provenance: a document a tainted session wrote taints the later session that loads or reads it', () => {
+  const { docKey } = require('../dist/src/policy');
+  assert.equal(docKey('/Users/me/.claude/CLAUDE.md'), '~/.claude/CLAUDE.md');
+  assert.equal(docKey('/home/dev/.claude/CLAUDE.md'), '~/.claude/CLAUDE.md');
+  assert.equal(docKey('~/.claude/CLAUDE.md'), '~/.claude/CLAUDE.md');
+  assert.equal(docKey('AGENTS.md', '/repo/app'), '/repo/app/AGENTS.md');
+  assert.equal(docKey('../AGENTS.md', '/repo/app'), '/repo/AGENTS.md');
+
+  const p = policy();
+  const run = (sid, tool, input, response = '') => p.postToolUse({ session_id: sid, cwd: '/repo', tool_name: tool, tool_input: input, tool_response: response });
+  // a clean session writing its notes leaves no mark
+  run('clean', 'Write', { file_path: '/repo/AGENTS.md', content: 'notes' });
+  assert.equal(p.state.docs, undefined);
+  assert.deepEqual(p.sessionStart({ session_id: 'later0', cwd: '/repo' }).taints, []);
+
+  // a tainted one does, and the mark names the session and why
+  fetchWeb(p, 'a');
+  run('a', 'Write', { file_path: '/repo/AGENTS.md', content: 'x' });
+  assert.ok(p.state.docs['/repo/AGENTS.md'].why.includes('WebFetch'));
+  assert.equal(p.state.docs['/repo/AGENTS.md'].session, 'a');
+
+  // loaded at start from the folder, or from an ancestor; not from an unrelated project
+  assert.equal(p.sessionStart({ session_id: 'b1', cwd: '/repo' }).taints.length, 1);
+  assert.equal(p.sessionStart({ session_id: 'b2', cwd: '/repo/deep/er' }).taints.length, 1);
+  assert.equal(p.sessionStart({ session_id: 'b3', cwd: '/other' }).taints.length, 0);
+  assert.ok(p.session('b1').untrusted && !p.session('b3').untrusted);
+
+  // read through a tool: Read, or cat with a relative path
+  const r = run('c', 'Read', { file_path: '/repo/AGENTS.md' }, 'x');
+  assert.equal(r.taints[0].flag, 'untrusted');
+  const cat = run('d', 'Bash', { command: 'cat AGENTS.md' }, 'x');
+  assert.equal(cat.taints.length, 1);
+  assert.equal(run('e', 'Read', { file_path: '/repo/README.md' }, 'x').taints.length, 0);
+
+  // a document the human reviewed stops tainting
+  const trusting = policy({ trustedDocs: ['AGENTS.md'] });
+  trusting.state.docs = { '/repo/AGENTS.md': { session: 'a', at: 'x', why: 'WebFetch' } };
+  assert.deepEqual(trusting.sessionStart({ session_id: 'f', cwd: '/repo' }).taints, []);
+  assert.equal(trusting.postToolUse({ session_id: 'g', cwd: '/repo', tool_name: 'Read', tool_input: { file_path: '/repo/AGENTS.md' }, tool_response: 'x' }).taints.length, 0);
+
+  // the global file, whichever home it was written from
+  const q = policy();
+  fetchWeb(q, 'a');
+  q.postToolUse({ session_id: 'a', tool_name: 'Bash', tool_input: { command: 'echo hi >> ~/.claude/CLAUDE.md' }, tool_response: '' });
+  assert.equal(q.sessionStart({ session_id: 'z', cwd: '/Users/anyone/work/proj' }).taints.length, 1);
+});

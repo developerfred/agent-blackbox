@@ -44,7 +44,7 @@ function benchPolicy() {
   // session state per case, as the hook would have built it
   const sessions = calls.map((c, i) => {
     const sid = `b${i}`;
-    for (const ev of c.before || []) {
+    for (const ev of /** @type {any[]} */ (c.before || [])) {
       if (ev.prompt) policy.userPrompt({ session_id: sid, prompt: ev.prompt });
       else policy.postToolUse({ session_id: sid, tool_name: ev.post, tool_input: ev.input, tool_response: ev.response });
     }
