@@ -90,7 +90,7 @@ Decisions happen in the `PreToolUse` hook, in milliseconds, before the tool runs
 | `self-protection` | The agent touches `~/.blackbox` (quotes, backslashes and globs undone first) | deny |
 | `hook-tamper` | The agent edits Claude Code settings or plugin files; the daemon also checks the hooks every minute | ask / alert |
 
-- **Private data**: sensitive paths (including wallet files: Foundry and Geth keystores, Solana and Sui keypairs, `wallet.dat`), private keys and seed phrases (recognized by their label, so a bare transaction hash is not a secret), secret-looking values in tool output, secret-looking values in tool output, and commands that print credentials (`env`, `printenv`, `gh auth token`, `aws secretsmanager …`, `kubectl get secret`, …).
+- **Private data**: sensitive paths (including wallet files: Foundry and Geth keystores, Solana and Sui keypairs, `wallet.dat`), private keys and seed phrases (recognized by their label, so a bare transaction hash is not a secret), secret-looking values in tool output, and commands that print credentials (`env`, `printenv`, `gh auth token`, `aws secretsmanager …`, `kubectl get secret`, …).
 - **Untrusted content**: WebFetch, WebSearch, MCP tool results, the output of network commands, and files the agent reads (Read, Grep, `cat`) whose text overrides instructions or asks an AI to send secrets out. Plain guidance in a `CLAUDE.md` or `CONTRIBUTING.md` does not count, so reading files does not raise an alarm.
 - **Outbound**: network tools, network code in interpreters, downloads with a URL (`git clone`, `npm install <url>`, `pip install git+…`, `open <url>`), and publishing commands (`git push`, `gh gist`/`issue`/`pr`/`api` writes, `npm publish`, S3/GCS uploads, mail) even toward allowlisted hosts. Commands are matched before and after undoing quotes, backslashes, `$'\x..'` strings and `$IFS`.
 - **User intent**: hosts you type in your own prompt are allowed destinations for that session. Pasted text and turns Claude Code starts on its own never widen the list.
@@ -150,6 +150,8 @@ and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why 
 
 ## Honest limitations (v0.3)
 
+Closed since earlier versions: payloads and summaries are now encrypted per session and erased by `purge` or `retainDays`; prompt and response text through telemetry is opt-in; `install` prints the key and fail-open posture and offers `--fail-closed`; `scan` runs in parallel; and the corpus has no known gaps open. What remains:
+
 - **Same-user processes are not stopped by the OS.** Until you run the recorder as a dedicated user (`sudo sh <(blackbox harden)`: read the script first, it changes nothing by itself; `blackbox harden --check` confirms; `--undo` reverses it), any process running as you, including a command the agent finds a way around the policy to run, can read the master and signing keys, decrypt payloads, and rewrite the ledger and re-sign it. The rules protecting `~/.blackbox` are pattern matching on tool arguments, not an OS boundary. What still holds: a rewrite cannot match a chain head you already published with `blackbox anchor`, and erased session keys stay erased.
 - **The firewall catches known patterns, not every attack.** It stops naive exfiltration and the evasions in the corpus. An adaptive attacker can get through: injection detection in files is a heuristic on wording, a pre-existing script is only inspected if the recorder can read it (not when it runs as a dedicated user that cannot see your home folder), and a long opaque value in a URL is judged by its shape. Treat it as friction and evidence, not a guarantee.
 - **Integrity is not completeness.** The chain proves nothing recorded was altered; it cannot prove everything was recorded. If the daemon is down the hook spools events and restarts it. Removing the hooks or setting `disableAllHooks` is detected and recorded (the daemon checks once a minute and on every session start), but not prevented. To make the hooks admin-owned, put them in Claude Code managed settings: `blackbox managed-settings` prints the block.
@@ -158,6 +160,13 @@ and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why 
 - **Heuristics, not proofs.** Secret detection matches patterns and exact values; encoded or split secrets can slip through.
 - **User intent is inferred from your prompt text.** If you name a host, calls to it are not asked about (secrets are still denied).
 - Claude Code only for now.
+
+## Documentation
+
+- [Project site](https://developerfred.github.io/agent-blackbox/): overview, install, policy and privacy in one page
+- [docs/PRIVACY.md](docs/PRIVACY.md): what is recorded, where, for how long
+- [SECURITY.md](SECURITY.md): reporting a vulnerability or a policy bypass
+- [ROADMAP.md](ROADMAP.md): phases and gates
 
 ## Português (resumo)
 
