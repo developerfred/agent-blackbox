@@ -10,7 +10,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { Policy, redact, hostsIn } = require('./policy');
-const { loadConfig } = require('./paths');
+const { loadConfig, DEFAULT_CONFIG } = require('./paths');
 const { claudeDir, baseName } = require('./util');
 const { palette } = require('./term');
 
@@ -61,7 +61,9 @@ function programsOf(cmd) {
 }
 
 const bump = (map, key, by = 1) => map.set(key, (map.get(key) || 0) + by);
-const top = (map, k) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
+// Ties break on the key so the order does not depend on which file came first.
+const byCountThenKey = (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+const top = (map, k) => [...map.entries()].sort(byCountThenKey).slice(0, k);
 
 function defaultProjectsDir() {
   const base = claudeDir();
@@ -70,6 +72,7 @@ function defaultProjectsDir() {
 
 // Session files live at projects/<cwd>/<id>.jsonl; subagent transcripts sit
 // deeper (<id>/subagents/agent-*.jsonl), so walk a few levels.
+/** @param {string} dir @param {number} minMtime @param {number} [depth] @param {{ file: string, mtime: number }[]} [out] */
 function findFiles(dir, minMtime, depth = 0, out = []) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
@@ -125,14 +128,18 @@ function humanPrompt(content) {
 }
 
 /**
- * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
+ * Replays transcript files through a fresh Policy and returns the raw,
+ * mergeable aggregates (Maps and Sets, structured-cloneable so a worker thread
+ * can post them back). Files are processed in the order given, so a session
+ * that spans files must be handled by one call (see groupFiles).
+ * @param {string[]} files
+ * @param {import('./types').Config} cfg
+ * @param {Buffer} [salt] HMAC salt for secret fingerprints; shared by all workers of one scan so they agree
  */
-function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(), cfg = loadConfig(), audits = null, mcpAudits = null } = {}) {
-  const { parseToolName, configFor, normName } = require('./mcp');
+function collect(files, cfg, salt = crypto.randomBytes(32)) {
+  const { parseToolName } = require('./mcp');
   const mcpUse = new Map(); // server -> { plugin, calls, sessions:Set, tools:Map, outbound, errors, first, last }
-  const policy = new Policy(cfg, { sessions: {} }, crypto.randomBytes(32));
-  const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
-
+  const policy = new Policy(cfg, { sessions: {} }, salt);
   const sessions = new Map(); // id -> { first, last, tools, private, untrusted, rules:Set }
   // A session can move between directories (and span files), so project
   // numbers follow each entry's own cwd rather than one cwd per session.
@@ -169,7 +176,7 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
     return s;
   };
 
-  for (const { file } of files) {
+  for (const file of files) {
     const fallbackId = path.basename(file, '.jsonl');
     const pending = new Map(); // tool_use_id -> { name, input, session_id }
     for (const line of lines(file)) {
@@ -272,12 +279,75 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
     }
   }
 
+  return { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last };
+}
+
+const minTs = (a, b) => (!a || (b && b < a) ? b || a : a);
+const maxTs = (a, b) => (!a || (b && b > a) ? b || a : a);
+const addInto = (to, from) => { for (const [k, v] of from) to.set(k, (to.get(k) || 0) + v); };
+
+/** Folds partial aggregates (in file order) into one, as if scanned in a single pass. */
+function mergeParts(parts) {
+  const M = collect([], DEFAULT_CONFIG);
+  for (const P of parts) {
+    for (const [id, s] of P.sessions) {
+      const m = M.sessions.get(id);
+      if (!m) { M.sessions.set(id, s); continue; }
+      m.first = minTs(m.first, s.first); m.last = maxTs(m.last, s.last);
+      m.tools += s.tools; m.private ||= s.private; m.untrusted ||= s.untrusted;
+      for (const r of s.rules) m.rules.add(r);
+    }
+    for (const [name, p] of P.projects) {
+      const m = M.projects.get(name);
+      if (!m) { M.projects.set(name, p); continue; }
+      for (const id of p.sessions) m.sessions.add(id);
+      for (const id of p.flagged) m.flagged.add(id);
+      m.toolCalls += p.toolCalls; addInto(m.categories, p.categories);
+    }
+    addInto(M.toolCounts, P.toolCounts); addInto(M.catCounts, P.catCounts); addInto(M.programs, P.programs);
+    for (const [d, c] of P.dayCats) { if (!M.dayCats.has(d)) M.dayCats.set(d, new Map()); addInto(M.dayCats.get(d), c); }
+    for (const [h, r] of P.hosts) {
+      const m = M.hosts.get(h);
+      if (!m) M.hosts.set(h, r); else { m.calls += r.calls; m.kind = r.kind; }
+    }
+    for (const [k, r] of P.skillUse) {
+      const m = M.skillUse.get(k);
+      if (!m) { M.skillUse.set(k, r); continue; }
+      m.model += r.model; m.user += r.user; for (const id of r.sessions) m.sessions.add(id);
+    }
+    for (const [server, r] of P.mcpUse) {
+      const m = M.mcpUse.get(server);
+      if (!m) { M.mcpUse.set(server, r); continue; }
+      m.calls += r.calls; m.outbound += r.outbound; m.errors += r.errors;
+      for (const id of r.sessions) m.sessions.add(id);
+      addInto(m.tools, r.tools);
+      m.first = minTs(m.first, r.first); m.last = maxTs(m.last, r.last);
+    }
+    const seen = new Set(M.flagged.map((f) => `${f.session}\0${f.rule}`));
+    for (const f of P.flagged) {
+      const k = `${f.session}\0${f.rule}`;
+      if (!seen.has(k)) { seen.add(k); M.flagged.push(f); }
+    }
+    for (const k of Object.keys(M.t)) M.t[k] += P.t[k];
+    for (const [r, n] of Object.entries(P.ruleCounts)) M.ruleCounts[r] = (M.ruleCounts[r] || 0) + n;
+    M.first = minTs(M.first, P.first); M.last = maxTs(M.last, P.last);
+  }
+  return M;
+}
+
+/**
+ * @param {ReturnType<typeof collect>} P
+ * @param {{ files: number, days: number, now: number, audits?: any[] | null, mcpAudits?: any[] | null }} o
+ */
+function summarize(P, { files, days, now, audits = null, mcpAudits = null }) {
+  const { parseToolName, configFor, normName } = require('./mcp');
+  const { sessions, projects, toolCounts, catCounts, dayCats, programs, hosts, skillUse, mcpUse, flagged, t, ruleCounts, first, last } = P;
   const list = [...sessions.values()];
   const count = (fn) => list.filter(fn).length;
   return {
     scannedAt: new Date(now).toISOString(),
     days,
-    files: files.length,
+    files,
     sessions: list.length,
     range: { first, last },
     toolCalls: t.toolCalls,
@@ -295,15 +365,15 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
     categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, catCounts.get(c.id) || 0])),
     daily: [...dayCats.keys()].sort().map((d) => ({ date: d, ...Object.fromEntries(CATEGORIES.map((c) => [c.id, dayCats.get(d).get(c.id) || 0])) })),
     shellPrograms: top(programs, 15).map(([name, count]) => ({ name, count })),
-    hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
-    skills: [...skillUse.entries()].sort((a, b) => (b[1].model + b[1].user) - (a[1].model + a[1].user)).slice(0, 25).map(([name, r]) => {
+    hosts: [...hosts.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).slice(0, 20).map(([host, h]) => ({ host, calls: h.calls, kind: h.kind })),
+    skills: [...skillUse.entries()].sort((a, b) => (b[1].model + b[1].user) - (a[1].model + a[1].user) || (a[0] < b[0] ? -1 : 1)).slice(0, 25).map(([name, r]) => {
       const a = audits ? require('./skills').riskFor(audits, name) : null;
       return { name, calls: r.model + r.user, byModel: r.model, byUser: r.user, sessions: r.sessions.size,
         risk: a ? a.risk : null, counts: a ? a.counts : null, source: a ? a.source : null, pin: a ? a.pin.status : null,
         rules: a ? [...new Set(a.findings.filter((f) => f.severity !== 'low').map((f) => f.rule))] : [] };
     }),
     mcp: (() => {
-      const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls).map(([server, r]) => {
+      const used = [...mcpUse.entries()].sort((a, b) => b[1].calls - a[1].calls || (a[0] < b[0] ? -1 : 1)).map(([server, r]) => {
         const cfgs = mcpAudits ? configFor(mcpAudits, server) : [];
         return {
           server, plugin: r.plugin, calls: r.calls, sessions: r.sessions.size, outboundCalls: r.outbound, errors: r.errors,
@@ -322,9 +392,95 @@ function scan({ projectsDir = defaultProjectsDir(), days = 30, now = Date.now(),
       categories: Object.fromEntries(CATEGORIES.map((c) => [c.id, p.categories.get(c.id) || 0])),
     }])),
     malformedLines: t.malformedLines,
-    flagged: flagged.sort((a, b) => String(a.date).localeCompare(String(b.date))),
+    flagged: flagged.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.session.localeCompare(b.session) || a.rule.localeCompare(b.rule)),
   };
 }
+
+
+const scanDefaults = () => ({ projectsDir: defaultProjectsDir(), days: 30, now: Date.now(), cfg: loadConfig(), audits: null, mcpAudits: null });
+
+/**
+ * @param {{ projectsDir?: string, days?: number, now?: number, cfg?: import('./types').Config, audits?: any[] | null, mcpAudits?: any[] | null }} [opts]
+ */
+function scan(opts = {}) {
+  const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
+  const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
+  return summarize(collect(files.map((f) => f.file), cfg), { files: files.length, days, now, audits, mcpAudits });
+}
+
+// A session can span files (resumed sessions, subagent transcripts), and the
+// Policy's taint state follows the session, so files that share a session must
+// be replayed by the same worker. Group them by the sessionIds near the top of
+// each file plus the <id>/subagents/ directory layout.
+/** @param {{ file: string, mtime: number }[]} files @returns {{ file: string, mtime: number }[][]} */
+function groupFiles(files) {
+  const parent = new Map();
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  const union = (a, b) => { if (!parent.has(a)) parent.set(a, a); if (!parent.has(b)) parent.set(b, b); parent.set(find(a), find(b)); };
+  const head = Buffer.alloc(1 << 16);
+  for (const { file } of files) {
+    const dir = path.dirname(file);
+    const key = path.basename(dir) === 'subagents' ? 'dir:' + path.dirname(dir) : 'dir:' + path.join(dir, path.basename(file, '.jsonl'));
+    union('file:' + file, key);
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      const n = fs.readSync(fd, head, 0, head.length, 0);
+      for (const m of head.toString('utf8', 0, n).matchAll(/"sessionId":"([^"]+)"/g)) union('file:' + file, 'sid:' + m[1]);
+    } catch { /* unreadable: collect() skips it too */ } finally { if (fd !== undefined) fs.closeSync(fd); }
+  }
+  const groups = new Map();
+  for (const f of files) {
+    const r = find('file:' + f.file);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(f);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Splits files into at most `jobs` batches of whole groups, balanced by bytes.
+ * @param {{ file: string, mtime: number }[]} files @param {number} jobs @returns {{ file: string, mtime: number }[][]}
+ */
+function partition(files, jobs) {
+  const sized = groupFiles(files).map((g) => {
+    let bytes = 0;
+    for (const f of g) { try { bytes += fs.statSync(f.file).size; } catch { /* vanished */ } }
+    return { g, bytes };
+  }).sort((a, b) => b.bytes - a.bytes);
+  /** @type {{ bytes: number, files: { file: string, mtime: number }[] }[]} */
+  const bins = Array.from({ length: Math.min(jobs, sized.length) }, () => ({ bytes: 0, files: [] }));
+  for (const s of sized) {
+    const bin = bins.reduce((m, b) => (b.bytes < m.bytes ? b : m));
+    bin.bytes += s.bytes; bin.files.push(...s.g);
+  }
+  return bins.map((b) => b.files.sort((x, y) => x.mtime - y.mtime));
+}
+
+/**
+ * Same result as scan(), with the transcripts replayed on worker threads.
+ * @param {Parameters<typeof scan>[0] & { jobs?: number }} [opts]
+ * @returns {Promise<ReturnType<typeof summarize>>}
+ */
+async function scanParallel(opts = {}) {
+  const { Worker } = require('worker_threads');
+  const { projectsDir, days, now, cfg, audits, mcpAudits } = { ...scanDefaults(), ...opts };
+  const jobs = Math.max(1, Math.floor(opts.jobs || defaultJobs()));
+  const files = findFiles(projectsDir, now - days * DAY).sort((a, b) => a.mtime - b.mtime);
+  const salt = crypto.randomBytes(32);
+  const batches = jobs > 1 && files.length > 1 ? partition(files, jobs) : [files];
+  if (batches.length < 2) return summarize(collect(files.map((f) => f.file), cfg, salt), { files: files.length, days, now, audits, mcpAudits });
+  const parts = await Promise.all(batches.map((b) => new Promise((/** @type {(p: ReturnType<typeof collect>) => void} */ resolve, reject) => {
+    const w = new Worker(path.join(__dirname, 'scan-worker.js'), { workerData: { files: b.map((f) => f.file), cfg, salt } });
+    w.once('message', resolve);
+    w.once('error', reject);
+    w.once('exit', (code) => { if (code) reject(new Error(`scan worker exited with code ${code}`)); });
+  })));
+  const order = batches.map((b, i) => i).sort((x, y) => batches[x][0].mtime - batches[y][0].mtime);
+  return summarize(mergeParts(order.map((i) => parts[i])), { files: files.length, days, now, audits, mcpAudits });
+}
+
+const defaultJobs = () => Math.min(8, typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length);
 
 // ---------- terminal report ----------
 
@@ -489,4 +645,4 @@ ${body}
 `;
 }
 
-module.exports = { scan, renderReport, renderCard, defaultProjectsDir, CATEGORIES, categoryOf, programsOf };
+module.exports = { scan, scanParallel, collect, mergeParts, groupFiles, defaultJobs, renderReport, renderCard, defaultProjectsDir, CATEGORIES, categoryOf, programsOf };

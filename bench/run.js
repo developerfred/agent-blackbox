@@ -133,7 +133,7 @@ async function benchDaemon() {
   } finally { child.kill('SIGTERM'); }
 }
 
-function benchScan() {
+async function benchScan() {
   const dir = path.join(TMP, 'projects');
   const sessions = 60;
   for (let s = 0; s < sessions; s++) {
@@ -149,20 +149,28 @@ function benchScan() {
     }
     fs.writeFileSync(path.join(proj, `s${s}.jsonl`), lines.join('\n') + '\n');
   }
-  const { scan } = require('../src/scan');
+  const { scan, scanParallel } = require('../src/scan');
+  const opts = { projectsDir: dir, days: 3650, now: Date.parse('2026-09-21T00:00:00Z'), cfg: { ...DEFAULT_CONFIG }, audits: [], mcpAudits: [] };
   const samples = [];
   for (let i = 0; i < 5; i++) {
     const t = now();
-    scan({ projectsDir: dir, days: 3650, now: Date.parse('2026-09-21T00:00:00Z'), cfg: { ...DEFAULT_CONFIG }, audits: [], mcpAudits: [] });
+    scan(opts);
     samples.push(sessions / ((now() - t) / 1000));
   }
   record('scan (sessions per second)', samples, 'sess/s');
+  const par = [];
+  for (let i = 0; i < 5; i++) {
+    const t = now();
+    await scanParallel(opts);
+    par.push(sessions / ((now() - t) / 1000));
+  }
+  record('scan --jobs auto (sessions per second)', par, 'sess/s');
 }
 
 (async () => {
   if (want('policy')) benchPolicy();
   if (want('daemon')) await benchDaemon();
-  if (want('scan')) benchScan();
+  if (want('scan')) await benchScan();
   if (args.includes('--json')) console.log(JSON.stringify(results, null, 2));
   fs.rmSync(TMP, { recursive: true, force: true });
   process.exit(Object.values(results).some((r) => r.budget != null && r.p95 > r.budget) && args.includes('--strict') ? 1 : 0);
