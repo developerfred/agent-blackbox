@@ -1,4 +1,13 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.loadPins = exports.SEVERITY = void 0;
+exports.discoverSkills = discoverSkills;
+exports.parseFrontmatter = parseFrontmatter;
+exports.auditFile = auditFile;
+exports.auditSkill = auditSkill;
+exports.savePins = savePins;
+exports.auditAll = auditAll;
+exports.riskFor = riskFor;
 // Skills: find the ones installed for any agent, audit their files for risky
 // patterns, and pin their content so a later change ("rug pull") is noticed.
 //
@@ -9,18 +18,16 @@
 // and `allowed-tools` (tools used without asking). The audit looks hardest there.
 //
 // Static analysis finds known-bad shapes; it cannot prove a skill is safe.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
-const { redact } = require('./policy');
-const { readJson, sha256, isDir, isFile } = require('./util');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const crypto = require("crypto");
+const policy_1 = require("./policy");
+const util_1 = require("./util");
 const MAX_FILES = 300;
 const MAX_BYTES = 1024 * 1024;
-/** @type {Record<string, number>} */
-const SEVERITY = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
+exports.SEVERITY = { high: 3, medium: 2, low: 1, info: 0, none: -1 };
 // ---------- discovery ----------
-/** @returns {{ dir: string, source: string, deep?: boolean, commands?: boolean }[]} */
 function candidateRoots(home = os.homedir(), cwd = process.cwd()) {
     const claude = process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
     return [
@@ -37,7 +44,6 @@ function candidateRoots(home = os.homedir(), cwd = process.cwd()) {
         { dir: path.join(cwd, '.agents', 'skills'), source: 'agents (project)' },
     ];
 }
-/** @param {string} p */
 const real = (p) => { try {
     return fs.realpathSync(p);
 }
@@ -45,11 +51,10 @@ catch {
     return null;
 } };
 // Every directory under `dir` (up to `depth`) that holds a SKILL.md.
-/** @param {string} dir @param {number} depth @param {string[]} [out] @returns {string[]} */
 function findSkillDirs(dir, depth, out = []) {
-    if (depth < 0 || !isDir(dir))
+    if (depth < 0 || !(0, util_1.isDir)(dir))
         return out;
-    if (isFile(path.join(dir, 'SKILL.md'))) {
+    if ((0, util_1.isFile)(path.join(dir, 'SKILL.md'))) {
         out.push(dir);
         return out;
     }
@@ -68,24 +73,19 @@ function findSkillDirs(dir, depth, out = []) {
     }
     return out;
 }
-/** @param {{ home?: string, cwd?: string, extra?: string[] }} [opts] */
-/**
- * @typedef {{ name: string, dir: string, file: string, files?: string[], source: string, realpath: string, single?: boolean, plugin?: string }} Skill
- */
-/** @param {{ home?: string, cwd?: string, extra?: string[] }} [opts] @returns {Skill[]} */
 function discoverSkills({ home, cwd, extra = [] } = {}) {
     const roots = [...candidateRoots(home, cwd), ...extra.map((d) => ({ dir: path.resolve(d), source: 'path', deep: false, commands: false }))];
     const seen = new Set();
     const skills = [];
     for (const root of roots) {
-        if (!isDir(root.dir))
+        if (!(0, util_1.isDir)(root.dir))
             continue;
         if (root.commands) {
             // legacy single-file commands: .claude/commands/*.md
             for (const f of fs.readdirSync(root.dir)) {
                 const file = path.join(root.dir, f);
                 const rp = real(file);
-                if (!f.endsWith('.md') || !rp || seen.has(rp) || !isFile(file))
+                if (!f.endsWith('.md') || !rp || seen.has(rp) || !(0, util_1.isFile)(file))
                     continue;
                 seen.add(rp);
                 skills.push({ name: f.replace(/\.md$/, ''), dir: root.dir, file, files: [file], source: root.source, realpath: rp, single: true });
@@ -109,14 +109,12 @@ function discoverSkills({ home, cwd, extra = [] } = {}) {
     }
     return skills;
 }
-/** @param {string} pluginsRoot @param {string} dir */
 function pluginOf(pluginsRoot, dir) {
     const parts = path.relative(pluginsRoot, dir).split(path.sep);
     const i = parts.lastIndexOf('skills');
     return i > 0 ? parts[i - 1] : undefined;
 }
 // ---------- reading ----------
-/** @param {string} file @returns {string | null} */
 function readText(file) {
     try {
         const st = fs.statSync(file);
@@ -131,7 +129,6 @@ function readText(file) {
         return null;
     }
 }
-/** @param {string} dir @param {string[]} [out] @param {number} [depth] @returns {string[]} */
 function listFiles(dir, out = [], depth = 0) {
     if (out.length >= MAX_FILES || depth > 6)
         return out;
@@ -146,9 +143,9 @@ function listFiles(dir, out = [], depth = 0) {
         if (e.name === 'node_modules' || e.name === '.git')
             continue;
         const p = path.join(dir, e.name);
-        if (e.isDirectory() || (e.isSymbolicLink() && isDir(p)))
+        if (e.isDirectory() || (e.isSymbolicLink() && (0, util_1.isDir)(p)))
             listFiles(p, out, depth + 1);
-        else if (isFile(p))
+        else if ((0, util_1.isFile)(p))
             out.push(p);
         if (out.length >= MAX_FILES)
             break;
@@ -156,14 +153,11 @@ function listFiles(dir, out = [], depth = 0) {
     return out;
 }
 // Minimal frontmatter reader: top-level keys, scalar or inline/block lists.
-/** @param {string} text @returns {Record<string, string | string[]>} */
 function parseFrontmatter(text) {
     const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
     if (!m)
         return {};
-    /** @type {Record<string, any>} */
     const out = {};
-    /** @type {string | null} */
     let key = null;
     for (const line of m[1].split(/\r?\n/)) {
         const top = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
@@ -186,7 +180,6 @@ function parseFrontmatter(text) {
 }
 // ---------- rules ----------
 const NET = String.raw `(?:curl|wget|nc|ncat|socat|scp|rsync|ftp|httpie|xh|Invoke-WebRequest|iwr|Invoke-RestMethod|irm)\b`;
-/** @type {{ id: string, sev: import('./types').Severity, re: RegExp, msg: string }[]} */
 const RULES = [
     { id: 'download-exec', sev: 'high', re: new RegExp(String.raw `\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\b(?:curl|wget)\b[^\n|]*\|\s*(?:python3?|node|perl|ruby)\b|(?:ba|z)?sh\s+<\(\s*(?:curl|wget)|eval\s+["'$(]*\s*\$\(\s*(?:curl|wget)|\b(?:iex|Invoke-Expression)\b[^\n]*(?:iwr|Invoke-WebRequest|DownloadString)`, 'i'),
         msg: 'downloads code and runs it immediately' },
@@ -208,7 +201,6 @@ const RULES = [
 const INJECTION = /\bignore\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|messages|rules)|\b(?:do\s+not|don't|never)\s+(?:tell|inform|mention|show|reveal|notify)\s+(?:this\s+to\s+)?the\s+user\b(?!\s+to\b)|\bwithout\s+(?:asking|telling|informing|notifying)\s+the\s+user\b|\b(?:silently|secretly|covertly)\s+(?:send|upload|post|copy|run|execute|exfiltrate)\b|\bnew\s+system\s+prompt\b|\byou\s+are\s+no\s+longer\b/i;
 // Defensive text quotes attack phrases in order to forbid them.
 const DEFENSIVE = /\b(?:do\s+not|don't|never)\s+(?:follow|obey|comply)|\bis\s+data\b|\bnot\s+instructions\b|\btreat\b[^.]*\bas\s+(?:data|untrusted)/i;
-/** @param {string} line @param {number} index */
 function quotedAt(line, index) {
     const before = line.slice(Math.max(0, index - 3), index);
     return /["'“‘`]/.test(before);
@@ -224,13 +216,11 @@ const SECRET_RES = [
     /\bgithub_pat_[A-Za-z0-9_]{40,}/, /\bxox[abpr]-[A-Za-z0-9-]{10,}/, /\bAIza[0-9A-Za-z_-]{35}\b/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
 ];
 const CODE_EXT = /\.(?:sh|bash|zsh|fish|ps1|py|js|mjs|cjs|ts|rb|pl|php|go|rs|lua)$/i;
-/** @param {string} line */
 function excerpt(line) {
-    const t = redact(line.trim().replace(/\s+/g, ' '));
+    const t = (0, policy_1.redact)(line.trim().replace(/\s+/g, ' '));
     return t.length > 140 ? t.slice(0, 139) + '…' : t;
 }
 // Which lines of a markdown file sit inside fenced code blocks.
-/** @param {string[]} lines @returns {boolean[]} */
 function fencedLines(lines) {
     const inside = new Array(lines.length).fill(false);
     let open = false;
@@ -244,18 +234,14 @@ function fencedLines(lines) {
     });
     return inside;
 }
-/** @param {string} file @param {string} rel @param {string} text @param {{ isSkillMd?: boolean }} opts @returns {import('./types').Finding[]} */
 function auditFile(file, rel, text, { isSkillMd }) {
-    /** @type {import('./types').Finding[]} */
     const findings = [];
-    /** @param {import('./types').Severity} sev @param {string} rule @param {number} line @param {string} message @param {string | null} [ex] */
     const add = (sev, rule, line, message, ex) => findings.push({ severity: sev, rule, file: rel, line, message, excerpt: ex });
     const lines = text.split(/\r?\n/);
     const isCode = CODE_EXT.test(file) || /^#!/.test(text);
     const isMd = /\.md$/i.test(file);
     const fenced = isMd ? fencedLines(lines) : null;
     let hasNet = false, hasCred = false;
-    /** @type {number | null} */
     let firstCred = null;
     lines.forEach((line, i) => {
         const ln = i + 1;
@@ -302,11 +288,10 @@ function auditFile(file, rel, text, { isSkillMd }) {
     }
     if (isSkillMd) {
         const fm = parseFrontmatter(text);
-        /** @param {string} k */
         const fmLine = (k) => { const i = lines.findIndex((l) => l.startsWith(k + ':')); return i < 0 ? 1 : i + 1; };
         if (fm.hooks !== undefined)
             add('high', 'skill-hooks', fmLine('hooks'), 'registers hooks: commands that keep running for the rest of the session once the skill is used', null);
-        const tools = /** @type {string[]} */ ([]).concat(fm['allowed-tools'] || []).join(' ');
+        const tools = [].concat(fm['allowed-tools'] || []).join(' ');
         if (tools) {
             const broad = /(^|[\s,[])Bash(?:\(\s*\*\s*\)|\(\s*\*\s+\*\s*\))?(?=$|[\s,\]])/.test(tools) || /Bash\((?:curl|wget|sh|bash|zsh|python3?|node|perl|ruby|eval|sudo|nc)\b[^)]*\*\)/.test(tools);
             add(broad ? 'high' : 'low', 'allowed-tools', fmLine('allowed-tools'), broad ? 'pre-approves unrestricted shell or network/interpreter commands' : 'pre-approves some tools for the turn the skill runs', excerpt(tools));
@@ -322,10 +307,8 @@ function auditFile(file, rel, text, { isSkillMd }) {
     }
     return findings;
 }
-/** @param {string} base @param {string[]} files */
 function hashFiles(base, files) {
     const h = crypto.createHash('sha256');
-    /** @type {Record<string, string>} */
     const per = {};
     for (const f of files) {
         let buf;
@@ -336,16 +319,14 @@ function hashFiles(base, files) {
             continue;
         }
         const rel = path.relative(base, f) || path.basename(f);
-        per[rel] = sha256(buf);
+        per[rel] = (0, util_1.sha256)(buf);
         h.update(rel).update('\0').update(per[rel]).update('\n');
     }
     return { hash: h.digest('hex'), files: per };
 }
-/** @param {Skill} skill */
 function auditSkill(skill) {
     const files = skill.single ? [skill.file] : listFiles(skill.dir);
     const base = skill.single ? path.dirname(skill.file) : skill.dir;
-    /** @type {import('./types').Finding[]} */
     let findings = [];
     for (const f of files) {
         const text = readText(f);
@@ -355,27 +336,24 @@ function auditSkill(skill) {
         findings = findings.concat(auditFile(f, rel, text, { isSkillMd: rel === 'SKILL.md' || skill.single }));
     }
     // one finding per rule per file line is plenty; keep the strongest
-    /** @type {Map<string, import('./types').Finding>} */
     const seen = new Map();
     for (const x of findings) {
         const k = `${x.rule}\0${x.file}\0${x.line}`;
-        if (!seen.has(k) || SEVERITY[x.severity] > SEVERITY[ /** @type {import('./types').Finding} */(seen.get(k)).severity])
+        if (!seen.has(k) || exports.SEVERITY[x.severity] > exports.SEVERITY[seen.get(k).severity])
             seen.set(k, x);
     }
-    findings = [...seen.values()].sort((a, b) => SEVERITY[b.severity] - SEVERITY[a.severity] || (a.file || '').localeCompare(b.file || '') || (a.line || 0) - (b.line || 0));
+    findings = [...seen.values()].sort((a, b) => exports.SEVERITY[b.severity] - exports.SEVERITY[a.severity] || (a.file || '').localeCompare(b.file || '') || (a.line || 0) - (b.line || 0));
     const counts = { high: 0, medium: 0, low: 0 };
     for (const x of findings)
         if (x.severity in counts)
-            counts[ /** @type {keyof typeof counts} */(x.severity)]++;
-    /** @type {import('./types').Severity} */
+            counts[x.severity]++;
     const risk = counts.high ? 'high' : counts.medium ? 'medium' : counts.low ? 'low' : 'none';
     return { ...skill, fileCount: files.length, findings, counts, risk, ...hashFiles(base, files) };
 }
 // ---------- pins ----------
-/** @param {string} file @returns {Record<string, any>} */
-const loadPins = (file) => readJson(file, {});
-/** @returns {{ status: 'new' | 'pinned' | 'changed', changed?: string[], pinnedAt?: string }} */
-function comparePin(/** @type {Record<string, any>} */ pins, /** @type {{ realpath: string, hash: string, files: Record<string, string> }} */ a) {
+const loadPins = (file) => (0, util_1.readJson)(file, {});
+exports.loadPins = loadPins;
+function comparePin(pins, a) {
     const p = pins[a.realpath];
     if (!p)
         return { status: 'new' };
@@ -384,9 +362,8 @@ function comparePin(/** @type {Record<string, any>} */ pins, /** @type {{ realpa
     const changed = Object.keys({ ...p.files, ...a.files }).filter((f) => p.files[f] !== a.files[f]);
     return { status: 'changed', changed, pinnedAt: p.pinnedAt };
 }
-/** @param {string} file @param {any[]} audits */
 function savePins(file, audits) {
-    const pins = loadPins(file);
+    const pins = (0, exports.loadPins)(file);
     const now = new Date().toISOString();
     for (const a of audits)
         pins[a.realpath] = { name: a.name, source: a.source, hash: a.hash, files: a.files, pinnedAt: now };
@@ -394,9 +371,8 @@ function savePins(file, audits) {
     fs.writeFileSync(file, JSON.stringify(pins, null, 2) + '\n', { mode: 0o600 });
     return pins;
 }
-/** @param {{ home?: string, cwd?: string, extra?: string[], pinsFile?: string }} [opts] */
 function auditAll({ home, cwd, extra, pinsFile } = {}) {
-    const pins = pinsFile ? loadPins(pinsFile) : {};
+    const pins = pinsFile ? (0, exports.loadPins)(pinsFile) : {};
     return discoverSkills({ home, cwd, extra }).map((s) => {
         const a = auditSkill(s);
         const pin = comparePin(pins, a);
@@ -410,7 +386,6 @@ function auditAll({ home, cwd, extra, pinsFile } = {}) {
 }
 // Look up a skill by the name the agent used ("docs", "plugin:skill",
 // "anthropic-skills:docs"). Returns the riskiest match.
-/** @template {{ name: string, dir: string, risk: string, plugin?: string, source: string }} A @param {A[]} audits @param {unknown} invoked @returns {A | null} */
 function riskFor(audits, invoked) {
     const name = String(invoked || '').trim();
     if (!name)
@@ -419,6 +394,5 @@ function riskFor(audits, invoked) {
     const plugin = name.includes(':') ? name.split(':')[0] : null;
     const matches = audits.filter((a) => a.name === name || a.name === short || path.basename(a.dir) === short)
         .filter((a) => !plugin || !a.plugin || a.plugin === plugin || a.source !== 'claude plugin');
-    return matches.sort((a, b) => SEVERITY[b.risk] - SEVERITY[a.risk])[0] || null;
+    return matches.sort((a, b) => exports.SEVERITY[b.risk] - exports.SEVERITY[a.risk])[0] || null;
 }
-module.exports = { discoverSkills, auditSkill, auditAll, auditFile, parseFrontmatter, savePins, loadPins, riskFor, SEVERITY };
