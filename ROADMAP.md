@@ -35,7 +35,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 - [ ] Launch: demo GIF, Show HN, X, Farcaster, r/ClaudeAI on the same day
 - [ ] Prompt-injection challenge repo with a canary token
-- [x] Open ledger and event format: versioned spec, test vectors and a standalone verifier ([docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), [verifier/](verifier/README.md)). `blackbox verify` enforces the same rules. Still open: ship `bb-verify` in the npm package, key rotation
+- [x] Open ledger and event format: versioned spec, test vectors and a standalone verifier ([docs/spec/ledger-v1.md](docs/spec/ledger-v1.md), [verifier/](verifier/README.md)). `blackbox verify` enforces the same rules. `bb-verify` ships in the npm package. Still open: key rotation
 - [x] `blackbox export`: ledger as OpenTelemetry GenAI traces and logs, local by default ([docs/OTEL.md](docs/OTEL.md))
 - [ ] Adapters for Codex CLI, Cursor and Gemini CLI (one canonical event, OpenTelemetry GenAI conventions): adapter interface, Codex, Cursor and Gemini CLI merged, the evasion corpus runs through each adapter (`blackbox eval --agent all`), none tried on a real agent yet; see [docs/AGENTS.md](docs/AGENTS.md) for what each adapter does not cover yet
 - [ ] Inspect and pin MCP tool definitions (descriptions, not just configs); alert on changes and hidden instructions ([MCPTox](https://arxiv.org/abs/2508.14925)). Today `blackbox mcp --pin` pins how a server is configured (command, arguments, URL), not the text of its tool descriptions
@@ -52,7 +52,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 
 Today the ledger proves what one session did on one machine. These steps make it checkable by third parties and usable by agents that act for people. Each is a small, separate piece.
 
-- [ ] Spec v1.1: key rotation and revocation, a formal `agent` field, an explicit algorithm field so it can change later. Package `bb-verify` in npm
+- [ ] Spec v1.1: key rotation and revocation, a formal `agent` field, an explicit algorithm field so it can change later
 - [ ] Conformance suite from the existing test vectors, and a second verifier in another language (a format is a standard only with more than one implementation)
 - [ ] Agent identity: a key per agent or session, certified by the machine key, with a field that maps to `gen_ai.agent.id`
 - [ ] `receipt` record (draft spec first, no code): user intent, policy decision, human approval, payment or transaction hash and effect, with a Merkle inclusion proof a third party can check without seeing the payload. Check x402 and ERC-8004 against their current specifications before mapping to them
