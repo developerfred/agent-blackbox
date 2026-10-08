@@ -1,4 +1,4 @@
-'use strict';
+"use strict";
 // The evasion corpus is written in the canonical event format (Claude Code's).
 // To measure what an adapter does to it, each corpus event is re-written the
 // way the agent would send it, decoded by the real adapter, and only then given
@@ -9,13 +9,11 @@
 // The re-writing is ours, from the same understanding of each agent's hooks
 // the adapter was built on. It shows that the mapping loses nothing the
 // policy needs; it does not show that a real agent sends these payloads.
-/** @typedef {{ kind: 'pre' | 'post' | 'prompt' | 'start', session_id: string, cwd?: string, tool?: string, input?: Record<string, any>, response?: any, prompt?: string }} CanonEvent */
-/** @param {any} v */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ENCODERS = void 0;
 const text = (v) => (typeof v === 'string' ? v : JSON.stringify(v == null ? '' : v));
-const isMcp = (/** @type {string | undefined} */ t) => /^mcp__.+?__.+/.test(t || '');
-/** @param {string} t */
+const isMcp = (t) => /^mcp__.+?__.+/.test(t || '');
 const mcpParts = (t) => { const m = /^mcp__(.+?)__(.+)$/.exec(t) || []; return { server: m[1] || '', tool: m[2] || '' }; };
-/** @param {CanonEvent} e @returns {Record<string, any> | null} */
 function codex(e) {
     const base = { session_id: e.session_id, cwd: e.cwd, turn_id: 't1' };
     if (e.kind === 'start')
@@ -24,7 +22,6 @@ function codex(e) {
         return { ...base, hook_event_name: 'UserPromptSubmit', prompt: e.prompt };
     const name = e.kind === 'pre' ? 'PreToolUse' : 'PostToolUse';
     const input = e.input || {};
-    /** @type {{ tool_name: string, tool_input: Record<string, any> } | null} */
     let tool = null;
     if (e.tool === 'Bash')
         tool = { tool_name: 'Bash', tool_input: { command: input.command } };
@@ -33,12 +30,11 @@ function codex(e) {
     else if (e.tool === 'Edit')
         tool = { tool_name: 'apply_patch', tool_input: { command: `*** Begin Patch\n*** Update File: ${input.file_path}\n@@\n-${input.old_string}\n+${input.new_string}\n*** End Patch` } };
     else if (isMcp(e.tool))
-        tool = { tool_name: /** @type {string} */ (e.tool), tool_input: input };
+        tool = { tool_name: e.tool, tool_input: input };
     if (!tool)
         return null; // no hook for reads, searches or web tools
     return { ...base, hook_event_name: name, ...tool, tool_use_id: 'u1', ...(e.kind === 'post' ? { tool_response: e.response } : {}) };
 }
-/** @param {CanonEvent} e @returns {Record<string, any> | null} */
 function cursor(e) {
     const base = { conversation_id: e.session_id, generation_id: 'g1', workspace_roots: [e.cwd || '/repo'], ...(e.cwd ? { cwd: e.cwd } : {}) };
     if (e.kind === 'start')
@@ -50,7 +46,7 @@ function cursor(e) {
         if (e.tool === 'Bash')
             return { ...base, hook_event_name: 'beforeShellExecution', command: input.command };
         if (isMcp(e.tool)) {
-            const m = mcpParts(/** @type {string} */ (e.tool));
+            const m = mcpParts(e.tool);
             return { ...base, hook_event_name: 'beforeMCPExecution', server: m.server, tool_name: m.tool, tool_input: JSON.stringify(input) };
         }
         return null; // file edits are only seen afterwards; reads and web tools have no gate
@@ -58,7 +54,7 @@ function cursor(e) {
     if (e.tool === 'Bash')
         return { ...base, hook_event_name: 'afterShellExecution', command: input.command, output: text(e.response) };
     if (isMcp(e.tool)) {
-        const m = mcpParts(/** @type {string} */ (e.tool));
+        const m = mcpParts(e.tool);
         return { ...base, hook_event_name: 'afterMCPExecution', server: m.server, tool_name: m.tool, tool_input: JSON.stringify(input), result_json: JSON.stringify(e.response) };
     }
     if (e.tool === 'Read') {
@@ -71,7 +67,6 @@ function cursor(e) {
         return { ...base, hook_event_name: 'afterFileEdit', file_path: input.file_path, edits: [{ old_string: input.old_string, new_string: input.new_string }] };
     return null;
 }
-/** @param {CanonEvent} e @returns {Record<string, any> | null} */
 function gemini(e) {
     const base = { session_id: e.session_id, cwd: e.cwd, transcript_path: '/t', timestamp: 'x' };
     if (e.kind === 'start')
@@ -79,7 +74,6 @@ function gemini(e) {
     if (e.kind === 'prompt')
         return { ...base, hook_event_name: 'BeforeAgent', prompt: e.prompt };
     const input = e.input || {};
-    /** @type {Record<string, any> | null} */
     let tool = null;
     if (e.tool === 'Bash')
         tool = { tool_name: 'run_shell_command', tool_input: { command: input.command } };
@@ -96,7 +90,7 @@ function gemini(e) {
     else if (e.tool === 'Grep')
         tool = { tool_name: 'search_file_content', tool_input: { pattern: input.pattern, dir_path: input.path } };
     else if (isMcp(e.tool)) {
-        const m = mcpParts(/** @type {string} */ (e.tool));
+        const m = mcpParts(e.tool);
         tool = { tool_name: `mcp_${m.server}_${m.tool}`, tool_input: input, mcp_context: { server_name: m.server, tool_name: m.tool } };
     }
     if (!tool)
@@ -107,7 +101,6 @@ function gemini(e) {
 // What an agent does with the shell when it has no tool of its own: Codex reads files
 // with cat, fetches pages with curl. Without this, the corpus's setup steps (read .env,
 // fetch a page) could not be written for it, and nearly every case would be skipped.
-/** @param {CanonEvent} e @returns {CanonEvent} */
 function viaShell(e) {
     if (e.kind !== 'pre' && e.kind !== 'post')
         return e;
@@ -122,13 +115,11 @@ function viaShell(e) {
     return e;
 }
 /** Cursor has a read hook, but no web or search hook. */
-/** @param {CanonEvent} e @returns {CanonEvent} */
 function cursorShell(e) {
     return e.tool === 'WebFetch' || e.tool === 'Grep' ? viaShell(e) : e;
 }
-const ENCODERS = /** @type {Record<string, (e: CanonEvent) => Record<string, any> | null>} */ ({
+exports.ENCODERS = {
     codex: (e) => codex(viaShell(e)),
     cursor: (e) => cursor(cursorShell(e)),
     gemini,
-});
-module.exports = { ENCODERS };
+};

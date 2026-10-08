@@ -1,29 +1,28 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 // Benchmarks for the hot paths. No dependencies; numbers are medians and p95s
 // of many runs. Usage: node bench/run.js [--json] [--only name]
 //
 // Budgets (see ROADMAP): policy decision < 1 ms, hook round trip < 20 ms at p95.
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const http = require('http');
-const crypto = require('crypto');
-const { spawn } = require('child_process');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const http = require("http");
+const crypto = require("crypto");
+const child_process_1 = require("child_process");
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-bench-'));
 process.env.BLACKBOX_HOME = path.join(TMP, 'home');
 const PORT = 20000 + Math.floor(Math.random() * 20000);
 process.env.BLACKBOX_PORT = String(PORT);
-const { Policy } = require('../src/policy');
-const { DEFAULT_CONFIG, ensureDirs, readToken, readAdminToken } = require('../src/paths');
-const { CASES } = require('../eval/corpus');
+const policy_1 = require("../src/policy");
+const paths_1 = require("../src/paths");
+const corpus_1 = require("../eval/corpus");
+const scan_1 = require("../src/scan");
 const args = process.argv.slice(2);
 const only = args.includes('--only') ? args[args.indexOf('--only') + 1] : null;
-/** @type {Record<string, { p50: number, p95: number, n: number, unit: string, budget: number | null }>} */
 const results = {};
-/** @param {number[]} xs @param {number} p */
 const pct = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
 const now = () => Number(process.hrtime.bigint()) / 1e6; // ms
-/** @param {string} name @param {number[]} samples @param {string} [unit] @param {number | null} [budget] */
 function record(name, samples, unit = 'ms', budget = null) {
     const r = { p50: pct(samples, 0.5), p95: pct(samples, 0.95), n: samples.length, unit, budget };
     results[name] = r;
@@ -32,24 +31,24 @@ function record(name, samples, unit = 'ms', budget = null) {
         console.log(`${name.padEnd(34)} p50 ${r.p50.toFixed(3).padStart(9)} ${unit}   p95 ${r.p95.toFixed(3).padStart(9)} ${unit}   n=${r.n}${budget != null ? `   budget ${budget}` : ''}${flag}`);
     }
 }
-/** @param {string} n */
 const want = (n) => !only || only === n;
 function benchPolicy() {
-    const cfg = { ...DEFAULT_CONFIG };
-    const policy = new Policy(cfg, { sessions: {} }, 'bench-salt', { protect: [] });
-    const calls = CASES.filter((c) => c.call.tool === 'Bash');
+    const cfg = { ...paths_1.DEFAULT_CONFIG };
+    const policy = new policy_1.Policy(cfg, { sessions: {} }, 'bench-salt', { protect: [] });
+    const calls = corpus_1.CASES.filter((c) => c.call.tool === 'Bash');
     // session state per case, as the hook would have built it
     const sessions = calls.map((c, i) => {
         const sid = `b${i}`;
-        for (const ev of /** @type {any[]} */ (c.before || [])) {
-            if (ev.prompt)
+        for (const ev of c.before || []) {
+            if ('start' in ev)
+                continue;
+            if ('prompt' in ev)
                 policy.userPrompt({ session_id: sid, prompt: ev.prompt });
             else
                 policy.postToolUse({ session_id: sid, tool_name: ev.post, tool_input: ev.input, tool_response: ev.response });
         }
         return sid;
     });
-    /** @type {number[]} */
     const samples = [];
     for (let rep = 0; rep < 40; rep++) {
         calls.forEach((c, i) => {
@@ -72,7 +71,6 @@ function benchPolicy() {
     record('policy.postToolUse (140 KB read)', post);
     record('policy.scrub (140 KB response)', scrub);
 }
-/** @param {string} p @param {unknown} body @param {string} token @returns {Promise<number | undefined>} */
 function post(p, body, token) {
     return new Promise((resolve, reject) => {
         const data = JSON.stringify(body);
@@ -84,11 +82,9 @@ function post(p, body, token) {
         req.end(data);
     });
 }
-/** @param {string} p @param {string} token @returns {Promise<{ status: number | undefined, body: string }>} */
 function get(p, token) {
     return new Promise((resolve, reject) => {
         http.get({ host: '127.0.0.1', port: PORT, path: p, headers: { host: `127.0.0.1:${PORT}`, 'x-blackbox-token': token }, agent: false }, (res) => {
-            /** @type {Buffer[]} */
             const out = [];
             res.on('data', (d) => out.push(d));
             res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(out).toString() }));
@@ -96,9 +92,9 @@ function get(p, token) {
     });
 }
 async function benchDaemon() {
-    ensureDirs();
-    const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'blackbox.js'), 'daemon'], { stdio: 'ignore', env: process.env });
-    const token = readToken(), admin = readAdminToken();
+    (0, paths_1.ensureDirs)();
+    const child = (0, child_process_1.spawn)(process.execPath, [path.join(__dirname, '..', 'bin', 'blackbox.js'), 'daemon'], { stdio: 'ignore', env: process.env });
+    const token = (0, paths_1.readToken)(), admin = (0, paths_1.readAdminToken)();
     for (let i = 0; i < 50; i++) {
         try {
             if ((await get('/health', token)).status === 200)
@@ -160,19 +156,18 @@ async function benchScan() {
         }
         fs.writeFileSync(path.join(proj, `s${s}.jsonl`), lines.join('\n') + '\n');
     }
-    const { scan, scanParallel } = require('../src/scan');
-    const opts = { projectsDir: dir, days: 3650, now: Date.parse('2026-09-21T00:00:00Z'), cfg: { ...DEFAULT_CONFIG }, audits: [], mcpAudits: [] };
+    const opts = { projectsDir: dir, days: 3650, now: Date.parse('2026-09-21T00:00:00Z'), cfg: { ...paths_1.DEFAULT_CONFIG }, audits: [], mcpAudits: [] };
     const samples = [];
     for (let i = 0; i < 5; i++) {
         const t = now();
-        scan(opts);
+        (0, scan_1.scan)(opts);
         samples.push(sessions / ((now() - t) / 1000));
     }
     record('scan (sessions per second)', samples, 'sess/s');
     const par = [];
     for (let i = 0; i < 5; i++) {
         const t = now();
-        await scanParallel(opts);
+        await (0, scan_1.scanParallel)(opts);
         par.push(sessions / ((now() - t) / 1000));
     }
     record('scan --jobs auto (sessions per second)', par, 'sess/s');
