@@ -214,7 +214,7 @@ export interface McpAudit {
 
 /** One installed skill, audited (src/skills.js). */
 export interface SkillAudit {
-  name: string; source: string; fileCount: number;
+  name: string; source: string; dir: string; plugin?: string; fileCount: number;
   risk: Severity; counts: Counts;
   pin: { status: 'new' | 'pinned' | 'changed'; [extra: string]: unknown };
   findings: Finding[];

@@ -1,55 +1,59 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.Daemon = void 0;
+exports.summarize = summarize;
+exports.runDaemon = runDaemon;
 // The daemon: a separate process from the agent. Hooks, the OTLP exporter and
 // the raw-body files all feed it; it is the only holder of the signing key.
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
-const zlib = require('zlib');
-const crypto = require('crypto');
-const { readJson, readJsonl } = require('./util');
-const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
-const { Ledger, verify } = require('./ledger');
-const { merkleRoot, MERKLE_ALG } = require('./merkle');
-const anchoring = require('./anchor');
-const { Vault, scopeOf } = require('./vault');
-const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
-const agentApi = require('./agent-api');
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const http = require("http");
+const zlib = require("zlib");
+const crypto = require("crypto");
+const util_1 = require("./util");
+const paths_1 = require("./paths");
+const ledger_1 = require("./ledger");
+const merkle_1 = require("./merkle");
+const anchoring = require("./anchor");
+const vault_1 = require("./vault");
+const policy_1 = require("./policy");
+const agentApi = require("./agent-api");
+const mcp_1 = require("./mcp");
+const skills_1 = require("./skills");
+const integrity_1 = require("./integrity");
+const install_1 = require("./install");
 const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
 const ORPHAN_AFTER_MS = 3 * 60 * 1000;
-/** @param {unknown} s @param {number} [n] */
 const clip = (s, n = 160) => {
-    const t = redact(s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
+    const t = (0, policy_1.redact)(s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
 // Contents of a script the agent is about to run, if it is a small regular
 // file. Run as the recorder's own user, this may not see the human's folders;
 // then the script is trusted as before.
-/** @param {string} file @param {string} [cwd] @returns {string | null} */
 function readScript(file, cwd) {
-    const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, require('os').homedir()));
+    const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, os.homedir()));
     const st = fs.statSync(p);
     if (!st.isFile() || st.size > 200_000)
         return null;
     return fs.readFileSync(p, 'utf8');
 }
-/**
- * What a hook reported about its own installation, bounded and typed (it came over the ingest token).
- * @param {any} r @returns {{ via: string | null, fingerprint?: string, problems: string[] } | null}
- */
-function reportedIntegrity(r) {
+/** What a hook reported about its own installation, bounded and typed (it came over the ingest token). */
+function reportedIntegrity(rep) {
+    const r = rep;
     if (!r || typeof r !== 'object' || !Array.isArray(r.problems))
         return null;
     return {
         via: typeof r.via === 'string' ? r.via.slice(0, 32) : null,
         fingerprint: typeof r.fingerprint === 'string' ? r.fingerprint.slice(0, 64) : undefined,
-        problems: r.problems.slice(0, 10).map((/** @type {unknown} */ p) => String(p).slice(0, 300)),
+        problems: r.problems.slice(0, 10).map((p) => String(p).slice(0, 300)),
     };
 }
-/** One-line, redacted description of a hook event for the ledger.
- * @param {import('./types').HookEvent} ev */
+/** One-line, redacted description of a hook event for the ledger. */
 function summarize(ev) {
-    const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
+    const target = (0, policy_1.inputText)(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
     switch (ev.hook_event_name) {
         case 'UserPromptSubmit': return clip(ev.prompt);
         case 'UserPromptExpansion': return clip(`/${ev.command_name || ''} ${ev.command_args || ''}`);
@@ -57,7 +61,7 @@ function summarize(ev) {
         case 'PermissionRequest':
         case 'PermissionDenied':
             return clip(`${ev.tool_name} ${target}`);
-        case 'PostToolUse': return clip(`${ev.tool_name} ${target} → ${textOf(ev.tool_response).length} bytes`);
+        case 'PostToolUse': return clip(`${ev.tool_name} ${target} → ${(0, policy_1.textOf)(ev.tool_response).length} bytes`);
         case 'PostToolUseFailure': return clip(`${ev.tool_name} ${target} ✗ ${ev.error || ''}`);
         case 'Stop':
         case 'SubagentStop': return clip(ev.last_assistant_message);
@@ -68,7 +72,7 @@ function summarize(ev) {
         default: return '';
     }
 }
-/** @param {any} v an OTLP AnyValue @returns {any} */
+const otlpAttrs = (kvs) => Object.fromEntries((kvs || []).map((kv) => [kv.key, otlpValue(kv.value)]));
 function otlpValue(v) {
     if (!v)
         return null;
@@ -83,34 +87,39 @@ function otlpValue(v) {
     if (v.arrayValue)
         return (v.arrayValue.values || []).map(otlpValue);
     if (v.kvlistValue)
-        return Object.fromEntries((v.kvlistValue.values || []).map((/** @type {{ key: string, value: any }} */ kv) => [kv.key, otlpValue(kv.value)]));
+        return otlpAttrs(v.kvlistValue.values);
     return null;
 }
-/** Placeholder for fields assigned in start(): only the process that owns the port opens the ledger. */
-const unset = /** @type {any} */ (null);
 class Daemon {
-    /** @type {Ledger} */ ledger = unset;
-    /** @type {Policy} */ policy = unset;
-    /** @type {Vault | null} */ vault = null;
-    /** @type {import('./types').DaemonState} */ state = unset;
+    cfg = (0, paths_1.loadConfig)();
+    token = (0, paths_1.readToken)();
+    adminToken = (0, paths_1.readAdminToken)();
+    sessions = new Map();
+    // Assigned in start(): only the process that owns the port opens the ledger.
+    ledger;
+    policy;
+    state;
+    vault = null;
+    bodyTimer;
+    skillTimer;
+    integrityTimer;
+    retentionTimer;
+    anchorTimer;
+    skillAudits;
+    mcpAudits;
+    pendingWarning;
     /** byte offset and length of record `seq` in the ledger file (index 0 unused): lookups read one line, not the file */
-    /** @type {number[]} */ lineOff = [];
-    /** @type {number[]} */ lineLen = [];
-    /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+    lineOff = [];
+    lineLen = [];
+    saveTimer = null;
     verifiedAt = 0;
-    /** @type {any} */ verified = null;
-    constructor() {
-        this.cfg = loadConfig();
-        this.token = readToken();
-        this.adminToken = readAdminToken();
-        this.sessions = new Map(); // id -> { id, first, last, cwd, events: [], flags: {}, alerts }
-    }
+    verified = null;
     start() {
         // Payloads are encrypted at rest with one key per session unless turned off.
-        this.vault = this.cfg.encrypt === false ? null : new Vault({ keysDir: P.keys });
-        this.ledger = new Ledger(P, { vault: this.vault });
+        this.vault = this.cfg.encrypt === false ? null : new vault_1.Vault({ keysDir: paths_1.P.keys });
+        this.ledger = new ledger_1.Ledger(paths_1.P, { vault: this.vault });
         this.loadState();
-        this.policy = new Policy(this.cfg, this.state, this.state.salt, { protect: [P.home], readFile: readScript });
+        this.policy = new policy_1.Policy(this.cfg, this.state, this.state.salt, { protect: [paths_1.P.home], readFile: readScript });
         this.indexLedger();
         this.drainSpool();
         this.bodyTimer = setInterval(() => this.safe(() => this.pollBodies()), 2000);
@@ -141,9 +150,9 @@ class Daemon {
         if (!s)
             return;
         try {
-            const pending = /** @type {any[]} */ (this.state.anchorPending || []);
+            const pending = (this.state.anchorPending || []);
             const toPublish = [];
-            const recs = readJsonl(P.ledger);
+            const recs = (0, util_1.readJsonl)(paths_1.P.ledger);
             let lastTo = 0;
             for (const r of recs)
                 if (r.kind === 'anchor')
@@ -159,7 +168,7 @@ class Daemon {
             for (const a of [...pending, ...toPublish]) {
                 try {
                     await anchoring.publish(a, s);
-                    fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+                    fs.appendFileSync(paths_1.P.anchors, JSON.stringify(a) + '\n');
                     pending.splice(pending.indexOf(a), 1);
                     this.log(`anchored #${a.to} (root ${a.root.slice(0, 12)}...)`);
                 }
@@ -195,16 +204,12 @@ class Daemon {
     // with the SessionStart event: that is `reported`. Anything with the ingest
     // token can send a report, so it can hide a removal but never invent trust the
     // recorder does not already give an event.
-    /** @param {{ via: string | null, fingerprint?: string, problems: string[] } | null} [reported] */
     checkIntegrity(reported = null) {
         return this.safe(() => {
             const prev = this.state.integrity;
-            /** @type {{ via?: string | null, fingerprint?: string, problems: string[] } | null} */
             let r = reported;
             if (!this.cfg.hardened) {
-                const { checkHooks } = require('./integrity');
-                const { HOOK_EVENTS } = require('./install');
-                r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
+                r = (0, integrity_1.checkHooks)({ expected: install_1.HOOK_EVENTS, installedVia: (0, paths_1.loadConfig)().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
             }
             if (!r)
                 return { problems: [] };
@@ -222,39 +227,33 @@ class Daemon {
     }
     refreshSkills() {
         this.safe(() => {
-            const { auditAll } = require('./skills');
-            this.skillAudits = auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') });
+            this.skillAudits = (0, skills_1.auditAll)({ pinsFile: path.join(paths_1.P.home, 'skill-pins.json') });
         });
         this.safe(() => {
-            const { auditServers } = require('./mcp');
-            this.mcpAudits = auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') });
+            this.mcpAudits = (0, mcp_1.auditServers)({ pinsFile: path.join(paths_1.P.home, 'mcp-pins.json') });
         });
     }
     // Ask before a tool of an MCP server whose local definition has high-risk
     // findings (clear-text secrets, plain HTTP, privileged Docker, changed since pinned…).
-    /** @param {string} toolName @returns {import('./types').PolicyDecision | null} */
     mcpGate(toolName) {
-        const { parseToolName, configFor } = require('./mcp');
-        const mp = parseToolName(toolName);
+        const mp = (0, mcp_1.parseToolName)(toolName);
         if (!mp)
             return null;
-        const bad = configFor(this.mcpAudits || [], mp.server).filter((a) => a.risk === 'high');
+        const bad = (0, mcp_1.configFor)(this.mcpAudits || [], mp.server).filter((a) => a.risk === 'high');
         if (!bad.length)
             return null;
         const rules = [...new Set(bad.flatMap((a) => a.findings.filter((f) => f.severity === 'high').map((f) => f.rule)))].join(', ');
         return { decision: 'ask', rule: 'risky-mcp', reason: `The MCP server "${mp.server}" has high-risk findings in its local configuration: ${rules}. Review with: blackbox mcp` };
     }
-    /** @returns {import('./types').PolicyDecision | null} */
-    /** @param {string | undefined} name @returns {import('./types').PolicyDecision | null} */
+    /** @returns {PolicyDecision | null} */
     skillGate(name) {
-        const { riskFor } = require('./skills');
-        const a = riskFor(this.skillAudits || [], name);
+        const a = (0, skills_1.riskFor)(this.skillAudits || [], name);
         if (!a || a.risk !== 'high')
             return null;
         const rules = [...new Set(a.findings.filter((f) => f.severity === 'high').map((f) => f.rule))].join(', ');
         return { decision: 'ask', rule: 'risky-skill', reason: `The skill "${name}" (${a.source}) has high-risk findings in the local audit: ${rules}. Review with: blackbox skills` };
     }
-    /** Run fn; an exception is logged, not thrown. @template T @param {() => T} fn @returns {T | undefined} */
+    /** Run fn; an exception is logged, not thrown. */
     safe(fn) { try {
         return fn();
     }
@@ -262,15 +261,13 @@ class Daemon {
         this.log('error', e.stack || String(e));
     } }
     // What /hook answers: Claude Code's stdout (kept for older hooks) and the neutral verdict.
-    /** @param {import('./types').HookEvent} ev */
     hookReply(ev) {
         const r = this.safe(() => this.processHook(ev));
         return { stdout: (r && r.stdout) || null, verdict: r ? r.verdict : null };
     }
-    /** @param {...unknown} a */
     log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
     loadState() {
-        this.state = { sessions: {}, salt: '', bodyIndexOffset: 0, ...readJson(P.state, {}) };
+        this.state = { sessions: {}, salt: '', bodyIndexOffset: 0, ...(0, util_1.readJson)(paths_1.P.state, {}) };
         this.state.salt ||= crypto.randomBytes(32).toString('hex');
     }
     // The in-memory state is what the policy uses; the file only matters after a
@@ -285,17 +282,17 @@ class Daemon {
         if (this.saveTimer)
             clearTimeout(this.saveTimer);
         this.saveTimer = null;
-        const tmp = P.state + '.tmp';
+        const tmp = paths_1.P.state + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify(this.state), { mode: 0o600 });
-        fs.renameSync(tmp, P.state);
+        fs.renameSync(tmp, paths_1.P.state);
     }
     // ---- in-memory index for the timeline UI ----
     indexLedger() {
         this.lineOff.length = 0;
         this.lineLen.length = 0;
-        if (!fs.existsSync(P.ledger))
+        if (!fs.existsSync(paths_1.P.ledger))
             return;
-        const buf = fs.readFileSync(P.ledger);
+        const buf = fs.readFileSync(paths_1.P.ledger);
         for (let off = 0; off < buf.length;) {
             let end = buf.indexOf(10, off);
             if (end < 0)
@@ -315,13 +312,11 @@ class Daemon {
     // The one-line summary holds prompt, command and path text, so it is sealed
     // under the session key like the payload: `purge` erases it too. The hash
     // chain covers the sealed form.
-    /** @param {string} text @param {string | undefined} sid */
     sealSummary(text, sid) {
         if (!this.vault || !text)
             return text;
-        return SEALED_PREFIX + this.vault.seal(scopeOf(sid), Buffer.from(text, 'utf8')).data.toString('base64');
+        return SEALED_PREFIX + this.vault.seal((0, vault_1.scopeOf)(sid), Buffer.from(text, 'utf8')).data.toString('base64');
     }
-    /** @param {string} text */
     openSummary(text) {
         if (!text.startsWith(SEALED_PREFIX) || !this.vault)
             return text;
@@ -332,7 +327,6 @@ class Daemon {
             return '[erased]';
         }
     }
-    /** @param {import('./types').LedgerRecord} rec */
     index(rec) {
         if (!rec.session_id)
             return;
@@ -344,7 +338,7 @@ class Daemon {
         s.last = rec.ts;
         s.events++;
         if (rec.event === 'SessionStart' && rec.cwd)
-            s.cwd = rec.cwd;
+            s.cwd = String(rec.cwd);
         if (rec.event === 'PreToolUse')
             s.tools++;
         if (rec.kind === 'taint')
@@ -356,17 +350,16 @@ class Daemon {
             s.seqs.shift();
     }
     // A record as the timeline shows it: no signature, summary unsealed (or "[erased]" once the key is gone).
-    /** @param {import('./types').LedgerRecord} rec */
     liteRecord(rec) {
         const { sig, ...lite } = rec;
         if (typeof lite.summary === 'string')
             lite.summary = this.openSummary(lite.summary);
         return lite;
     }
-    /** Records by sequence number, read from the ledger file with one open. @param {number[]} seqs */
+    /** Records by sequence number, read from the ledger file with one open. */
     readRecords(seqs) {
         const out = [];
-        const fd = fs.openSync(P.ledger, 'r');
+        const fd = fs.openSync(paths_1.P.ledger, 'r');
         try {
             for (const seq of seqs) {
                 const rec = this.readAt(fd, seq);
@@ -379,7 +372,6 @@ class Daemon {
         }
         return out;
     }
-    /** @param {number} fd @param {number} seq @returns {import('./types').LedgerRecord | null} */
     readAt(fd, seq) {
         if (this.lineOff[seq] === undefined)
             return null;
@@ -392,7 +384,6 @@ class Daemon {
             return null;
         }
     }
-    /** @param {string} kind @param {Record<string, unknown>} fields */
     append(kind, fields) {
         const at = this.ledger.size;
         const rec = this.ledger.append(kind, fields);
@@ -404,22 +395,13 @@ class Daemon {
     // ---- hooks ----
     // Order matters: the policy sees the raw event (it must learn which values
     // are secrets), then only a scrubbed copy is ever written to disk.
-    /**
-     * @param {import('./types').HookEvent} ev
-     * @param {{ spooled?: boolean, received_at?: string }} [meta]
-     */
     handleHook(ev, meta = {}) { return this.processHook(ev, meta).stdout; }
     // The same, with the verdict in the agent-neutral form adapters encode.
-    /**
-     * @param {import('./types').HookEvent} ev
-     * @param {{ spooled?: boolean, received_at?: string }} [meta]
-     */
     processHook(ev, meta = {}) {
         const event = ev.hook_event_name || 'unknown';
         const sid = ev.session_id;
         let decision = null;
         let post = null;
-        /** @type {string[]} */
         let intent = [];
         if (event === 'PreToolUse') {
             decision = this.policy.preToolUse(ev);
@@ -427,7 +409,7 @@ class Daemon {
                 if (ev.tool_name === 'Skill')
                     decision = this.skillGate((ev.tool_input || {}).skill) || decision;
                 else if (/^mcp__/.test(ev.tool_name || ''))
-                    decision = this.mcpGate(/** @type {string} */ (ev.tool_name)) || decision;
+                    decision = this.mcpGate(ev.tool_name) || decision;
             }
         }
         else if (event === 'PostToolUse')
@@ -437,7 +419,7 @@ class Daemon {
         else if (event === 'SessionStart')
             post = this.policy.sessionStart(ev);
         const clean = this.policy.scrub(ev, sid);
-        const blob = this.ledger.putBlob(clean, scopeOf(sid));
+        const blob = this.ledger.putBlob(clean, (0, vault_1.scopeOf)(sid));
         this.append('hook', {
             event,
             session_id: sid,
@@ -455,13 +437,12 @@ class Daemon {
             received_at: meta.received_at,
         });
         let stdout = null;
-        /** @type {import('./types').Verdict} */
         const verdict = { permission: null, reason: '', agentMessage: '', notice: null };
         if (decision) {
             this.append('decision', {
                 session_id: sid, prompt_id: ev.prompt_id, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name,
                 decision: meta.spooled ? 'missed' : decision.decision, rule: decision.rule,
-                secret: decision.secret, reason: redact(this.policy.scrubText(decision.reason, null)),
+                secret: decision.secret, reason: (0, policy_1.redact)(this.policy.scrubText(decision.reason, null)),
             });
             if (!meta.spooled && decision.decision === 'ask') {
                 // "ask" reasons are shown to the human, who needs the detail to decide.
@@ -469,19 +450,19 @@ class Daemon {
                     hookSpecificOutput: {
                         hookEventName: 'PreToolUse',
                         permissionDecision: 'ask',
-                        permissionDecisionReason: `[agent-blackbox] ${redact(decision.reason)}`,
+                        permissionDecisionReason: `[agent-blackbox] ${(0, policy_1.redact)(decision.reason)}`,
                     },
                 };
-                Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: AGENT_DENY_MESSAGE });
+                Object.assign(verdict, { permission: 'ask', reason: stdout.hookSpecificOutput.permissionDecisionReason, agentMessage: policy_1.AGENT_DENY_MESSAGE });
             }
             else if (!meta.spooled && decision.decision === 'deny') {
                 // "deny" reasons go back to the model: keep them uninformative and
                 // tell the human the full story out of band.
                 stdout = {
-                    systemMessage: `[agent-blackbox] blocked ${ev.tool_name}: ${redact(decision.reason)}`,
-                    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: AGENT_DENY_MESSAGE },
+                    systemMessage: `[agent-blackbox] blocked ${ev.tool_name}: ${(0, policy_1.redact)(decision.reason)}`,
+                    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: policy_1.AGENT_DENY_MESSAGE },
                 };
-                Object.assign(verdict, { permission: 'deny', reason: stdout.systemMessage, agentMessage: AGENT_DENY_MESSAGE });
+                Object.assign(verdict, { permission: 'deny', reason: stdout.systemMessage, agentMessage: policy_1.AGENT_DENY_MESSAGE });
             }
             if (decision.decision === 'deny')
                 this.saveState();
@@ -492,7 +473,7 @@ class Daemon {
         }
         if (post) {
             for (const t of post.taints) {
-                this.append('taint', { session_id: sid, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name, flag: t.flag, why: redact(this.policy.scrubText(t.why, null)) });
+                this.append('taint', { session_id: sid, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name, flag: t.flag, why: (0, policy_1.redact)(this.policy.scrubText(t.why, null)) });
             }
             if (post.taints.length || post.secretsSeen)
                 this.saveState();
@@ -501,8 +482,8 @@ class Daemon {
             // the human typed the slash command, so warn rather than block
             const g = this.skillGate(ev.command_name);
             if (g) {
-                this.append('decision', { session_id: sid, prompt_id: ev.prompt_id, decision: 'warn', rule: g.rule, reason: redact(g.reason) });
-                stdout = { systemMessage: `[agent-blackbox] ${redact(g.reason)}` };
+                this.append('decision', { session_id: sid, prompt_id: ev.prompt_id, decision: 'warn', rule: g.rule, reason: (0, policy_1.redact)(g.reason) });
+                stdout = { systemMessage: `[agent-blackbox] ${(0, policy_1.redact)(g.reason)}` };
             }
         }
         if (event === 'SessionStart' && !meta.spooled) {
@@ -514,13 +495,12 @@ class Daemon {
         }
         if (this.pendingWarning && !meta.spooled) {
             stdout = { ...(stdout || {}), systemMessage: `[agent-blackbox] ${this.pendingWarning}${stdout && stdout.systemMessage ? '\n' + stdout.systemMessage : ''}` };
-            this.pendingWarning = null;
+            this.pendingWarning = undefined;
         }
         verdict.notice = stdout && stdout.systemMessage ? stdout.systemMessage : null;
         return { stdout, verdict };
     }
     // Store a raw API body with its secrets scrubbed, then delete the original.
-    /** @param {string} file @param {string | null} sessionId */
     adoptScrubbed(file, sessionId) {
         const text = fs.readFileSync(file, 'utf8');
         let clean;
@@ -530,7 +510,7 @@ class Daemon {
         catch {
             clean = this.policy.scrubText(text, null);
         }
-        const b = this.ledger.putBlob(clean, scopeOf(sessionId));
+        const b = this.ledger.putBlob(clean, (0, vault_1.scopeOf)(sessionId));
         fs.unlinkSync(file);
         return b;
     }
@@ -539,13 +519,12 @@ class Daemon {
     // unreadable. Unencrypted blobs from older versions are deleted. The chain
     // keeps every hash and stays verifiable.
     // days: only sessions whose last record is older than N days; session: one session.
-    /** @param {number | null | undefined} days @param {string | null} [session] @param {{ bodies?: boolean }} [opts] */
     purge(days, session = null, { bodies: dropBodies = true } = {}) {
         const cutoff = days == null ? Infinity : Date.now() - days * 864e5;
         const lastByKey = new Map(); // kid -> { last, sessions }
         const plainOld = new Set();
         const plainKeep = new Set();
-        for (const r of readJsonl(P.ledger)) {
+        for (const r of (0, util_1.readJsonl)(paths_1.P.ledger)) {
             const t = Date.parse(r.ts);
             if (r.key) {
                 const k = lastByKey.get(r.key) || { last: 0, sessions: new Set() };
@@ -569,7 +548,7 @@ class Daemon {
             if (this.vault)
                 this.vault.erase(kid);
             try {
-                fs.rmSync(path.join(P.blobs, kid), { recursive: true, force: true });
+                fs.rmSync(path.join(paths_1.P.blobs, kid), { recursive: true, force: true });
             }
             catch { /* ignore */ }
             keys.push(kid);
@@ -579,18 +558,18 @@ class Daemon {
             if (plainKeep.has(sha))
                 continue;
             try {
-                fs.unlinkSync(path.join(P.blobs, sha));
+                fs.unlinkSync(path.join(paths_1.P.blobs, sha));
                 erased++;
             }
             catch { /* already gone */ }
         }
         let bodies = 0;
         if (!session && dropBodies) {
-            for (const name of fs.existsSync(P.bodies) ? fs.readdirSync(P.bodies) : []) {
+            for (const name of fs.existsSync(paths_1.P.bodies) ? fs.readdirSync(paths_1.P.bodies) : []) {
                 if (!name.endsWith('.json'))
                     continue;
                 try {
-                    fs.unlinkSync(path.join(P.bodies, name));
+                    fs.unlinkSync(path.join(paths_1.P.bodies, name));
                     bodies++;
                 }
                 catch { /* ignore */ }
@@ -607,7 +586,7 @@ class Daemon {
     // write that as an `anchor` record; the caller publishes the root plus the
     // chain head somewhere the agent cannot write.
     anchorBatch() {
-        const recs = readJsonl(P.ledger);
+        const recs = (0, util_1.readJsonl)(paths_1.P.ledger);
         let from = 1;
         for (const r of recs)
             if (r.kind === 'anchor')
@@ -616,16 +595,14 @@ class Daemon {
         if (to < from)
             return null;
         const batch = recs.filter((r) => r.seq >= from && r.seq <= to);
-        const rec = this.append('anchor', { alg: MERKLE_ALG, from, to, count: batch.length, root: merkleRoot(batch.map((r) => r.hash)) });
+        const rec = this.append('anchor', { alg: merkle_1.MERKLE_ALG, from, to, count: batch.length, root: (0, merkle_1.merkleRoot)(batch.map((r) => r.hash)) });
         return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root };
     }
     // Decrypted payload of one record, for the human reviewing the evidence.
-    /** @param {number} seq */
     payload(seq) {
         const rec = this.findRecord(seq);
         if (!rec)
             return { status: 404, body: { error: 'unknown record' } };
-        /** @type {Record<string, any>} */
         const out = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
         for (const f of ['payload', 'request_blob', 'response_blob']) {
             if (!rec[f])
@@ -635,7 +612,7 @@ class Daemon {
                 continue;
             }
             try {
-                const text = this.ledger.getBlob(/** @type {string} */ (rec[f]), rec.key).toString('utf8');
+                const text = this.ledger.getBlob(rec[f], rec.key).toString('utf8');
                 try {
                     out[f] = JSON.parse(text);
                 }
@@ -650,11 +627,10 @@ class Daemon {
         return { status: 200, body: out };
     }
     // One record by sequence number, read straight from its place in the file.
-    /** @param {number} seq @returns {import('./types').LedgerRecord | null} */
     findRecord(seq) {
         if (this.lineOff[seq] === undefined)
             return null;
-        const fd = fs.openSync(P.ledger, 'r');
+        const fd = fs.openSync(paths_1.P.ledger, 'r');
         try {
             return this.readAt(fd, seq);
         }
@@ -663,12 +639,12 @@ class Daemon {
         }
     }
     drainSpool() {
-        if (!fs.existsSync(P.spool))
+        if (!fs.existsSync(paths_1.P.spool))
             return;
-        const work = P.spool + '.draining';
-        fs.renameSync(P.spool, work);
+        const work = paths_1.P.spool + '.draining';
+        fs.renameSync(paths_1.P.spool, work);
         let n = 0;
-        for (const { payload, received_at } of readJsonl(work)) {
+        for (const { payload, received_at } of (0, util_1.readJsonl)(work)) {
             try {
                 this.handleHook(payload, { spooled: true, received_at });
                 n++;
@@ -682,16 +658,15 @@ class Daemon {
             this.log(`drained ${n} spooled events`);
     }
     // ---- OTLP/HTTP JSON logs from Claude Code's native telemetry ----
-    /** @param {any} body an OTLP/HTTP JSON logs request */
     handleOtlp(body) {
         let n = 0;
         for (const rl of body.resourceLogs || []) {
-            const res = Object.fromEntries(((rl.resource && rl.resource.attributes) || []).map((/** @type {any} */ a) => [a.key, otlpValue(a.value)]));
+            const res = otlpAttrs(rl.resource && rl.resource.attributes);
             for (const sl of rl.scopeLogs || []) {
                 for (const lr of sl.logRecords || []) {
-                    const raw = Object.fromEntries((lr.attributes || []).map((/** @type {any} */ a) => [a.key, otlpValue(a.value)]));
+                    const raw = otlpAttrs(lr.attributes);
                     const attrs = this.policy.scrub(raw, raw['session.id']);
-                    const blob = this.ledger.putBlob({ resource: res, body: this.policy.scrub(otlpValue(lr.body), raw['session.id']), attributes: attrs, timeUnixNano: lr.timeUnixNano }, scopeOf(attrs['session.id']));
+                    const blob = this.ledger.putBlob({ resource: res, body: this.policy.scrub(otlpValue(lr.body), raw['session.id']), attributes: attrs, timeUnixNano: lr.timeUnixNano }, (0, vault_1.scopeOf)(attrs['session.id']));
                     const name = attrs['event.name'] || otlpValue(lr.body) || 'log';
                     this.append('otel', {
                         event: name,
@@ -714,9 +689,9 @@ class Daemon {
     }
     // ---- raw Messages API bodies (every model input and output) ----
     pollBodies() {
-        if (!fs.existsSync(P.bodies))
+        if (!fs.existsSync(paths_1.P.bodies))
             return;
-        const idx = path.join(P.bodies, 'index.jsonl');
+        const idx = path.join(paths_1.P.bodies, 'index.jsonl');
         if (fs.existsSync(idx)) {
             const size = fs.statSync(idx).size;
             if (size < this.state.bodyIndexOffset)
@@ -739,8 +714,7 @@ class Daemon {
                         catch {
                             continue;
                         }
-                        /** @param {string | undefined} f */
-                        const fileOf = (f) => (f ? (path.isAbsolute(f) ? f : path.join(P.bodies, f)) : null);
+                        const fileOf = (f) => (f ? (path.isAbsolute(f) ? f : path.join(paths_1.P.bodies, f)) : null);
                         const reqF = fileOf(e.request_file);
                         const resF = fileOf(e.response_file);
                         const req = reqF && fs.existsSync(reqF) ? this.adoptScrubbed(reqF, e.session_id) : null;
@@ -761,10 +735,10 @@ class Daemon {
         }
         // Bodies with no index line (failed requests, older Claude Code versions)
         const now = Date.now();
-        for (const name of fs.readdirSync(P.bodies)) {
+        for (const name of fs.readdirSync(paths_1.P.bodies)) {
             if (!/\.(request|response)\.json$/.test(name))
                 continue;
-            const f = path.join(P.bodies, name);
+            const f = path.join(paths_1.P.bodies, name);
             let st;
             try {
                 st = fs.statSync(f);
@@ -783,16 +757,15 @@ class Daemon {
     verifyCached() {
         const now = Date.now();
         if (!this.verifiedAt || now - this.verifiedAt > 10_000) {
-            this.verified = verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault });
+            this.verified = (0, ledger_1.verify)({ ledgerPath: paths_1.P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: paths_1.P.blobs, vault: this.vault });
             this.verifiedAt = now;
         }
         return this.verified;
     }
     // ---- HTTP ----
-    listen(port = P.port, host = '127.0.0.1') {
+    listen(port = paths_1.P.port, host = '127.0.0.1') {
         const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
         const server = http.createServer((req, res) => {
-            /** @param {number} code @param {any} obj @param {string} [type] */
             const send = (code, obj, type = 'application/json') => {
                 res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
                 res.end(type === 'application/json' ? JSON.stringify(obj) : obj);
@@ -813,7 +786,6 @@ class Daemon {
             // admin token. With the recorder as a dedicated user, the agent can write
             // evidence but not read or erase it.
             const tok = String(req.headers['x-blackbox-token'] || '');
-            /** @param {string} a */
             const same = (a) => !!a && tok.length === a.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(a));
             const admin = same(this.adminToken);
             if (!admin && !same(this.token))
@@ -829,14 +801,14 @@ class Daemon {
                     return send(a.status, a.body);
                 if (url.pathname === '/health') {
                     const base = { ok: true, seq: this.ledger.seq, mode: this.cfg.mode, uid: typeof process.getuid === 'function' ? process.getuid() : null, encrypted: !!this.vault };
-                    return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: P.home, integrity: this.state.integrity || null } : base);
+                    return send(200, admin ? { ...base, head: this.ledger.head, pid: process.pid, home: paths_1.P.home, integrity: this.state.integrity || null } : base);
                 }
                 if (url.pathname === '/api/sessions') {
                     const list = [...this.sessions.values()].map(({ seqs, ...s }) => s).sort((a, b) => (a.last < b.last ? 1 : -1));
                     return send(200, { head: { seq: this.ledger.seq, hash: this.ledger.head }, sessions: list });
                 }
                 if (url.pathname === '/api/events') {
-                    const s = this.sessions.get(url.searchParams.get('session'));
+                    const s = this.sessions.get(url.searchParams.get('session') || '');
                     return send(s ? 200 : 404, s ? this.readRecords(s.seqs).map((r) => this.liteRecord(r)) : { error: 'unknown session' });
                 }
                 if (url.pathname === '/api/docs')
@@ -846,7 +818,7 @@ class Daemon {
                     return send(l ? 200 : 404, l ? { seq: l.seq, hash: l.hash, sig: l.sig, key_id: this.ledger.keys.keyId } : { error: 'ledger is empty' });
                 }
                 if (url.pathname === '/api/verify') {
-                    return send(200, verify({ ledgerPath: P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: P.blobs, vault: this.vault }));
+                    return send(200, (0, ledger_1.verify)({ ledgerPath: paths_1.P.ledger, pubPem: this.ledger.keys.pubPem, blobsDir: paths_1.P.blobs, vault: this.vault }));
                 }
                 if (url.pathname === '/api/payload') {
                     const r = this.payload(Number(url.searchParams.get('seq')));
@@ -856,7 +828,6 @@ class Daemon {
             }
             if (req.method !== 'POST')
                 return send(405, { error: 'method' });
-            /** @type {Buffer[]} */
             const chunks = [];
             let size = 0;
             req.on('data', (c) => { size += c.length; if (size > MAX_BODY)
@@ -912,8 +883,9 @@ class Daemon {
         });
     }
 }
+exports.Daemon = Daemon;
 async function runDaemon() {
-    ensureDirs();
+    (0, paths_1.ensureDirs)();
     const d = new Daemon();
     let server;
     try {
@@ -928,14 +900,14 @@ async function runDaemon() {
     }
     // Only the process that owns the port touches the ledger.
     d.start();
-    fs.writeFileSync(P.pid, String(process.pid));
-    d.log(`listening on 127.0.0.1:${P.port}, ledger seq ${d.ledger.seq}, mode ${d.cfg.mode}`);
+    fs.writeFileSync(paths_1.P.pid, String(process.pid));
+    d.log(`listening on 127.0.0.1:${paths_1.P.port}, ledger seq ${d.ledger.seq}, mode ${d.cfg.mode}`);
     const stop = () => {
         d.safe(() => d.pollBodies());
         d.safe(() => d.flushState());
         try {
-            if (fs.readFileSync(P.pid, 'utf8') === String(process.pid))
-                fs.unlinkSync(P.pid);
+            if (fs.readFileSync(paths_1.P.pid, 'utf8') === String(process.pid))
+                fs.unlinkSync(paths_1.P.pid);
         }
         catch { /* gone */ }
         server.close(() => process.exit(0));
@@ -944,4 +916,3 @@ async function runDaemon() {
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
 }
-module.exports = { Daemon, runDaemon, summarize };
