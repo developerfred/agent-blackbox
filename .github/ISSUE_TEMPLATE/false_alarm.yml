@@ -1,0 +1,21 @@
+name: False alarm
+description: The policy asked about or blocked something harmless
+labels: [false-alarm]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What was blocked or asked about
+      description: The tool call and the rule name shown in the prompt (no secrets, please).
+    validations: { required: true }
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it was harmless
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version and agent
+      placeholder: "agent-blackbox 0.3.0, Claude Code"
+    validations: { required: true }

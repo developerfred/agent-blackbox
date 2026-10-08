@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a bypass or a vulnerability
+    url: https://github.com/developerfred/agent-blackbox/security/advisories/new
+    about: A way past the policy, a ledger edit that verify misses, or a secret in the ledger. Please do not open a public issue.

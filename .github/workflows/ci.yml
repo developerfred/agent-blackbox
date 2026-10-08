@@ -4,10 +4,16 @@ on:
   pull_request:
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node: [18, 20, 22]
+        include:
+          # the recorder also runs on macOS (launchd, Homebrew paths)
+          - os: macos-latest
+            node: 22
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,10 +21,13 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm run build:check
-        if: matrix.node == 22
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'
       - run: npm test
       - run: npm run typecheck
-        if: matrix.node == 22
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'
+      # numbers only, no threshold yet: shows which modules the tests do not reach
+      - run: npm run coverage
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'
       # numbers only: shared runners are too noisy to fail a build on a budget
       - run: npm run bench
-        if: matrix.node == 22
+        if: matrix.node == 22 && matrix.os == 'ubuntu-latest'

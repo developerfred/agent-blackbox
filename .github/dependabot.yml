@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # dev dependencies only (typescript, @types/node): the package has no runtime dependencies
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      dev-dependencies: { dependency-type: development }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
