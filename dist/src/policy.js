@@ -1,11 +1,22 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.AGENT_DENY_MESSAGE = exports.Policy = exports.isMemoryDoc = void 0;
+exports.docKey = docKey;
+exports.normalizeCmd = normalizeCmd;
+exports.injectionIn = injectionIn;
+exports.hostsIn = hostsIn;
+exports.writtenBy = writtenBy;
+exports.stringsOf = stringsOf;
+exports.textOf = textOf;
+exports.inputText = inputText;
+exports.redact = redact;
 // "Lethal trifecta" policy: an agent session becomes dangerous when it has
 // (1) touched private data, (2) ingested untrusted content, and (3) tries to
 // send something out. Each condition alone is normal; together they are the
 // shape of a prompt-injection exfiltration.
-const crypto = require('crypto');
-const path = require('path');
-const { baseName, pushCapped } = require('./util');
+const crypto = require("crypto");
+const path = require("path");
+const util_1 = require("./util");
 const SENSITIVE_PATH = [
     /(^|[\/\s'"=@<])\.env(\.[\w-]+)?(\b|$)/i,
     /\.ssh\//, /\bid_(rsa|dsa|ecdsa|ed25519)\b/,
@@ -41,7 +52,6 @@ const CONTEXT_SECRETS = [
     { re: /\b(?:mnemonic|seed[ _-]?phrase|recovery[ _-]?phrase|secret recovery phrase)\b["']?\s*[:=]?\s*["']?((?:[a-z]{3,8}[ \t]+){11,23}[a-z]{3,8})\b/gi, phrase: true },
 ];
 const PHRASE_LENGTHS = [24, 21, 18, 15, 12];
-/** @param {string} p @returns {string | null} */
 const normPhrase = (p) => {
     const w = p.toLowerCase().split(/\s+/).filter(Boolean);
     const n = PHRASE_LENGTHS.find((l) => l <= w.length);
@@ -66,7 +76,6 @@ const DEV_TCP = /\/dev\/(tcp|udp)\//;
 // Commands that publish data to a service. They count as egress even toward
 // allowlisted hosts (a secret pasted into a public gist is still a leak): the
 // allowlist is for downloads, not uploads.
-/** @type {[RegExp, string][]} */
 const PUBLISH = [
     [/\bgit\s+push\b/, 'git push'],
     [/\bgh\s+gist\s+(?:create|new|edit)\b/, 'gh gist (publishes content)'],
@@ -93,7 +102,6 @@ const DYNAMIC_SOURCE = /\b(?:child_process|execSync|spawnSync|exec\(|spawn\(|sub
 // Files that tell an agent how to behave in LATER sessions: project instructions,
 // agent memory, editor rules, commands and skills. A session that read untrusted
 // content must not be able to plant text there: the next session would trust it.
-/** @type {RegExp[]} */
 const MEMORY_DOC = [
     /(^|\/)(?:AGENTS|CLAUDE|CLAUDE\.local|GEMINI|CONVENTIONS)\.md$/i,
     /(^|\/)\.claude\/(?:CLAUDE\.md|commands\/|agents\/|rules\/|memory\/|output-styles\/|skills\/)/,
@@ -102,18 +110,17 @@ const MEMORY_DOC = [
     /(^|\/)\.github\/(?:copilot-instructions\.md|instructions\/)/,
     /(^|\/)\.continue\/rules\//,
 ];
-/** @param {string} p */
 const isMemoryDoc = (p) => MEMORY_DOC.some((re) => re.test(String(p).replace(/\\/g, '/')));
+exports.isMemoryDoc = isMemoryDoc;
 // Files the agent loads on its own at the start of a session (no Read call involved).
 const AUTOLOADED = /(?:^|\/)(?:AGENTS|CLAUDE|CLAUDE\.local|GEMINI)\.md$|(?:^|\/)\.(?:cursorrules|windsurfrules|clinerules)$|(?:^|\/)\.github\/copilot-instructions\.md$/i;
 /**
  * A stable key for a file. Home folders collapse to ~ (the recorder may run as another
  * user, and a write seen as ~/x must match a read of /Users/me/x), relative paths resolve
  * against the session's folder.
- * @param {string} file @param {string} [cwd]
  */
 function docKey(file, cwd) {
-    const home = (/** @type {string} */ p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~').replace(/^\/root(?=\/|$)/, '~');
+    const home = (p) => p.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~').replace(/^\/root(?=\/|$)/, '~');
     let p = String(file).replace(/\\/g, '/');
     if (!p.startsWith('/') && !p.startsWith('~'))
         p = path.posix.join(home(String(cwd || '').replace(/\\/g, '/')), p);
@@ -121,11 +128,10 @@ function docKey(file, cwd) {
 }
 // A copy of a shell command with the usual obfuscations undone, so c''url,
 // "curl", \curl, cu$'r'l, $'\x63url' and curl${IFS}x all read as curl.
-/** @param {unknown} cmd @returns {string} */
 function normalizeCmd(cmd) {
     let s = String(cmd || '');
     s = s.replace(/\\\n/g, '');
-    s = s.replace(/\$'((?:[^'\\]|\\.)*)'/g, (m, /** @type {string} */ body) => body
+    s = s.replace(/\$'((?:[^'\\]|\\.)*)'/g, (_m, body) => body
         .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
         .replace(/\\([0-7]{1,3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)))
         .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
@@ -137,13 +143,11 @@ function normalizeCmd(cmd) {
     return s;
 }
 const HEREDOC_BODY = /<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g;
-/** @param {unknown} cmd @returns {string} */
 function stripHeredocs(cmd) {
     return String(cmd || '').replace(HEREDOC_BODY, (m) => m.split('\n')[0]);
 }
 // The command words only: heredoc bodies and quoted strings removed, so code
 // or text inside them is not read as commands, files or redirections.
-/** @param {unknown} cmd @returns {string} */
 function shellSkeleton(cmd) {
     let s = String(cmd || '');
     s = stripHeredocs(s);
@@ -151,9 +155,7 @@ function shellSkeleton(cmd) {
     return s;
 }
 // Glob tokens in a command (e.g. ~/.bl*box, .b?ackbox/*) as regexes.
-/** @param {unknown} cmd @returns {RegExp[]} */
 function globsIn(cmd) {
-    /** @type {RegExp[]} */
     const out = [];
     for (const tok of String(cmd).split(/[\s;&|()<>]+/)) {
         if (!/[*?[]/.test(tok))
@@ -195,7 +197,6 @@ const AGENT_WORD = /\b(?:ai|llm|assistants?|agents?|claude|copilot|chatgpt|gpt|c
 const NEGATED = /(?:\b(?:do not|don't|dont|never|must not|should not|shouldn't|avoid|without|no)\b|\bnot to\b)[^.\n]{0,40}$/i;
 const INVISIBLE_TAGS = /[\u{E0000}-\u{E007F}]{4,}/u;
 // Returns why the text looks like a prompt injection, or null.
-/** @param {unknown} text @returns {string | null} */
 function injectionIn(text) {
     const t = String(text || '').slice(0, 400_000);
     if (INVISIBLE_TAGS.test(t))
@@ -217,7 +218,6 @@ function injectionIn(text) {
 // A URL whose path or query holds a long opaque blob (base64, a slug without
 // words, a dump) can carry data out even toward an allowlisted host. Commit
 // ids and checksums are long but not data, and slugs have many hyphens.
-/** @param {string} text @returns {string | null} */
 function urlCarriesData(text) {
     for (const m of String(text).matchAll(/\bhttps?:\/\/[^\s'"`<>]+/gi)) {
         let u;
@@ -246,7 +246,6 @@ function urlCarriesData(text) {
 const FILE_READER_CMD = /\b(?:cat|head|tail|less|more|bat|sed|awk|grep|rg|ag|xxd|strings)\b/;
 // Commands that sign or broadcast a transaction, or move keys. A broadcast
 // cannot be undone, so these ask even outside the lethal trifecta (cfg.web3).
-/** @type {[RegExp, string][]} */
 const WEB3 = [
     [/\bcast\s+(?:send|publish|mktx|rpc\s+eth_send\w*)\b/, 'cast signs or broadcasts a transaction'],
     [/\bcast\s+wallet\s+sign\b/, 'cast signs a message with a wallet key'],
@@ -260,9 +259,7 @@ const WEB3 = [
 const WEB3_MCP_SERVER = /(?:wallet|web3|ethereum|evm|solana|crypto|chain|defi|safe|metamask|phantom|uniswap|bitcoin)/i;
 const WEB3_MCP_TOOL = /(?:sign|send|broadcast|transfer|swap|approve|deploy|withdraw|bridge|stake|mint|burn)/i;
 const MCP_OUTBOUND = /(send|post|create|write|upload|publish|email|mail|message|comment|reply|push|share|invite|request|fetch|http)/i;
-/** @param {string} text @returns {string[]} */
 function hostsIn(text) {
-    /** @type {string[]} */
     const hosts = [];
     const re = /\b(?:https?|wss?|ftp):\/\/(?:[^@\/\s'"`]+@)?([^\/\s'"`:?#]+)/gi;
     let m;
@@ -274,7 +271,6 @@ function hostsIn(text) {
     return hosts;
 }
 // Files edited in place by sed -i or perl -i (writtenBy covers redirects, tee, cp, mv).
-/** @param {string} cmd @returns {string[]} */
 function editedInPlace(cmd) {
     const n = normalizeCmd(shellSkeleton(cmd));
     if (!/\b(?:sed|perl)\s+(?:-[A-Za-z]*\s+)*-[A-Za-z]*i/.test(n))
@@ -282,7 +278,6 @@ function editedInPlace(cmd) {
     return n.split(/[\s;&|()<>]+/).filter((t) => t && !t.startsWith('-'));
 }
 // Paths a tool call writes (the ones the memory guard looks at).
-/** @param {string} tool @param {Record<string, any>} input @returns {string[]} */
 function writeTargets(tool, input) {
     // an adapter may send one call that touches several files (file_paths)
     if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool))
@@ -292,10 +287,8 @@ function writeTargets(tool, input) {
     return [];
 }
 // Files written or downloaded by a shell command (redirects, tee, curl -o).
-/** Files written or downloaded by a shell command.
- * @param {string} cmd @returns {string[]} */
+/** Files written or downloaded by a shell command. */
 function writtenBy(cmd) {
-    /** @type {string[]} */
     const out = [];
     const n = normalizeCmd(shellSkeleton(cmd));
     for (const re of [/(?:^|[^<>&\d])>{1,2}\s*([^\s;&|<>]+)/g, /\btee\s+(?:-a\s+)?([^\s;&|<>]+)/g, /\b(?:curl|wget)\b[^;&|]*?\s-(?:o|O|-output|-output-document)[\s=]+([^\s;&|<>]+)/g, /\b(?:cp|mv|install)\s+(?:-\w+\s+)*[^\s;&|]+\s+([^\s;&|<>]+)/g, /\bchmod\s+\+?[0-7]*x?\s+([^\s;&|<>]+)/g]) {
@@ -306,12 +299,10 @@ function writtenBy(cmd) {
     }
     return out;
 }
-/** @param {string} host @param {string[]} allow */
 const allowed = (host, allow) => allow.some((a) => host === a || host.endsWith('.' + a));
 // All string leaves of a value, one per line. Tool results arrive as nested
 // JSON (e.g. Read returns { file: { content } }); JSON.stringify would turn the
 // newlines inside them into "\\n" and hide KEY=value lines from the scanner.
-/** @param {unknown} v @param {string[]} [out] @param {{ left: number }} [budget] @returns {string[]} */
 function stringsOf(v, out = [], budget = { left: 2_000_000 }) {
     if (budget.left <= 0 || v == null)
         return out;
@@ -327,7 +318,6 @@ function stringsOf(v, out = [], budget = { left: 2_000_000 }) {
             stringsOf(x, out, budget);
     return out;
 }
-/** @param {unknown} v @param {number} [max] */
 function textOf(v, max = 2_000_000) {
     if (v == null)
         return '';
@@ -337,7 +327,6 @@ function textOf(v, max = 2_000_000) {
 // Only the fields that name a target (a path, a command, a URL). File
 // contents being written are not targets: a README that mentions ~/.env
 // must not look like an access to it.
-/** @param {Record<string, any> | undefined} toolInput */
 function inputText(toolInput) {
     if (!toolInput)
         return '';
@@ -348,23 +337,19 @@ function inputText(toolInput) {
 // Where each supported agent keeps the hooks that record it.
 const AGENT_HOOK_CONFIG = /(^|\/)(\.claude\/settings(\.local)?\.json|\.codex\/(hooks\.json|config\.toml)|\.cursor\/hooks\.json|\.gemini\/settings\.json)/;
 class Policy {
-    /**
-     * protect: extra paths (the real data folder) the agent may never touch.
-     * @param {import('./types').Config} cfg
-     * @param {import('./types').PolicyState} state
-     * @param {string | Buffer} salt
-     * @param {{ protect?: string[], readFile?: ((file: string, cwd?: string) => string | null) | null }} [opts]
-     */
+    cfg;
+    state;
+    salt;
+    protect;
+    readFile;
     constructor(cfg, state, salt, { protect = [], readFile = null } = {}) {
         this.cfg = cfg;
-        // readFile(path, cwd) -> text | null: lets the policy look inside a script
-        // that existed before the session before it is run
+        this.state = state;
+        this.salt = salt;
         this.readFile = readFile;
         this.protect = protect.filter(Boolean);
-        this.state = state; // { sessions: { id: { private, untrusted, secrets: [] } } }
-        this.salt = salt;
     }
-    /** Rules that ask: 'alert' (record and tell, no prompt) in monitor mode or when that rule is set to alert. @param {string | undefined} setting @returns {'ask' | 'alert'} */
+    /** Rules that ask: 'alert' (record and tell, no prompt) in monitor mode or when that rule is set to alert. */
     softDecision(setting) {
         return this.cfg.mode === 'monitor' || setting === 'alert' ? 'alert' : 'ask';
     }
@@ -372,10 +357,7 @@ class Policy {
     listDocs() {
         return Object.entries(this.state.docs || {}).map(([path, d]) => ({ path, ...d })).sort((a, b) => a.at.localeCompare(b.at));
     }
-    /**
-     * Remove the mark of one document (any spelling of its path), or of all of them when path is null.
-     * @param {string | null} file @returns {string[]} the keys removed
-     */
+    /** Remove the mark of one document (any spelling of its path), or of all of them when path is null. Returns the keys removed. */
     clearDocs(file) {
         const docs = this.state.docs || {};
         const keys = file == null ? Object.keys(docs) : [docKey(file)].filter((k) => k in docs);
@@ -383,15 +365,13 @@ class Policy {
             delete docs[k];
         return keys;
     }
-    /** Has the human declared this document reviewed (config trustedDocs: a path, or its tail)? @param {string} key */
+    /** Has the human declared this document reviewed (config trustedDocs: a path, or its tail)? */
     trustedDoc(key) {
         return (this.cfg.trustedDocs || []).some((t) => { const k = docKey(t); return key === k || key.endsWith('/' + k.replace(/^~?\//, '')); });
     }
     /**
      * Documents a past tainted session wrote that this session loads at its start:
      * the agent reads them without a tool call, so the session begins untrusted.
-     * @param {import('./types').HookEvent} ev
-     * @returns {{ taints: { flag: string, why: string }[], secretsSeen: number }}
      */
     sessionStart(ev) {
         const sess = this.session(ev.session_id);
@@ -410,21 +390,17 @@ class Policy {
         sess.untrusted = { why, at: new Date().toISOString() };
         return { taints: [{ flag: 'untrusted', why }], secretsSeen: 0 };
     }
-    /**
-     * If this tool call reads a document a tainted session wrote, why that is untrusted (else null).
-     * @param {string} tool @param {Record<string, any>} input @param {import('./types').SessionState} sess
-     */
+    /** If this tool call reads a document a tainted session wrote, why that is untrusted (else null). */
     poisonedDocRead(tool, input, sess) {
         const docs = this.state.docs;
         if (!docs)
             return null;
-        /** @type {string[]} */
         let files = [];
         if (tool === 'Read' || tool === 'NotebookRead')
             files = [input.file_path || input.notebook_path || ''];
         else if ((tool === 'Bash' || tool === 'PowerShell') && FILE_READER_CMD.test(input.command || ''))
             files = normalizeCmd(shellSkeleton(input.command)).split(/[\s;&|()<>]+/);
-        for (const f of files.filter((x) => x && isMemoryDoc(x))) {
+        for (const f of files.filter((x) => x && (0, exports.isMemoryDoc)(x))) {
             const key = docKey(f, sess.cwd);
             const d = docs[key];
             if (d && !this.trustedDoc(key))
@@ -432,7 +408,6 @@ class Policy {
         }
         return null;
     }
-    /** @param {string} id @returns {import('./types').SessionState} */
     session(id) {
         const s = (this.state.sessions[id] ||= { private: null, untrusted: null, secrets: [], secretLens: [], written: [], netFiles: [] });
         s.secrets ||= [];
@@ -442,11 +417,9 @@ class Policy {
         s.netFiles ||= []; // ...of which contain network code
         return s;
     }
-    /** @param {string} value */
     mac(value) {
         return crypto.createHmac('sha256', this.salt).update(value).digest('hex').slice(0, 32);
     }
-    /** @param {string} text @returns {string[]} */
     extractSecrets(text) {
         const found = new Set();
         for (const re of SECRET_PATTERNS)
@@ -464,13 +437,11 @@ class Policy {
         return [...found];
     }
     // Runs of ordinary words that contain a known mnemonic, as [start, end, phrase].
-    /** @param {import('./types').SessionState | null | undefined} sess @param {string} text @returns {[number, number, string][]} */
     phraseHits(sess, text) {
         const lens = (sess && sess.phraseLens) || [];
         if (!sess || !lens.length || !text)
             return [];
         const known = new Set(sess.secrets);
-        /** @type {[number, number, string][]} */
         const hits = [];
         for (const run of text.matchAll(/[A-Za-z]{3,8}(?:[ \t]+[A-Za-z]{3,8}){11,}/g)) {
             const words = [...run[0].matchAll(/[A-Za-z]+/g)];
@@ -486,10 +457,8 @@ class Policy {
     }
     // Short public id for a secret: lets the ledger say "secret a91f… was read
     // at #5 and tried to leave at #12" without ever storing the secret.
-    /** @param {string} value */
     fingerprint(value) { return this.mac(value).slice(0, 12); }
     // Returns the fingerprint of the first known secret found in text, or null.
-    /** @param {import('./types').SessionState} sess @param {string} text @returns {string | null} */
     containsKnownSecret(sess, text) {
         if (!sess.secrets.length || !text)
             return null;
@@ -511,7 +480,6 @@ class Policy {
     // Is this token a secret the session already learned? An HMAC per token is
     // the cost of scanning text, so tokens whose length no known secret has are
     // skipped (secretLens is a superset of the lengths, never a subset).
-    /** @param {import('./types').SessionState} sess @returns {(t: string) => boolean} */
     knownMatcher(sess) {
         const known = new Set(sess.secrets);
         const lens = sess.secretLens ? new Set(sess.secretLens) : null;
@@ -520,7 +488,6 @@ class Policy {
     // Replace secrets with [secret:<fingerprint>] before anything is written to
     // disk: pattern matches, KEY=value lines, private key blocks, and any value
     // this session already learned is a secret.
-    /** @param {string} text @param {import('./types').SessionState | null | undefined} sess */
     scrubText(text, sess) {
         let out = text.replace(PRIVATE_KEY_FULL, (m) => `[private-key:${this.fingerprint(m)}]`);
         for (const re of SECRET_PATTERNS)
@@ -536,7 +503,7 @@ class Policy {
             for (const [a, b, ph] of hits.sort((x, y) => y[0] - x[0]))
                 out = out.slice(0, a) + `[secret:${this.fingerprint(ph)}]` + out.slice(b);
         }
-        out = out.replace(ENV_SECRET_LINE, (m, k, v) => (v.startsWith('[secret:') || v.startsWith('[private-key:') ? m : m.replace(v, `[secret:${this.fingerprint(v)}]`)));
+        out = out.replace(ENV_SECRET_LINE, (m, _k, v) => (v.startsWith('[secret:') || v.startsWith('[private-key:') ? m : m.replace(v, `[secret:${this.fingerprint(v)}]`)));
         if (sess && sess.secrets && sess.secrets.length) {
             const hit = this.knownMatcher(sess);
             out = out.replace(TOKEN, (tok) => {
@@ -550,10 +517,8 @@ class Policy {
         return out;
     }
     // Deep copy of any JSON value with every string scrubbed.
-    /** @param {any} value @param {string} [sessionId] @returns {any} */
     scrub(value, sessionId) {
         const sess = sessionId ? this.state.sessions[sessionId] : null;
-        /** @param {any} v @returns {any} */
         const walk = (v) => {
             if (typeof v === 'string')
                 return this.scrubText(v, sess);
@@ -569,7 +534,6 @@ class Policy {
     // for this session (least privilege that follows the user's request, after
     // Progent, arXiv:2504.11703). Pasted text and turns Claude Code starts on its
     // own are not the human's intent, so they never widen the list.
-    /** @param {import('./types').HookEvent} ev @returns {string[]} */
     userPrompt(ev) {
         const sess = this.session(ev.session_id);
         let text = String(ev.prompt || '');
@@ -588,18 +552,11 @@ class Policy {
         sess.intentHosts = [...new Set([...(sess.intentHosts || []), ...found])].slice(-200);
         return found;
     }
-    /** @param {string | undefined} tool @returns {string | null} */
     mcpServer(tool) {
         const m = /^mcp__(.+?)__/.exec(tool || '');
         return m ? m[1] : null;
     }
-    /**
-     * Is this tool call an attempt to send data out of the machine?
-     * @param {string} tool
-     * @param {Record<string, any>} input
-     * @param {import('./types').SessionState} [sess]
-     * @returns {import('./types').Egress}
-     */
+    /** Is this tool call an attempt to send data out of the machine? */
     egress(tool, input, sess) {
         const allow = this.cfg.allowHosts;
         const sessIntent = (sess && sess.intentHosts) || [];
@@ -609,7 +566,6 @@ class Policy {
             // heredoc is fed to an interpreter (bash <<EOF … EOF runs it).
             const raw = HEREDOC_CODE.test(full) ? full : stripHeredocs(full);
             const cmd = normalizeCmd(raw);
-            /** @param {RegExp} re */
             const both = (re) => re.test(raw) || re.test(cmd);
             const hosts = [...new Set([...hostsIn(raw), ...hostsIn(cmd)])];
             const external = hosts.filter((h) => !allowed(h, allow));
@@ -672,13 +628,10 @@ class Policy {
     // the agent wrote or downloaded this session, inline interpreter code, and
     // (once the agent has written files) test runners and package scripts.
     // Writing a script first must not be a way around the network rules.
-    /** @param {string} raw @param {string} cmd @param {import('./types').SessionState} [sess] @returns {{ net: boolean, why: string } | null} */
     runsCode(raw, cmd, sess) {
         const written = (sess && sess.written) || [];
         const netFiles = (sess && sess.netFiles) || [];
-        /** @param {string} f */
-        const base = (f) => baseName(f.replace(/^~\//, ''), f);
-        /** @param {string} arg @param {string[]} list */
+        const base = (f) => (0, util_1.baseName)(f.replace(/^~\//, ''), f);
         const match = (arg, list) => list.find((w) => w === arg || base(w) === base(arg) || w.endsWith('/' + arg.replace(/^\.\//, '')));
         const targets = [];
         const sk = normalizeCmd(shellSkeleton(raw));
@@ -717,21 +670,16 @@ class Policy {
         return null;
     }
     // Is this target the evidence store? Normalized, with globs expanded.
-    /** @param {string} text */
     touchesEvidence(text) {
         const n = normalizeCmd(text);
-        const names = ['.blackbox', ...this.protect.map((p) => baseName(p))];
+        const names = ['.blackbox', ...this.protect.map((p) => (0, util_1.baseName)(p))];
         if (/\.blackbox(\/|\b)/.test(text) || /\.blackbox(\/|\b)/.test(n))
             return true;
         if (this.protect.some((p) => text.includes(p) || n.includes(p)))
             return true;
         return globsIn(n).some((re) => names.some((name) => re.test(name)));
     }
-    /**
-     * PreToolUse: decide. Null means no opinion.
-     * @param {import('./types').HookEvent} ev
-     * @returns {import('./types').PolicyDecision | null}
-     */
+    /** PreToolUse: decide. Null means no opinion. */
     preToolUse(ev) {
         const tool = ev.tool_name || '';
         const input = ev.tool_input || {};
@@ -749,7 +697,7 @@ class Policy {
         }
         // 1c. A session that read untrusted content must not plant text in files later sessions trust.
         if (sess.untrusted && this.cfg.memoryWrites !== 'off') {
-            const doc = writeTargets(tool, input).find(isMemoryDoc);
+            const doc = writeTargets(tool, input).find(exports.isMemoryDoc);
             if (doc) {
                 return { decision: this.softDecision(this.cfg.memoryWrites), rule: 'memory-write', reason: `This session read untrusted content (${sess.untrusted.why}) and now wants to change ${doc}, a file later sessions will trust as instructions.` };
             }
@@ -757,7 +705,6 @@ class Policy {
         const out = this.egress(tool, input, sess);
         const secretOut = this.containsKnownSecret(sess, stringsOf(input).join('\n'));
         const readsSensitive = SENSITIVE_PATH.some((re) => re.test(text));
-        /** @param {string} rule @param {string} reason @param {{ secret?: string }} [extra] @returns {import('./types').PolicyDecision} */
         const deny = (rule, reason, extra = {}) => {
             // A denial teaches an attacker what is protected. Record it, and make
             // every later outbound call in this session ask (counterfactual edge,
@@ -807,7 +754,6 @@ class Policy {
         return null;
     }
     // PostToolUse: update the session's taint. Returns a list of new taints.
-    /** @param {import('./types').HookEvent} ev */
     postToolUse(ev) {
         const tool = ev.tool_name || '';
         const input = ev.tool_input || {};
@@ -858,16 +804,15 @@ class Policy {
             taints.push({ flag: 'private', why: priv });
         }
         // remember what the agent wrote, so running it later is not a blind spot
-        /** @type {string[]} */
         const wrote = [];
         if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(tool))
             wrote.push(input.file_path || input.notebook_path || '');
         if (tool === 'Bash' || tool === 'PowerShell')
             wrote.push(...writtenBy(input.command || ''));
-        const body = [input.content, input.new_string, input.new_source, ...((input.edits || []).map((/** @type {{ new_string?: string }} */ e) => e.new_string)), tool === 'Bash' ? input.command : null].filter((x) => typeof x === 'string').join('\n');
+        const body = [input.content, input.new_string, input.new_source, ...((input.edits || []).map((e) => e.new_string)), tool === 'Bash' ? input.command : null].filter((x) => typeof x === 'string').join('\n');
         // a session that had read untrusted content wrote text a later session will trust
         if (sess.untrusted) {
-            for (const f of writeTargets(tool, input).filter(isMemoryDoc)) {
+            for (const f of writeTargets(tool, input).filter(exports.isMemoryDoc)) {
                 const docs = (this.state.docs ||= {});
                 docs[docKey(f, sess.cwd)] = { session: ev.session_id, at: new Date().toISOString(), why: sess.untrusted.why };
                 const keys = Object.keys(docs);
@@ -884,9 +829,9 @@ class Policy {
             }
         }
         for (const f of wrote.filter(Boolean)) {
-            sess.written = pushCapped(sess.written, f);
+            sess.written = (0, util_1.pushCapped)(sess.written, f);
             if (NET_SOURCE.test(body) || DYNAMIC_SOURCE.test(body) || /\b(?:curl|wget)\b[^;&|]*\s-(?:o|O)\b/.test(input.command || ''))
-                sess.netFiles = pushCapped(sess.netFiles, f);
+                sess.netFiles = (0, util_1.pushCapped)(sess.netFiles, f);
         }
         if (secrets.length) {
             const set = new Set(sess.secrets);
@@ -904,22 +849,21 @@ class Policy {
         return { taints, secretsSeen: secrets.length };
     }
 }
+exports.Policy = Policy;
 // What the agent itself is told when a call is denied: no rule name, no
 // fingerprint, no hint about what was detected (see Causality Laundering).
-const AGENT_DENY_MESSAGE = 'Blocked by the local security policy. Do not retry or work around this; tell the user what you were trying to do and let them decide.';
+exports.AGENT_DENY_MESSAGE = 'Blocked by the local security policy. Do not retry or work around this; tell the user what you were trying to do and let them decide.';
 // Mask secret-looking values so the human-readable ledger never holds them.
 // Full payloads still live in the blob store (mode 0600) as the evidence.
-/** @param {unknown} text @returns {string} */
 function redact(text) {
     let out = String(text == null ? '' : text);
     for (const re of SECRET_PATTERNS)
         out = out.replace(re, (m) => m.slice(0, 6) + '…[redacted]');
     for (const { re } of CONTEXT_SECRETS)
         out = out.replace(re, (m, v) => m.replace(v, '[redacted]'));
-    out = out.replace(ENV_SECRET_LINE, (m, k, v) => m.replace(v, '[redacted]'));
+    out = out.replace(ENV_SECRET_LINE, (m, _k, v) => m.replace(v, '[redacted]'));
     out = out.replace(/\b([A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["'`]?)([^\s"'`#]{6,})/g, '$1[redacted]');
     // (?<!\[) keeps our own [secret:<fingerprint>] markers: the fingerprint is how a ledger line is tied to an event
     out = out.replace(/(?<!\[)((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*["']?)([^\s"'&]{4,})/gi, '$1[redacted]');
     return out;
 }
-module.exports = { Policy, injectionIn, isMemoryDoc, docKey, inputText, textOf, stringsOf, hostsIn, normalizeCmd, writtenBy, redact, AGENT_DENY_MESSAGE };
