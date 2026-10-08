@@ -1,26 +1,51 @@
 #!/usr/bin/env node
-'use strict';
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { spawn } = require('child_process');
-const { P, ensureDirs, cliToken, loadConfig, saveConfig } = require('../src/paths');
-const { verify, GENESIS } = require('../src/ledger');
-const { readJsonl } = require('../src/util');
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const child_process_1 = require("child_process");
+const paths_1 = require("../src/paths");
+const ledger_1 = require("../src/ledger");
+const util_1 = require("../src/util");
+const run_1 = require("../eval/run");
+const agent_api_1 = require("../src/agent-api");
+const install_1 = require("../src/install");
+const integrity_1 = require("../src/integrity");
+const mcp_1 = require("../src/mcp");
+const merkle_1 = require("../src/merkle");
+const otel_genai_1 = require("../src/otel-genai");
+const scan_1 = require("../src/scan");
+const skills_1 = require("../src/skills");
+const adapters = require("../src/adapters");
+const brief = require("../src/brief");
+const daemon = require("../src/daemon");
+const harden = require("../src/harden");
+const install = require("../src/install");
+const installAgent = require("../src/install-agent");
+const localHttp = require("../src/local-http");
+const mcp = require("../src/mcp");
+const mcpReport = require("../src/mcp-report");
+const mcpServer = require("../src/mcp-server");
+const paths = require("../src/paths");
+const scanHtml = require("../src/scan-html");
+const share = require("../src/share");
+const skills = require("../src/skills");
+const skillsReport = require("../src/skills-report");
+const term = require("../src/term");
+const util = require("../src/util");
+const vault = require("../src/vault");
 const tty = process.stdout.isTTY;
-const { red, green, yellow, dim, bold, cyan } = require('../src/term').palette(!!tty);
+const { red, green, yellow, dim, bold, cyan } = term.palette(!!tty);
 // admin: this call reads, verifies or erases, so it needs the admin token
-/** @param {string} method @param {string} p @param {any} [body] @param {boolean} [admin] */
 function call(method, p, body, admin = true) {
-    const token = cliToken(admin);
-    return require('../src/local-http').request({ port: P.port, method, path: p, token, body });
+    const token = (0, paths_1.cliToken)(admin);
+    return localHttp.request({ port: paths_1.P.port, method, path: p, token, body });
 }
 const health = () => call('GET', '/health', null, false).then((r) => (r.status === 200 ? r.body : null)).catch(() => null);
-/** @param {number} ms */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** @param {{ quiet?: boolean }} [opts] */
 async function start({ quiet } = {}) {
-    ensureDirs();
+    (0, paths_1.ensureDirs)();
     const h = await health();
     if (!h && remote()) {
         console.error(red('the recorder runs as its own user and is not answering; restart the service (systemctl restart agent-blackbox, or launchctl kickstart -k system/dev.agent-blackbox.recorder)'));
@@ -31,24 +56,24 @@ async function start({ quiet } = {}) {
             console.log(`${green('●')} already running (pid ${h.pid}, ledger #${h.seq}, mode ${h.mode})`);
         return h;
     }
-    const log = fs.openSync(P.log, 'a');
-    spawn(process.execPath, [__filename, 'daemon'], { detached: true, stdio: ['ignore', log, log] }).unref();
+    const log = fs.openSync(paths_1.P.log, 'a');
+    (0, child_process_1.spawn)(process.execPath, [__filename, 'daemon'], { detached: true, stdio: ['ignore', log, log] }).unref();
     for (let i = 0; i < 40; i++) {
         await sleep(100);
         const ok = await health();
         if (ok) {
             if (!quiet)
-                console.log(`${green('●')} recorder started (pid ${ok.pid}) · http://127.0.0.1:${P.port}`);
+                console.log(`${green('●')} recorder started (pid ${ok.pid}) · http://127.0.0.1:${paths_1.P.port}`);
             return ok;
         }
     }
-    console.error(red(`daemon did not start; see ${P.log}`));
+    console.error(red(`daemon did not start; see ${paths_1.P.log}`));
     process.exit(1);
 }
 async function stop() {
     let pid;
     try {
-        pid = Number(fs.readFileSync(P.pid, 'utf8'));
+        pid = Number(fs.readFileSync(paths_1.P.pid, 'utf8'));
     }
     catch { /* none */ }
     if (!pid) {
@@ -63,8 +88,8 @@ async function stop() {
         await sleep(100);
     console.log('stopped');
 }
-const readLedger = () => readJsonl(P.ledger);
-const remote = () => !!loadConfig().remoteDaemon;
+const readLedger = () => (0, util_1.readJsonl)(paths_1.P.ledger);
+const remote = () => !!(0, paths_1.loadConfig)().remoteDaemon;
 // Records for sessions/timeline/anchor. With the recorder as its own user the
 // ledger file is not ours to read, so ask the daemon (admin token via sudo).
 async function readRecords() {
@@ -72,7 +97,7 @@ async function readRecords() {
         return readLedger();
     const s = await call('GET', '/api/sessions');
     if (s.status !== 200)
-        throw new Error(`the recorder refused (${s.status}); is sudo available for ${loadConfig().recorderUser}?`);
+        throw new Error(`the recorder refused (${s.status}); is sudo available for ${(0, paths_1.loadConfig)().recorderUser}?`);
     const recs = [];
     for (const x of s.body.sessions) {
         const e = await call('GET', `/api/events?session=${encodeURIComponent(x.id)}`);
@@ -81,7 +106,6 @@ async function readRecords() {
     }
     return recs.sort((a, b) => a.seq - b.seq);
 }
-/** @param {import('../src/types').LedgerRecord[]} recs */
 function sessionsOf(recs) {
     const m = new Map();
     for (const r of recs) {
@@ -102,9 +126,7 @@ function sessionsOf(recs) {
     }
     return [...m.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
 }
-/** @param {string | number | Date} ts */
 const time = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
-/** @param {import('../src/types').LedgerRecord[]} recs @param {string} id @param {{ otel?: boolean }} [opts] */
 function printTimeline(recs, id, { otel = false } = {}) {
     const rows = recs.filter((r) => r.session_id === id && (otel || r.kind !== 'otel'));
     if (!rows.length) {
@@ -137,18 +159,17 @@ function printTimeline(recs, id, { otel = false } = {}) {
 }
 // The local vault, if this machine holds the master key.
 function localVault() {
-    if (!fs.existsSync(path.join(P.keys, 'master.key')) && !process.env.BLACKBOX_MASTER_KEY)
+    if (!fs.existsSync(path.join(paths_1.P.keys, 'master.key')) && !process.env.BLACKBOX_MASTER_KEY)
         return null;
     try {
-        return new (require('../src/vault').Vault)({ keysDir: P.keys });
+        return new (vault.Vault)({ keysDir: paths_1.P.keys });
     }
     catch {
         return null;
     }
 }
-/** @param {any} r a verify result */
 function report(r) {
-    if (r.ok) {
+    if (r.ok && r.head) {
         console.log(`${green('✔ chain intact')} · ${r.records} records · ${r.sessions} session${r.sessions === 1 ? '' : 's'} · head #${r.head.seq} ${r.head.hash.slice(0, 16)}…`);
     }
     else {
@@ -171,9 +192,7 @@ async function demo() {
     const sid = `demo-${Date.now().toString(36)}`;
     const key = 'sk-demo-' + 'Q7f3kLm9Xz2Rw8Vt5Np1Hc6Jd4';
     let n = 0;
-    /** @param {Record<string, any>} ev */
     const hook = async (ev) => (await call('POST', '/hook', { session_id: sid, cwd: '/tmp/demo-repo', ...ev }, false)).body.stdout;
-    /** @param {string} tool_name @param {Record<string, any>} tool_input @param {any} [tool_response] */
     const tool = async (tool_name, tool_input, tool_response) => {
         const id = `toolu_demo_${++n}`;
         const out = await hook({ hook_event_name: 'PreToolUse', tool_name, tool_input, tool_use_id: id });
@@ -203,14 +222,14 @@ async function demo() {
     await tool('Bash', { command: 'npm test' }, 'ok');
     await tool('Bash', { command: 'curl -sL https://registry.npmjs.org/left-pad' }, '{}');
     await hook({ hook_event_name: 'SessionEnd', reason: 'other' });
-    console.log(`\n  timeline: ${cyan(`blackbox timeline ${sid}`)}   ui: ${cyan(`http://127.0.0.1:${P.port}/`)}`);
+    console.log(`\n  timeline: ${cyan(`blackbox timeline ${sid}`)}   ui: ${cyan(`http://127.0.0.1:${paths_1.P.port}/`)}`);
     return sid;
 }
 // Show that editing one byte of history is detected (works on a copy).
 function tamperDemo() {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blackbox-tamper-'));
     const copy = path.join(tmp, 'ledger.jsonl');
-    const lines = fs.readFileSync(P.ledger, 'utf8').split('\n').filter(Boolean);
+    const lines = fs.readFileSync(paths_1.P.ledger, 'utf8').split('\n').filter(Boolean);
     const i = lines.findIndex((l) => l.includes('"kind":"decision"'));
     const target = i >= 0 ? i : Math.floor(lines.length / 2);
     const rec = JSON.parse(lines[target]);
@@ -223,47 +242,41 @@ function tamperDemo() {
     fs.writeFileSync(copy, lines.join('\n') + '\n');
     console.log(bold('\nTamper test on a copy of the ledger'));
     console.log(`  record #${rec.seq}: changed "${before}" → "${rec.decision || rec.summary}"`);
-    report(verify({ ledgerPath: copy, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs }));
+    report((0, ledger_1.verify)({ ledgerPath: copy, pubPem: fs.readFileSync(paths_1.P.pubKey, 'utf8'), blobsDir: paths_1.P.blobs }));
     lines.splice(target, 1);
     fs.writeFileSync(copy, lines.join('\n') + '\n');
     console.log(`  record #${rec.seq}: deleted instead`);
-    report(verify({ ledgerPath: copy, pubPem: fs.readFileSync(P.pubKey, 'utf8'), blobsDir: P.blobs }));
+    report((0, ledger_1.verify)({ ledgerPath: copy, pubPem: fs.readFileSync(paths_1.P.pubKey, 'utf8'), blobsDir: paths_1.P.blobs }));
     fs.rmSync(tmp, { recursive: true, force: true });
 }
-/** @type {import('../src/types').Mode[]} */
 const MODES = ['ask', 'deny', 'monitor'];
-/** @param {string} m @returns {import('../src/types').Mode} */
+const isMode = (m) => MODES.some((x) => x === m);
 function parseMode(m) {
-    const mode = MODES.find((x) => x === m);
-    if (!mode)
+    if (!isMode(m))
         throw new Error('mode must be ask, deny or monitor');
-    return mode;
+    return m;
 }
 // One scan of past sessions with the skill and MCP audits attached (both optional).
-/** @param {(f: string) => string | undefined} opt @param {string} [badDays] */
 async function scanSummary(opt, badDays = '--days must be a positive number') {
-    const { scanParallel, defaultProjectsDir } = require('../src/scan');
     const days = Number(opt('--days') || 30);
     const jobs = opt('--jobs') == null ? undefined : Number(opt('--jobs'));
     if (jobs !== undefined && !(jobs >= 1))
         throw new Error('--jobs must be a positive number');
     if (!(days > 0))
         throw new Error(badDays);
-    /** @template T @param {() => T} fn @returns {T | null} */
     const optional = (fn) => { try {
         return fn();
     }
     catch {
         return null;
     } };
-    const audits = optional(() => require('../src/skills').auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') }));
-    const mcpAudits = optional(() => require('../src/mcp').auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') }));
-    return { days, summary: await scanParallel({ projectsDir: opt('--path') || defaultProjectsDir(), days, audits, mcpAudits, jobs }) };
+    const audits = optional(() => skills.auditAll({ pinsFile: path.join(paths_1.P.home, 'skill-pins.json') }));
+    const mcpAudits = optional(() => mcp.auditServers({ pinsFile: path.join(paths_1.P.home, 'mcp-pins.json') }));
+    return { days, summary: await (0, scan_1.scanParallel)({ projectsDir: opt('--path') || (0, scan_1.defaultProjectsDir)(), days, audits, mcpAudits, jobs }) };
 }
 // Reports and kits are never written into Claude Code's own data directory.
-/** @param {string} out */
 function assertOutsideClaudeDir(out) {
-    const dir = path.resolve(require('../src/util').claudeDir());
+    const dir = path.resolve(util.claudeDir());
     if (out === dir || out.startsWith(dir + path.sep))
         throw new Error(`refusing to write under ${dir}`);
     return out;
@@ -323,33 +336,30 @@ const HELP = `agent-blackbox · a flight recorder for AI coding agents
   blackbox scan [--days N] [--json] [--details] [--card out.svg] [--html [file]] [--path dir] [--jobs N]
                               audit past Claude Code sessions offline (no install, nothing uploaded)
 
-data: ${P.home}`;
+data: ${paths_1.P.home}`;
 async function main() {
     const [cmd, ...args] = process.argv.slice(2);
-    /** @param {string} f */
     const flag = (f) => args.includes(f);
-    /** @param {string} f */
     const opt = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
     switch (cmd) {
-        case 'daemon': return require('../src/daemon').runDaemon();
+        case 'daemon': return daemon.runDaemon();
         case 'serve-mcp': {
             // stdout is the protocol channel: no banners. The ingest token reads the public tier only.
-            require('../src/mcp-server').serve({ admin: flag('--admin'), port: P.port, token: flag('--admin') ? cliToken(true) : require('../src/paths').readToken() });
+            mcpServer.serve({ admin: flag('--admin'), port: paths_1.P.port, token: flag('--admin') ? (0, paths_1.cliToken)(true) : paths.readToken() });
             return;
         }
         case 'start': return start();
         case 'stop': return stop();
         case 'status': {
             const h = await health();
-            const cfg = loadConfig();
-            const { checkHooks } = require('../src/integrity');
-            const ig = checkHooks({ expected: require('../src/install').HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
+            const cfg = (0, paths_1.loadConfig)();
+            const ig = (0, integrity_1.checkHooks)({ expected: install.HOOK_EVENTS, installedVia: cfg.installed?.hooks === true ? 'settings' : null, wasVia: h && h.integrity ? h.integrity.via : null });
             if (flag('--json')) {
-                console.log(JSON.stringify({ schema: 'blackbox.cli/v1', recording: !!h, ledger_seq: h ? h.seq : null, mode: h ? h.mode : cfg.mode, encrypted: h ? !!h.encrypted : cfg.encrypt !== false, hooks: { via: ig.via || null, problems: ig.problems }, data: cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home }, null, 2));
+                console.log(JSON.stringify({ schema: 'blackbox.cli/v1', recording: !!h, ledger_seq: h ? h.seq : null, mode: h ? h.mode : cfg.mode, encrypted: h ? !!h.encrypted : cfg.encrypt !== false, hooks: { via: ig.via || null, problems: ig.problems }, data: cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : paths_1.P.home }, null, 2));
                 return;
             }
             console.log(h ? `${green('●')} recording${h.pid ? ` · pid ${h.pid}` : ''} · ledger #${h.seq} · mode ${h.mode}${h.uid != null && process.getuid && h.uid !== process.getuid() ? dim(` · own user (uid ${h.uid})`) : ''}` : `${red('●')} not running`);
-            console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : P.home}`);
+            console.log(`  hooks: ${ig.via ? `via ${ig.via}` : 'not installed'}   encryption: ${h ? (h.encrypted ? 'on (per-session keys)' : 'off') : cfg.encrypt === false ? 'off' : 'on'}   data: ${cfg.remoteDaemon && cfg.recorderHome ? cfg.recorderHome : paths_1.P.home}`);
             for (const p of ig.problems)
                 console.log(red(`  ✘ ${p}`));
             return;
@@ -360,46 +370,46 @@ async function main() {
                 parseMode(mode);
             const agent = opt('--agent') || 'claude';
             if (agent !== 'claude') {
-                console.log(bold(`Installing agent-blackbox into ${require('../src/adapters').getAdapter(agent).name}`));
-                require('../src/install-agent').installAgent(agent, { mode: mode ? parseMode(mode) : undefined });
+                console.log(bold(`Installing agent-blackbox into ${adapters.getAdapter(agent).name}`));
+                installAgent.installAgent(agent, { mode: mode ? parseMode(mode) : undefined });
                 if (flag('--fail-closed'))
-                    saveConfig({ ...loadConfig(), failMode: 'closed' });
+                    (0, paths_1.saveConfig)({ ...(0, paths_1.loadConfig)(), failMode: 'closed' });
                 await stop().catch(() => { });
                 await start();
-                console.log(`\n  Start a new ${agent} session. Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
+                console.log(`\n  Start a new ${agent} session. Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${paths_1.P.port}/`)}`);
                 return;
             }
             console.log(bold('Installing agent-blackbox into Claude Code'));
-            require('../src/install').install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
+            install.install({ mode: mode ? parseMode(mode) : undefined, raw: flag('--raw'), prompts: flag('--prompts'), force: flag('--force'), hooks: !flag('--telemetry-only') });
             if (flag('--fail-closed'))
-                saveConfig({ ...loadConfig(), failMode: 'closed' });
+                (0, paths_1.saveConfig)({ ...(0, paths_1.loadConfig)(), failMode: 'closed' });
             await stop().catch(() => { });
             await start();
-            const posture = loadConfig();
+            const posture = (0, paths_1.loadConfig)();
             console.log(`\n  ${posture.remoteDaemon ? green('●') : yellow('!')} keys and ledger: ${posture.remoteDaemon ? 'recorder runs as a dedicated user' : `readable by any process running as you; ${cyan('blackbox harden')} moves them out of reach`}`);
             console.log(`  ${posture.failMode === 'closed' ? green('●') : yellow('!')} if the recorder is down: tool calls ${posture.failMode === 'closed' ? 'are denied' : `still run; ${cyan('blackbox install --fail-closed')} denies them instead`}`);
             console.log(`\n  Start a new Claude Code session; it will say it is being recorded.`);
-            console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${P.port}/`)}`);
+            console.log(`  Then: ${cyan('blackbox timeline --last')}  or open ${cyan(`http://127.0.0.1:${paths_1.P.port}/`)}`);
             return;
         }
         case 'uninstall': {
             const agent = opt('--agent') || 'claude';
-            return agent === 'claude' ? require('../src/install').uninstall() : require('../src/install-agent').uninstallAgent(agent);
+            return agent === 'claude' ? install.uninstall() : installAgent.uninstallAgent(agent);
         }
         case 'mode': {
             const m = args[0];
-            if (!MODES.includes(/** @type {any} */ (m)))
+            if (!isMode(m))
                 throw new Error('usage: blackbox mode ask|deny|monitor');
             if (remote()) {
-                const c = loadConfig();
+                const c = (0, paths_1.loadConfig)();
                 console.log('The policy lives with the recorder, which runs as its own user, so only an admin can change it:');
                 console.log(`  sudo -u ${c.recorderUser} sh -c 'cd ${JSON.stringify(c.recorderHome)} && sed -i.bak "s/\"mode\": *\"[a-z]*\"/\"mode\": \"${m}\"/" config.json'`);
                 console.log('  then restart the service (systemctl restart agent-blackbox, or launchctl kickstart -k system/dev.agent-blackbox.recorder)');
                 return;
             }
-            const cfg = loadConfig();
-            cfg.mode = /** @type {import('../src/types').Mode} */ (m);
-            saveConfig(cfg);
+            const cfg = (0, paths_1.loadConfig)();
+            cfg.mode = m;
+            (0, paths_1.saveConfig)(cfg);
             if (await health()) {
                 await stop();
                 await start({ quiet: true });
@@ -438,8 +448,7 @@ async function main() {
             }
             if (flag('--json')) {
                 // metadata only, like the agent API: `blackbox show <seq>` is the way to a payload
-                const { compact } = require('../src/agent-api');
-                console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: id, records: recs.filter((r) => r.session_id === id && (flag('--otel') || r.kind !== 'otel')).map(compact) }, null, 2));
+                console.log(JSON.stringify({ schema: 'blackbox.cli/v1', session: id, records: recs.filter((r) => r.session_id === id && (flag('--otel') || r.kind !== 'otel')).map(agent_api_1.compact) }, null, 2));
                 return;
             }
             printTimeline(recs, id, { otel: flag('--otel') });
@@ -463,7 +472,7 @@ async function main() {
                     rows = e.body;
             }
             catch { /* daemon down: use the file */ }
-            const md = require('../src/brief').brief(rows, id);
+            const md = brief.brief(rows, id);
             if (!md) {
                 console.log(`no records for session ${id}`);
                 process.exitCode = 1;
@@ -484,9 +493,9 @@ async function main() {
                 process.exitCode = r.body.ok ? 0 : 1;
                 return;
             }
-            const ledgerPath = args.find((x) => !x.startsWith('-')) || P.ledger;
-            const pubPem = fs.existsSync(P.pubKey) ? fs.readFileSync(P.pubKey, 'utf8') : null;
-            const r = verify({ ledgerPath, pubPem, blobsDir: P.blobs, vault: flag('--chain-only') ? null : localVault() });
+            const ledgerPath = args.find((x) => !x.startsWith('-')) || paths_1.P.ledger;
+            const pubPem = fs.existsSync(paths_1.P.pubKey) ? fs.readFileSync(paths_1.P.pubKey, 'utf8') : null;
+            const r = (0, ledger_1.verify)({ ledgerPath, pubPem, blobsDir: paths_1.P.blobs, vault: flag('--chain-only') ? null : localVault() });
             if (flag('--json'))
                 console.log(JSON.stringify(r, null, 2));
             else
@@ -495,20 +504,19 @@ async function main() {
             return;
         }
         case 'anchor': {
-            const { merkleRoot, merkleProof, verifyProof } = require('../src/merkle');
             if (flag('--auto')) {
                 // opt-in: the recorder commits a batch now and then and publishes head and root to a target you name
                 if (remote()) {
-                    const c = loadConfig();
+                    const c = (0, paths_1.loadConfig)();
                     console.log(`The recorder runs as its own user, so set "anchor": { "file": "...", "webhook": "...", "every": 100, "minutes": 60 } in ${c.recorderHome}/config.json as an admin, then restart the service.`);
                     return;
                 }
-                const cfg = loadConfig();
+                const cfg = (0, paths_1.loadConfig)();
                 const file = opt('--file');
                 const webhook = opt('--webhook');
                 if (opt('--auto') === 'off' || args[args.indexOf('--auto') + 1] === 'off') {
                     delete cfg.anchor;
-                    saveConfig(cfg);
+                    (0, paths_1.saveConfig)(cfg);
                     if (await health()) {
                         await stop();
                         await start({ quiet: true });
@@ -525,7 +533,7 @@ async function main() {
                 if (webhook && !/^https?:\/\//.test(webhook))
                     throw new Error('--webhook must be an http(s) URL');
                 cfg.anchor = { file: file ? path.resolve(file) : undefined, webhook, every: opt('--every') ? Number(opt('--every')) : undefined, minutes: opt('--minutes') ? Number(opt('--minutes')) : undefined };
-                saveConfig(cfg);
+                (0, paths_1.saveConfig)(cfg);
                 if (await health()) {
                     await stop();
                     await start({ quiet: true });
@@ -544,7 +552,7 @@ async function main() {
                     return;
                 }
                 const a = { anchored_at: new Date().toISOString(), ...r.body };
-                fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+                fs.appendFileSync(paths_1.P.anchors, JSON.stringify(a) + '\n');
                 console.log(JSON.stringify(a, null, 2));
                 console.log(dim('\nPublish seq, hash and root somewhere the agent cannot edit. `blackbox anchor --prove <seq>` then proves one record is in the batch.'));
                 return;
@@ -558,8 +566,8 @@ async function main() {
                     process.exit(1);
                 }
                 const hs = recs.filter((r) => r.seq >= anchor.from && r.seq <= anchor.to).map((r) => r.hash);
-                const proof = { seq: n, hash: hs[n - anchor.from], index: n - anchor.from, size: hs.length, proof: merkleProof(hs, n - anchor.from), root: anchor.root, anchor_seq: anchor.seq };
-                if (merkleRoot(hs) !== anchor.root) {
+                const proof = { seq: n, hash: hs[n - anchor.from], index: n - anchor.from, size: hs.length, proof: (0, merkle_1.merkleProof)(hs, n - anchor.from), root: anchor.root, anchor_seq: anchor.seq };
+                if ((0, merkle_1.merkleRoot)(hs) !== anchor.root) {
                     console.error(red('the ledger does not match its own anchor record; run blackbox verify'));
                     process.exit(1);
                 }
@@ -569,7 +577,7 @@ async function main() {
             if (opt('--verify-proof')) {
                 // offline: no ledger needed, only the proof and the root you published
                 const p = JSON.parse(fs.readFileSync(String(opt('--verify-proof')), 'utf8'));
-                const ok = verifyProof(p);
+                const ok = (0, merkle_1.verifyProof)(p);
                 console.log(ok ? green(`record ${p.seq} is in the batch with root ${p.root}`) : red('proof does not match the root'));
                 process.exitCode = ok ? 0 : 1;
                 return;
@@ -592,21 +600,20 @@ async function main() {
                 }
                 a = { anchored_at: new Date().toISOString(), seq: last.seq, hash: last.hash, sig: last.sig, key_id: (recs[0] || {}).key_id };
             }
-            fs.appendFileSync(P.anchors, JSON.stringify(a) + '\n');
+            fs.appendFileSync(paths_1.P.anchors, JSON.stringify(a) + '\n');
             console.log(JSON.stringify(a, null, 2));
             console.log(dim('\nPublish this somewhere the agent cannot edit (a git commit, a gist, a transparency log).'));
             console.log(dim('Later, any rewrite of history before this point will no longer match it.'));
             return;
         }
         case 'export': {
-            const { toOtlpTraces, toOtlpLogs } = require('../src/otel-genai');
             const pkgFile = [path.join(__dirname, '..', 'package.json'), path.join(__dirname, '..', '..', 'package.json')].find((f) => fs.existsSync(f));
-            const version = (pkgFile && require('../src/util').readJson(pkgFile, {}).version) || '0';
+            const version = (pkgFile && util.readJson(pkgFile, {}).version) || '0';
             let recs = await readRecords();
             const sid = opt('--session');
             if (sid)
                 recs = recs.filter((r) => r.session_id === sid || r.kind === 'genesis');
-            const out = { traces: toOtlpTraces(recs, { version }), logs: toOtlpLogs(recs, { version }) };
+            const out = { traces: (0, otel_genai_1.toOtlpTraces)(recs, { version }), logs: (0, otel_genai_1.toOtlpLogs)(recs, { version }) };
             const endpoint = opt('--endpoint');
             if (endpoint) {
                 if (!/^https?:\/\//.test(endpoint)) {
@@ -659,16 +666,16 @@ async function main() {
             return;
         }
         case 'harden': {
-            const h = require('../src/harden');
+            const h = harden;
             if (flag('--check')) {
-                const legacyKeys = ['ed25519.key', 'master.key'].filter((f) => require('fs').existsSync(path.join(P.keys, f)));
-                const r = h.checkHardened(await health(), { cfg: loadConfig(), legacyKeys, hookScripts: require('../src/install').installedHookScripts() });
+                const legacyKeys = ['ed25519.key', 'master.key'].filter((f) => fs.existsSync(path.join(paths_1.P.keys, f)));
+                const r = h.checkHardened(await health(), { cfg: (0, paths_1.loadConfig)(), legacyKeys, hookScripts: install.installedHookScripts() });
                 for (const l of r.lines)
                     console.log(l.startsWith('✘') ? red(l) : l.startsWith('✔') ? green(l) : l.startsWith('!') ? yellow(l) : dim(l));
                 process.exitCode = r.ok ? 0 : 1;
                 return;
             }
-            const o = { user: opt('--user'), data: opt('--data'), code: opt('--code'), node: opt('--node'), port: P.port };
+            const o = { user: opt('--user'), data: opt('--data'), code: opt('--code'), node: opt('--node'), port: paths_1.P.port };
             const text = flag('--undo') ? h.undoScript(o) : h.hardenScript(o);
             const out = opt('--out');
             if (out) {
@@ -686,7 +693,7 @@ async function main() {
                 const r = await call('POST', '/docs/clear', flag('--clear-all') ? { all: true } : { path: path.resolve(target || '') });
                 if (r.status !== 200)
                     throw new Error(`the recorder refused (${r.status})`);
-                console.log(r.body.cleared.length ? r.body.cleared.map((/** @type {string} */ k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
+                console.log(r.body.cleared.length ? r.body.cleared.map((k) => `${green('cleared')} ${k}`).join('\n') : dim('no such mark'));
                 return;
             }
             const r = await call('GET', '/api/docs');
@@ -707,25 +714,22 @@ async function main() {
         }
         case 'managed-settings': {
             // hooks owned by an admin: print what to put in the managed settings file
-            const { managedSettingsPath, managedSettingsSnippet } = require('../src/integrity');
-            const { HOOK_EVENTS, hookCommand } = require('../src/install');
-            const command = hookCommand();
-            console.log(dim(`# Merge into ${managedSettingsPath()} (needs an admin account; on a managed fleet, push it with MDM).`));
+            const command = (0, install_1.hookCommand)();
+            console.log(dim(`# Merge into ${(0, integrity_1.managedSettingsPath)()} (needs an admin account; on a managed fleet, push it with MDM).`));
             console.log(dim('# Hooks defined there cannot be edited or removed from the user\'s own settings files.'));
-            console.log(JSON.stringify(managedSettingsSnippet({ command, events: HOOK_EVENTS }), null, 2));
+            console.log(JSON.stringify((0, integrity_1.managedSettingsSnippet)({ command, events: install_1.HOOK_EVENTS }), null, 2));
             return;
         }
         case 'eval': {
             // the policy against the evasion corpus: catch rate, false alarms, known gaps
-            const { runAll, runAgent } = require('../eval/run');
             const agentOpt = opt('--agent');
             if (agentOpt) {
                 // the same corpus, re-written in each agent's own hook format and decoded by its adapter
                 const ids = agentOpt === 'all' ? ['codex', 'cursor', 'gemini'] : [agentOpt];
                 for (const id of ids)
-                    require('../src/adapters').getAdapter(id);
+                    adapters.getAdapter(id);
                 const mode = parseMode(opt('--mode') || 'ask');
-                const runs = ids.map((id) => runAgent(id, mode));
+                const runs = ids.map((id) => (0, run_1.runAgent)(id, mode));
                 if (flag('--json')) {
                     console.log(JSON.stringify(runs.map(({ results, ...r }) => r), null, 2));
                     return;
@@ -745,7 +749,7 @@ async function main() {
                 process.exitCode = runs.every((r) => r.caught === r.attacks && !r.falseAlarms && !r.diverged.length) ? 0 : 1;
                 return;
             }
-            const r = runAll(parseMode(opt('--mode') || 'ask'));
+            const r = (0, run_1.runAll)(parseMode(opt('--mode') || 'ask'));
             if (flag('--json')) {
                 console.log(JSON.stringify(r, null, 2));
                 return;
@@ -766,33 +770,31 @@ async function main() {
         case 'ui': {
             await start({ quiet: true });
             // The token travels in the URL fragment, which the browser never sends to a server.
-            const url = `http://127.0.0.1:${P.port}/#token=${cliToken(true)}`;
+            const url = `http://127.0.0.1:${paths_1.P.port}/#token=${(0, paths_1.cliToken)(true)}`;
             const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
             try {
-                spawn(opener, [url], { stdio: 'ignore', detached: true }).unref();
+                (0, child_process_1.spawn)(opener, [url], { stdio: 'ignore', detached: true }).unref();
             }
             catch { /* print only */ }
-            console.log(`http://127.0.0.1:${P.port}/ ${dim('(opened with a private access token)')}`);
+            console.log(`http://127.0.0.1:${paths_1.P.port}/ ${dim('(opened with a private access token)')}`);
             return;
         }
         case 'scan': {
-            const { renderReport, renderCard } = require('../src/scan');
             const { summary, days } = await scanSummary(opt, '--days must be a positive number');
             // never write into Claude Code's own data directory
-            /** @param {string} file */
             const safeOut = (file) => assertOutsideClaudeDir(path.resolve(file));
             const card = opt('--card');
             if (card)
-                fs.writeFileSync(safeOut(card), renderCard(summary));
+                fs.writeFileSync(safeOut(card), (0, scan_1.renderCard)(summary));
             let html = null;
             if (flag('--html')) {
                 const v = opt('--html');
                 html = safeOut(v && !v.startsWith('-') ? v : 'blackbox-report.html');
-                fs.writeFileSync(html, require('../src/scan-html').renderHtml(summary));
+                fs.writeFileSync(html, scanHtml.renderHtml(summary));
                 if (!flag('--no-open')) {
                     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
                     try {
-                        spawn(opener, [html], { stdio: 'ignore', detached: true }).on('error', () => { }).unref();
+                        (0, child_process_1.spawn)(opener, [html], { stdio: 'ignore', detached: true }).on('error', () => { }).unref();
                     }
                     catch { /* print only */ }
                 }
@@ -802,7 +804,7 @@ async function main() {
                 console.log(JSON.stringify(flag('--details') ? summary : numbers, null, 2));
             }
             else {
-                console.log(renderReport(summary, { color: tty, details: flag('--details') }));
+                console.log((0, scan_1.renderReport)(summary, { color: tty, details: flag('--details') }));
                 if (card)
                     console.log(dim(`  card written to ${card} (aggregate numbers only)`));
                 if (html)
@@ -816,7 +818,7 @@ async function main() {
             const { summary, days } = await scanSummary(opt);
             const out = assertOutsideClaudeDir(path.resolve(opt('--out') || 'blackbox-share'));
             console.log(bold('Making your share kit') + dim(` · last ${days} days · ${summary.toolCalls} tool calls`));
-            const { made } = await require('../src/share').makeShareKit(summary, out, { video: !flag('--no-video'), log: (m) => console.log(dim('  ' + m)) });
+            const { made } = await share.makeShareKit(summary, out, { video: !flag('--no-video'), log: (m) => console.log(dim('  ' + m)) });
             for (const f of made)
                 console.log(`  ${green('✔')} ${path.join(out, f)}`);
             console.log(dim('\n  Only totals and tool categories are included: no project names, hosts, commands or secrets.'));
@@ -824,26 +826,23 @@ async function main() {
             return;
         }
         case 'mcp': {
-            const { auditServers, saveMcpPins } = require('../src/mcp');
-            const { scan, defaultProjectsDir } = require('../src/scan');
-            const pinsFile = path.join(P.home, 'mcp-pins.json');
-            const audits = auditServers({ pinsFile });
+            const pinsFile = path.join(paths_1.P.home, 'mcp-pins.json');
+            const audits = (0, mcp_1.auditServers)({ pinsFile });
             if (flag('--pin')) {
-                saveMcpPins(pinsFile, audits);
+                (0, mcp_1.saveMcpPins)(pinsFile, audits);
                 console.log(green(`pinned ${audits.length} MCP server definitions`) + dim(` → ${pinsFile}`));
                 return;
             }
             const days = Number(opt('--days') || 30);
-            const summary = scan({ projectsDir: opt('--path') || defaultProjectsDir(), days, mcpAudits: audits });
+            const summary = (0, scan_1.scan)({ projectsDir: opt('--path') || (0, scan_1.defaultProjectsDir)(), days, mcpAudits: audits });
             if (flag('--json')) {
                 console.log(JSON.stringify({ configured: audits, usage: summary.mcp }, null, 2));
                 return;
             }
-            console.log(require('../src/mcp-report').renderMcp(audits, summary, { color: tty, all: flag('--all') }));
+            console.log(mcpReport.renderMcp(audits, summary, { color: tty, all: flag('--all') }));
             const failOn = opt('--fail-on');
             if (failOn) {
                 const min = failOn === 'medium' ? 2 : 3;
-                /** @type {Record<string, number>} */
                 const sev = { high: 3, medium: 2, low: 1, none: 0 };
                 if (audits.some((a) => sev[a.risk] >= min))
                     process.exitCode = 1;
@@ -851,12 +850,11 @@ async function main() {
             return;
         }
         case 'skills': {
-            const { auditAll, savePins } = require('../src/skills');
             const extra = args.flatMap((a, i) => (a === '--path' && args[i + 1] ? [args[i + 1]] : []));
-            const pinsFile = path.join(P.home, 'skill-pins.json');
-            const audits = auditAll({ extra, pinsFile });
+            const pinsFile = path.join(paths_1.P.home, 'skill-pins.json');
+            const audits = (0, skills_1.auditAll)({ extra, pinsFile });
             if (flag('--pin')) {
-                savePins(pinsFile, audits);
+                (0, skills_1.savePins)(pinsFile, audits);
                 console.log(green(`pinned ${audits.length} skills`) + dim(` → ${pinsFile}`));
                 return;
             }
@@ -864,7 +862,7 @@ async function main() {
                 console.log(JSON.stringify(audits.map(({ files, ...a }) => a), null, 2));
             }
             else {
-                console.log(require('../src/skills-report').renderSkills(audits, { color: tty, all: flag('--all') }));
+                console.log(skillsReport.renderSkills(audits, { color: tty, all: flag('--all') }));
             }
             const failOn = opt('--fail-on');
             if (failOn) {
@@ -880,4 +878,4 @@ async function main() {
     }
 }
 main().catch((e) => { console.error(red(e.message)); process.exit(1); });
-module.exports = { GENESIS };
+module.exports = { GENESIS: ledger_1.GENESIS };
