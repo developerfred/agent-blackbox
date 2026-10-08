@@ -29,7 +29,8 @@
     "build": "node scripts/build.js",
     "build:check": "node scripts/build.js --check",
     "pretest": "npm run build",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "coverage": "node --test --experimental-test-coverage test/*.test.js"
   },
   "keywords": [
     "ai-agents",
