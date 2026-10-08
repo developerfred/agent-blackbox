@@ -20,7 +20,7 @@ Each phase ends with a gate. We move on when the gate is met, not when the date 
 - [x] Encrypt payloads at rest, with per-session keys for real crypto-erasure (`purge --session`, `show`)
 - [x] Claude Code plugin packaging (hooks bundled in a plugin, marketplace in this repo)
 - [x] Running code counts as possible egress; publishing commands; obfuscation-resistant matching (external review)
-- [x] Evasion corpus as regression tests and `blackbox eval` (62/62 caught, 0/20 false alarms, 0 known gaps open)
+- [x] Evasion corpus as regression tests and `blackbox eval` (71/71 caught, 0/28 false alarms, 0 known gaps open)
 - [x] Hook integrity checks in the daemon; `blackbox managed-settings` for admin-owned hooks
 - [x] Token scopes: the hooks' token can add events but not read or erase them
 - [x] Run the recorder as a dedicated OS user (`blackbox harden`: launchd / systemd), so the agent can write evidence but not read or erase it
@@ -103,9 +103,9 @@ Privacy rules the team server must meet before any code is written. The promise 
 
 Runs alongside the phases. The rule: no runtime dependencies, and nothing gets slower without a benchmark saying so.
 
-- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). `noImplicitAny` is on for 18 modules (`tsconfig.strict.json`); left: the daemon and the CLI entry point
+- [x] Type-check the current code first: JSDoc types + `tsc --checkJs --noEmit` in CI, zero behavior change (`npm run typecheck`, `strict`; shared types in `src/types.d.ts`). `noImplicitAny` is on for everything under `src/`, `bin/`, `eval/` and `bench/` (`tsconfig.strict.json`)
 - [x] Build step for the TypeScript move: `npm run build` compiles `src/`, `bin/` and `eval/` (`.js` and `.ts`) into a committed `dist/`, which the plugin hooks, the Homebrew formula and the npm `bin` run, so nothing needs a build at install time. CI fails when `dist/` is stale (`npm run build:check`). Migrating a module is `git mv x.js x.ts`, fix its types, rebuild.
-- [ ] Move to TypeScript module by module (policy, ledger, vault first), compiled to plain JS for npm and the plugin, so users still need only Node
+- [x] Move to TypeScript module by module, compiled to plain JS for npm and the plugin, so users still need only Node. Done for `src/`, `bin/`, `eval/` and `bench/`; `scripts/build.js` (the bootstrap), `tools/` (site generators), `verifier/bb-verify.js` (standalone, no build) and the tests stay JavaScript for now
 - [ ] Shared types for the canonical event (hooks, Cursor, Codex, OpenTelemetry GenAI) and for the rules file
 - [x] Benchmarks in CI: hook round trip under 20 ms at p95, policy decision under 1 ms, `scan` throughput in sessions per second (`npm run bench`; the CI job prints the numbers and does not fail on them, shared runners are too noisy)
 - [x] Daemon: payload lookup by record number without a full scan (byte-offset index; p95 25 ms to 1.3 ms in an 8k-record ledger). Still open: incremental index at startup instead of reading the whole ledger
