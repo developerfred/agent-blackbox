@@ -4,7 +4,7 @@ Guide for anyone, human or AI agent, changing this repository. For using the too
 
 ## What this is
 
-A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. JavaScript with JSDoc types, checked by `tsc`. **Zero runtime dependencies**, Node 18 or newer.
+A tamper-evident flight recorder and prompt-injection firewall for AI coding agents. TypeScript, compiled to plain JavaScript with `tsc`. **Zero runtime dependencies**, Node 18 or newer.
 
 ## Commands
 
@@ -23,7 +23,7 @@ A tamper-evident flight recorder and prompt-injection firewall for AI coding age
 2. **Tests run against `dist/`**, so `npm test` rebuilds first.
 3. **No runtime dependencies.** `typescript` is a dev dependency only. Do not add a package to `dependencies`.
 4. **New code is typed.** `tsconfig.strict.json` (`noImplicitAny`) covers everything under `src/`, `bin/`, `eval/` and `bench/` by glob, so a new file is checked from the start. Write new modules in TypeScript (`.ts`); shared shapes live in `src/types.d.ts`.
-5. **A change ships with its test**, in the same PR. A policy rule also ships with attack and benign cases in `eval/corpus.js`; the eval must keep 0 false alarms on the benign set.
+5. **A change ships with its test**, in the same PR. A policy rule also ships with attack and benign cases in `eval/corpus.ts`; the eval must keep 0 false alarms on the benign set.
 6. **Small PRs, one concern each**, on a new branch. Merge only when CI is green on Node 18, 20 and 22.
 7. **Docs, comments, commit messages and PR bodies are in English.**
 

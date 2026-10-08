@@ -152,7 +152,7 @@ and [The Attacker Moves Second](https://arxiv.org/abs/2510.09023), which is why 
 
 ## How well does the policy work?
 
-`blackbox eval` runs the policy against [eval/corpus.js](eval/corpus.js): known evasions (quote splitting, `$IFS`, ANSI-C strings, writing a script and then running it, heredocs, `base64 | sh`, planted git hooks, publishing through `gh`, glob paths to the evidence) and benign commands that must stay quiet. Today: 62 of 62 attacks caught, 0 of 20 false alarms, and no known gaps open. The corpus lists a gap openly when one is found. These are static attacks we know about; an attacker who studies the policy will find others. Add one to the corpus, or report it (SECURITY.md).
+`blackbox eval` runs the policy against [eval/corpus.ts](eval/corpus.ts): known evasions (quote splitting, `$IFS`, ANSI-C strings, writing a script and then running it, heredocs, `base64 | sh`, planted git hooks, publishing through `gh`, glob paths to the evidence) and benign commands that must stay quiet. Today: 71 of 71 attacks caught, 0 of 28 false alarms, and no known gaps open. The corpus lists a gap openly when one is found. These are static attacks we know about; an attacker who studies the policy will find others. Add one to the corpus, or report it (SECURITY.md).
 
 ## Honest limitations (v0.3)
 
