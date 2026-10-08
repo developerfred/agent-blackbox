@@ -1,32 +1,46 @@
-'use strict';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.runCase = runCase;
+exports.runAll = runAll;
+exports.runCaseVia = runCaseVia;
+exports.runAgent = runAgent;
 // Runs the evasion corpus through the policy. Used by the tests and by
 // `blackbox eval`, which prints the catch rate, false alarms and known gaps.
-const { Policy } = require('../src/policy');
-const { DEFAULT_CONFIG } = require('../src/paths');
-const { CASES } = require('./corpus');
-/** @param {any} c @param {import('../src/types').Mode} [mode] */
+const policy_1 = require("../src/policy");
+const paths_1 = require("../src/paths");
+const adapters_1 = require("../src/adapters");
+const corpus_1 = require("./corpus");
+const native_1 = require("./native");
+const sessionFor = (base, ev) => (ev.session ? `${base}-${ev.session}` : base);
+/** A step before the call, in the canonical (Claude Code) event format. */
+function canon(ev, session_id) {
+    if ('start' in ev)
+        return { kind: 'start', session_id, cwd: ev.cwd };
+    if ('prompt' in ev)
+        return { kind: 'prompt', session_id, prompt: ev.prompt };
+    return { kind: 'post', session_id, cwd: ev.cwd, tool: ev.post, input: ev.input, response: ev.response };
+}
 function runCase(c, mode = 'ask') {
     const state = { sessions: {} };
-    const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
+    const policy = new policy_1.Policy({ ...paths_1.DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
     const session_id = `eval-${c.id}`;
     // events may name another session (ev.session) and its folder (ev.cwd); { start: true } is a SessionStart
     for (const ev of c.before || []) {
-        const sid = ev.session ? `${session_id}-${ev.session}` : session_id;
-        if (ev.start)
+        const sid = sessionFor(session_id, ev);
+        if ('start' in ev)
             policy.sessionStart({ session_id: sid, cwd: ev.cwd });
-        else if (ev.prompt)
+        else if ('prompt' in ev)
             policy.userPrompt({ session_id: sid, prompt: ev.prompt });
         else
             policy.postToolUse({ session_id: sid, cwd: ev.cwd, tool_name: ev.post, tool_input: ev.input, tool_response: ev.response });
     }
-    const sid = c.call.session ? `${session_id}-${c.call.session}` : session_id;
+    const sid = sessionFor(session_id, c.call);
     const d = policy.preToolUse({ session_id: sid, tool_name: c.call.tool, tool_input: c.call.input });
     const blocked = !!d && ['ask', 'deny'].includes(d.decision);
     return { id: c.id, expect: c.expect, gap: c.gap || null, decision: d ? d.decision : 'none', rule: d ? d.rule : null, blocked, pass: (c.expect === 'block') === blocked };
 }
-/** @param {import('../src/types').Mode} [mode] */
 function runAll(mode) {
-    const results = CASES.map((c) => runCase(c, mode));
+    const results = corpus_1.CASES.map((c) => runCase(c, mode));
     const attacks = results.filter((r) => r.expect === 'block' && !r.gap);
     const benign = results.filter((r) => r.expect === 'allow');
     const gaps = results.filter((r) => r.gap);
@@ -37,53 +51,38 @@ function runAll(mode) {
         gapsOpen: gaps.filter((r) => !r.blocked).length, gaps: gaps.length,
     };
 }
-/**
- * One case as an agent would send it: every event is re-written in the agent's
- * format, decoded by its adapter, and only then judged. A case is not
- * applicable when the agent has no hook for one of its events.
- * @param {any} c @param {string} agent @param {import('../src/types').Mode} [mode]
- */
+/** One case as an agent would send it: every event is re-written in the agent's format, decoded by its adapter, and only then judged. A case is not applicable when the agent has no hook for one of its events. */
 function runCaseVia(c, agent, mode = 'ask') {
-    const { getAdapter } = require('../src/adapters');
-    const { ENCODERS } = require('./native');
-    const adapter = getAdapter(agent);
-    const encode = ENCODERS[agent];
+    const adapter = (0, adapters_1.getAdapter)(agent);
+    const encode = native_1.ENCODERS[agent];
     const state = { sessions: {} };
-    const policy = new Policy({ ...DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (/** @type {string} */ f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
+    const policy = new policy_1.Policy({ ...paths_1.DEFAULT_CONFIG, mode }, state, 'eval-salt', { protect: [], readFile: (f) => (c.files || {})[f.replace(/^\.\//, '')] || null });
     const session_id = `eval-${c.id}`;
-    /** @param {any} ev @param {'pre' | 'post'} [kind] */
-    const decoded = (ev, kind = 'post') => {
-        const sid = ev.session ? `${session_id}-${ev.session}` : session_id;
-        const native = encode(ev.start ? { kind: 'start', session_id: sid, cwd: ev.cwd }
-            : ev.prompt ? { kind: 'prompt', session_id: sid, prompt: ev.prompt }
-                : { kind, session_id: sid, cwd: ev.cwd, tool: kind === 'pre' ? ev.tool : ev.post, input: ev.input, response: ev.response });
+    const decode = (e) => {
+        const native = encode(e);
         return native ? adapter.decode(native) : null;
     };
-    const events = [...(c.before || []).map((/** @type {any} */ ev) => ({ ev, d: decoded(ev) })), { ev: c.call, d: decoded({ ...c.call, tool: c.call.tool }, 'pre') }];
-    if (events.some((x) => !x.d))
+    const before = (c.before || []).map((ev) => ({ ev, d: decode(canon(ev, sessionFor(session_id, ev))) }));
+    const call = decode({ kind: 'pre', session_id: sessionFor(session_id, c.call), tool: c.call.tool, input: c.call.input });
+    const events = [...before.map((x) => x.d), call];
+    if (events.some((d) => !d))
         return { id: c.id, expect: c.expect, gap: c.gap || null, applicable: false };
-    for (const { ev, d } of events.slice(0, -1)) {
-        const x = /** @type {import('../src/types').HookEvent} */ (d);
-        if (ev.start)
+    for (const { ev, d } of before) {
+        const x = d;
+        if ('start' in ev)
             policy.sessionStart(x);
-        else if (ev.prompt)
+        else if ('prompt' in ev)
             policy.userPrompt(x);
         else
             policy.postToolUse(x);
     }
-    const last = /** @type {import('../src/types').HookEvent} */ (events[events.length - 1].d);
-    const dec = policy.preToolUse(last);
+    const dec = policy.preToolUse(call);
     const blocked = !!dec && ['ask', 'deny'].includes(dec.decision);
     return { id: c.id, expect: c.expect, gap: c.gap || null, applicable: true, decision: dec ? dec.decision : 'none', rule: dec ? dec.rule : null, blocked, pass: (c.expect === 'block') === blocked };
 }
-/**
- * The corpus through one adapter: what it catches, what it falsely alarms on,
- * which cases the agent cannot express at all, and where the answer differs
- * from the same case in Claude Code's own format.
- * @param {string} agent @param {import('../src/types').Mode} [mode]
- */
+/** The corpus through one adapter: what it catches, what it falsely alarms on, which cases the agent cannot express at all, and where the answer differs from the same case in Claude Code's own format. */
 function runAgent(agent, mode) {
-    const rows = CASES.map((c) => ({ ...runCaseVia(c, agent, mode), base: runCase(c, mode) }));
+    const rows = corpus_1.CASES.map((c) => ({ ...runCaseVia(c, agent, mode), base: runCase(c, mode) }));
     const live = rows.filter((r) => r.applicable);
     const attacks = live.filter((r) => r.expect === 'block' && !r.gap);
     const benign = live.filter((r) => r.expect === 'allow');
@@ -97,4 +96,3 @@ function runAgent(agent, mode) {
         results: rows,
     };
 }
-module.exports = { runCase, runAll, runCaseVia, runAgent };
