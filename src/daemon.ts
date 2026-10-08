@@ -1,25 +1,29 @@
-'use strict';
 // The daemon: a separate process from the agent. Hooks, the OTLP exporter and
 // the raw-body files all feed it; it is the only holder of the signing key.
-const fs = require('fs');
-const path = require('path');
-const http = require('http');
-const zlib = require('zlib');
-const crypto = require('crypto');
-const { readJson, readJsonl } = require('./util');
-const { P, ensureDirs, readToken, readAdminToken, loadConfig } = require('./paths');
-const { Ledger, verify } = require('./ledger');
-const { merkleRoot, MERKLE_ALG } = require('./merkle');
-const anchoring = require('./anchor');
-const { Vault, scopeOf } = require('./vault');
-const { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } = require('./policy');
-const agentApi = require('./agent-api');
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import * as http from 'http';
+import * as zlib from 'zlib';
+import * as crypto from 'crypto';
+import { readJson, readJsonl } from './util';
+import { P, ensureDirs, readToken, readAdminToken, loadConfig } from './paths';
+import { Ledger, verify, type VerifyResult } from './ledger';
+import { merkleRoot, MERKLE_ALG } from './merkle';
+import * as anchoring from './anchor';
+import { Vault, scopeOf } from './vault';
+import { Policy, inputText, textOf, redact, AGENT_DENY_MESSAGE } from './policy';
+import * as agentApi from './agent-api';
+import { parseToolName, configFor, auditServers } from './mcp';
+import { riskFor, auditAll } from './skills';
+import { checkHooks } from './integrity';
+import { HOOK_EVENTS } from './install';
+import type { Config, DaemonState, HookEvent, LedgerRecord, McpAudit, PolicyDecision, SkillAudit, Verdict } from './types';
 
 const SEALED_PREFIX = 'bbx1:';
 const MAX_BODY = 64 * 1024 * 1024;
 const ORPHAN_AFTER_MS = 3 * 60 * 1000;
-/** @param {unknown} s @param {number} [n] */
-const clip = (s, n = 160) => {
+const clip = (s: unknown, n: number = 160) => {
   const t = redact(s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 };
@@ -27,30 +31,26 @@ const clip = (s, n = 160) => {
 // Contents of a script the agent is about to run, if it is a small regular
 // file. Run as the recorder's own user, this may not see the human's folders;
 // then the script is trusted as before.
-/** @param {string} file @param {string} [cwd] @returns {string | null} */
-function readScript(file, cwd) {
-  const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, require('os').homedir()));
+function readScript(file: string, cwd?: string): string | null {
+  const p = path.resolve(cwd || process.cwd(), String(file).replace(/^~(?=\/)/, os.homedir()));
   const st = fs.statSync(p);
   if (!st.isFile() || st.size > 200_000) return null;
   return fs.readFileSync(p, 'utf8');
 }
 
-/**
- * What a hook reported about its own installation, bounded and typed (it came over the ingest token).
- * @param {any} r @returns {{ via: string | null, fingerprint?: string, problems: string[] } | null}
- */
-function reportedIntegrity(r) {
+/** What a hook reported about its own installation, bounded and typed (it came over the ingest token). */
+function reportedIntegrity(rep: unknown): { via: string | null, fingerprint?: string, problems: string[] } | null {
+  const r = rep as { via?: unknown; fingerprint?: unknown; problems?: unknown[] } | null;
   if (!r || typeof r !== 'object' || !Array.isArray(r.problems)) return null;
   return {
     via: typeof r.via === 'string' ? r.via.slice(0, 32) : null,
     fingerprint: typeof r.fingerprint === 'string' ? r.fingerprint.slice(0, 64) : undefined,
-    problems: r.problems.slice(0, 10).map((/** @type {unknown} */ p) => String(p).slice(0, 300)),
+    problems: r.problems.slice(0, 10).map((p: unknown) => String(p).slice(0, 300)),
   };
 }
 
-/** One-line, redacted description of a hook event for the ledger.
- * @param {import('./types').HookEvent} ev */
-function summarize(ev) {
+/** One-line, redacted description of a hook event for the ledger. */
+export function summarize(ev: HookEvent) {
   const target = inputText(ev.tool_input) || (ev.tool_input && ev.tool_input.query) || '';
   switch (ev.hook_event_name) {
     case 'UserPromptSubmit': return clip(ev.prompt);
@@ -68,39 +68,66 @@ function summarize(ev) {
   }
 }
 
-/** @param {any} v an OTLP AnyValue @returns {any} */
-function otlpValue(v) {
+/** An OTLP/JSON AnyValue. */
+interface OtlpAnyValue {
+  stringValue?: string; intValue?: string | number; doubleValue?: number; boolValue?: boolean;
+  arrayValue?: { values?: OtlpAnyValue[] };
+  kvlistValue?: { values?: OtlpKeyValue[] };
+}
+interface OtlpKeyValue { key: string; value?: OtlpAnyValue }
+interface OtlpLogs {
+  resourceLogs?: {
+    resource?: { attributes?: OtlpKeyValue[] };
+    scopeLogs?: { logRecords?: { attributes?: OtlpKeyValue[]; body?: OtlpAnyValue; timeUnixNano?: string }[] }[];
+  }[];
+}
+
+const otlpAttrs = (kvs: OtlpKeyValue[] | undefined): Record<string, any> => Object.fromEntries((kvs || []).map((kv) => [kv.key, otlpValue(kv.value)]));
+
+function otlpValue(v: OtlpAnyValue | undefined): any {
   if (!v) return null;
   if ('stringValue' in v) return v.stringValue;
   if ('intValue' in v) return Number(v.intValue);
   if ('doubleValue' in v) return v.doubleValue;
   if ('boolValue' in v) return v.boolValue;
   if (v.arrayValue) return (v.arrayValue.values || []).map(otlpValue);
-  if (v.kvlistValue) return Object.fromEntries((v.kvlistValue.values || []).map((/** @type {{ key: string, value: any }} */ kv) => [kv.key, otlpValue(kv.value)]));
+  if (v.kvlistValue) return otlpAttrs(v.kvlistValue.values);
   return null;
 }
 
-/** Placeholder for fields assigned in start(): only the process that owns the port opens the ledger. */
-const unset = /** @type {any} */ (null);
+/** One anchor batch: its range, Merkle root and chain head, as published. */
+interface AnchorRecord { to: number; root: string; [extra: string]: unknown }
 
-class Daemon {
-  /** @type {Ledger} */ ledger = unset;
-  /** @type {Policy} */ policy = unset;
-  /** @type {Vault | null} */ vault = null;
-  /** @type {import('./types').DaemonState} */ state = unset;
+/** What the daemon indexes about each session, for the timeline API. */
+interface SessionIndex {
+  id: string; first: string; last: string; cwd: string | null;
+  events: number; tools: number; flags: Record<string, unknown>; decisions: number; seqs: number[];
+}
+
+export class Daemon {
+  readonly cfg: Config = loadConfig();
+  readonly token: string = readToken();
+  readonly adminToken: string = readAdminToken();
+  readonly sessions = new Map<string, SessionIndex>();
+  // Assigned in start(): only the process that owns the port opens the ledger.
+  ledger!: Ledger;
+  policy!: Policy;
+  state!: DaemonState;
+  vault: Vault | null = null;
+  bodyTimer?: NodeJS.Timeout;
+  skillTimer?: NodeJS.Timeout;
+  integrityTimer?: NodeJS.Timeout;
+  retentionTimer?: NodeJS.Timeout;
+  anchorTimer?: NodeJS.Timeout;
+  skillAudits?: SkillAudit[];
+  mcpAudits?: McpAudit[];
+  pendingWarning?: string;
   /** byte offset and length of record `seq` in the ledger file (index 0 unused): lookups read one line, not the file */
-  /** @type {number[]} */ lineOff = [];
-  /** @type {number[]} */ lineLen = [];
-  /** @type {ReturnType<typeof setTimeout> | null} */ saveTimer = null;
+  lineOff: number[] = [];
+  lineLen: number[] = [];
+  saveTimer: ReturnType<typeof setTimeout> | null = null;
   verifiedAt = 0;
-  /** @type {any} */ verified = null;
-
-  constructor() {
-    this.cfg = loadConfig();
-    this.token = readToken();
-    this.adminToken = readAdminToken();
-    this.sessions = new Map(); // id -> { id, first, last, cwd, events: [], flags: {}, alerts }
-  }
+  verified: VerifyResult | null = null;
 
   start() {
     // Payloads are encrypted at rest with one key per session unless turned off.
@@ -138,8 +165,8 @@ class Daemon {
     const s = anchoring.settings(this.cfg);
     if (!s) return;
     try {
-      const pending = /** @type {any[]} */ (this.state.anchorPending || []);
-      const toPublish = [];
+      const pending = (this.state.anchorPending || []) as AnchorRecord[];
+      const toPublish: AnchorRecord[] = [];
       const recs = readJsonl(P.ledger);
       let lastTo = 0;
       for (const r of recs) if (r.kind === 'anchor') lastTo = r.to;
@@ -182,15 +209,11 @@ class Daemon {
   // with the SessionStart event: that is `reported`. Anything with the ingest
   // token can send a report, so it can hide a removal but never invent trust the
   // recorder does not already give an event.
-  /** @param {{ via: string | null, fingerprint?: string, problems: string[] } | null} [reported] */
-  checkIntegrity(reported = null) {
+  checkIntegrity(reported: { via: string | null, fingerprint?: string, problems: string[] } | null = null) {
     return this.safe(() => {
       const prev = this.state.integrity;
-      /** @type {{ via?: string | null, fingerprint?: string, problems: string[] } | null} */
-      let r = reported;
+      let r: { via?: string | null, fingerprint?: string, problems: string[] } | null = reported;
       if (!this.cfg.hardened) {
-        const { checkHooks } = require('./integrity');
-        const { HOOK_EVENTS } = require('./install');
         r = checkHooks({ expected: HOOK_EVENTS, installedVia: loadConfig().installed?.hooks === true ? 'settings' : null, wasVia: prev?.via || null });
       }
       if (!r) return { problems: [] };
@@ -208,20 +231,16 @@ class Daemon {
 
   refreshSkills() {
     this.safe(() => {
-      const { auditAll } = require('./skills');
       this.skillAudits = auditAll({ pinsFile: path.join(P.home, 'skill-pins.json') });
     });
     this.safe(() => {
-      const { auditServers } = require('./mcp');
       this.mcpAudits = auditServers({ pinsFile: path.join(P.home, 'mcp-pins.json') });
     });
   }
 
   // Ask before a tool of an MCP server whose local definition has high-risk
   // findings (clear-text secrets, plain HTTP, privileged Docker, changed since pinned…).
-  /** @param {string} toolName @returns {import('./types').PolicyDecision | null} */
-  mcpGate(toolName) {
-    const { parseToolName, configFor } = require('./mcp');
+  mcpGate(toolName: string): PolicyDecision | null {
     const mp = parseToolName(toolName);
     if (!mp) return null;
     const bad = configFor(this.mcpAudits || [], mp.server).filter((a) => a.risk === 'high');
@@ -230,26 +249,22 @@ class Daemon {
     return { decision: 'ask', rule: 'risky-mcp', reason: `The MCP server "${mp.server}" has high-risk findings in its local configuration: ${rules}. Review with: blackbox mcp` };
   }
 
-  /** @returns {import('./types').PolicyDecision | null} */
-  /** @param {string | undefined} name @returns {import('./types').PolicyDecision | null} */
-  skillGate(name) {
-    const { riskFor } = require('./skills');
+  /** @returns {PolicyDecision | null} */
+  skillGate(name: string | undefined): PolicyDecision | null {
     const a = riskFor(this.skillAudits || [], name);
     if (!a || a.risk !== 'high') return null;
     const rules = [...new Set(a.findings.filter((f) => f.severity === 'high').map((f) => f.rule))].join(', ');
     return { decision: 'ask', rule: 'risky-skill', reason: `The skill "${name}" (${a.source}) has high-risk findings in the local audit: ${rules}. Review with: blackbox skills` };
   }
 
-  /** Run fn; an exception is logged, not thrown. @template T @param {() => T} fn @returns {T | undefined} */
-  safe(fn) { try { return fn(); } catch (e) { this.log('error', e.stack || String(e)); } }
+  /** Run fn; an exception is logged, not thrown. */
+  safe<T>(fn: () => T): T | undefined { try { return fn(); } catch (e) { this.log('error', e.stack || String(e)); } }
   // What /hook answers: Claude Code's stdout (kept for older hooks) and the neutral verdict.
-  /** @param {import('./types').HookEvent} ev */
-  hookReply(ev) {
+  hookReply(ev: HookEvent) {
     const r = this.safe(() => this.processHook(ev));
     return { stdout: (r && r.stdout) || null, verdict: r ? r.verdict : null };
   }
-  /** @param {...unknown} a */
-  log(...a) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
+  log(...a: unknown[]) { process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`); }
 
   loadState() {
     this.state = { sessions: {}, salt: '', bodyIndexOffset: 0, ...readJson(P.state, {}) };
@@ -296,20 +311,17 @@ class Daemon {
   // The one-line summary holds prompt, command and path text, so it is sealed
   // under the session key like the payload: `purge` erases it too. The hash
   // chain covers the sealed form.
-  /** @param {string} text @param {string | undefined} sid */
-  sealSummary(text, sid) {
+  sealSummary(text: string, sid: string | undefined) {
     if (!this.vault || !text) return text;
     return SEALED_PREFIX + this.vault.seal(scopeOf(sid), Buffer.from(text, 'utf8')).data.toString('base64');
   }
 
-  /** @param {string} text */
-  openSummary(text) {
+  openSummary(text: string) {
     if (!text.startsWith(SEALED_PREFIX) || !this.vault) return text;
     try { return this.vault.open(Buffer.from(text.slice(SEALED_PREFIX.length), 'base64')).toString('utf8'); } catch { return '[erased]'; }
   }
 
-  /** @param {import('./types').LedgerRecord} rec */
-  index(rec) {
+  index(rec: LedgerRecord) {
     if (!rec.session_id) return;
     let s = this.sessions.get(rec.session_id);
     if (!s) {
@@ -318,7 +330,7 @@ class Daemon {
     }
     s.last = rec.ts;
     s.events++;
-    if (rec.event === 'SessionStart' && rec.cwd) s.cwd = rec.cwd;
+    if (rec.event === 'SessionStart' && rec.cwd) s.cwd = String(rec.cwd);
     if (rec.event === 'PreToolUse') s.tools++;
     if (rec.kind === 'taint') s.flags[String(rec.flag)] = rec.why;
     if (rec.kind === 'decision' && rec.decision !== 'note') s.decisions++;
@@ -327,16 +339,15 @@ class Daemon {
   }
 
   // A record as the timeline shows it: no signature, summary unsealed (or "[erased]" once the key is gone).
-  /** @param {import('./types').LedgerRecord} rec */
-  liteRecord(rec) {
+  liteRecord(rec: LedgerRecord) {
     const { sig, ...lite } = rec;
     if (typeof lite.summary === 'string') lite.summary = this.openSummary(lite.summary);
     return lite;
   }
 
-  /** Records by sequence number, read from the ledger file with one open. @param {number[]} seqs */
-  readRecords(seqs) {
-    const out = [];
+  /** Records by sequence number, read from the ledger file with one open. */
+  readRecords(seqs: number[]) {
+    const out: LedgerRecord[] = [];
     const fd = fs.openSync(P.ledger, 'r');
     try {
       for (const seq of seqs) {
@@ -347,16 +358,14 @@ class Daemon {
     return out;
   }
 
-  /** @param {number} fd @param {number} seq @returns {import('./types').LedgerRecord | null} */
-  readAt(fd, seq) {
+  readAt(fd: number, seq: number): LedgerRecord | null {
     if (this.lineOff[seq] === undefined) return null;
     const buf = Buffer.alloc(this.lineLen[seq]);
     fs.readSync(fd, buf, 0, buf.length, this.lineOff[seq]);
     try { return JSON.parse(buf.toString('utf8')); } catch { return null; }
   }
 
-  /** @param {string} kind @param {Record<string, unknown>} fields */
-  append(kind, fields) {
+  append(kind: string, fields: Record<string, unknown>) {
     const at = this.ledger.size;
     const rec = this.ledger.append(kind, fields);
     this.lineOff[rec.seq] = at;
@@ -368,29 +377,20 @@ class Daemon {
   // ---- hooks ----
   // Order matters: the policy sees the raw event (it must learn which values
   // are secrets), then only a scrubbed copy is ever written to disk.
-  /**
-   * @param {import('./types').HookEvent} ev
-   * @param {{ spooled?: boolean, received_at?: string }} [meta]
-   */
-  handleHook(ev, meta = {}) { return this.processHook(ev, meta).stdout; }
+  handleHook(ev: HookEvent, meta: { spooled?: boolean, received_at?: string } = {}) { return this.processHook(ev, meta).stdout; }
 
   // The same, with the verdict in the agent-neutral form adapters encode.
-  /**
-   * @param {import('./types').HookEvent} ev
-   * @param {{ spooled?: boolean, received_at?: string }} [meta]
-   */
-  processHook(ev, meta = {}) {
+  processHook(ev: HookEvent, meta: { spooled?: boolean, received_at?: string } = {}) {
     const event = ev.hook_event_name || 'unknown';
     const sid = ev.session_id;
-    let decision = null;
-    let post = null;
-    /** @type {string[]} */
-    let intent = [];
+    let decision: PolicyDecision | null = null;
+    let post: ReturnType<Policy['postToolUse']> | null = null;
+    let intent: string[] = [];
     if (event === 'PreToolUse') {
       decision = this.policy.preToolUse(ev);
       if (!decision || decision.decision === 'note') {
         if (ev.tool_name === 'Skill') decision = this.skillGate((ev.tool_input || {}).skill) || decision;
-        else if (/^mcp__/.test(ev.tool_name || '')) decision = this.mcpGate(/** @type {string} */ (ev.tool_name)) || decision;
+        else if (/^mcp__/.test(ev.tool_name || '')) decision = this.mcpGate(ev.tool_name!) || decision;
       }
     }
     else if (event === 'PostToolUse') post = this.policy.postToolUse(ev);
@@ -416,9 +416,8 @@ class Daemon {
       received_at: meta.received_at,
     });
 
-    let stdout = null;
-    /** @type {import('./types').Verdict} */
-    const verdict = { permission: null, reason: '', agentMessage: '', notice: null };
+    let stdout: Record<string, any> | null = null;
+    const verdict: Verdict = { permission: null, reason: '', agentMessage: '', notice: null };
     if (decision) {
       this.append('decision', {
         session_id: sid, prompt_id: ev.prompt_id, tool_use_id: ev.tool_use_id, tool_name: ev.tool_name,
@@ -472,15 +471,14 @@ class Daemon {
     }
     if (this.pendingWarning && !meta.spooled) {
       stdout = { ...(stdout || {}), systemMessage: `[agent-blackbox] ${this.pendingWarning}${stdout && stdout.systemMessage ? '\n' + stdout.systemMessage : ''}` };
-      this.pendingWarning = null;
+      this.pendingWarning = undefined;
     }
     verdict.notice = stdout && stdout.systemMessage ? stdout.systemMessage : null;
     return { stdout, verdict };
   }
 
   // Store a raw API body with its secrets scrubbed, then delete the original.
-  /** @param {string} file @param {string | null} sessionId */
-  adoptScrubbed(file, sessionId) {
+  adoptScrubbed(file: string, sessionId: string | null) {
     const text = fs.readFileSync(file, 'utf8');
     let clean;
     try { clean = this.policy.scrub(JSON.parse(text), sessionId || undefined); } catch { clean = this.policy.scrubText(text, null); }
@@ -494,12 +492,11 @@ class Daemon {
   // unreadable. Unencrypted blobs from older versions are deleted. The chain
   // keeps every hash and stays verifiable.
   // days: only sessions whose last record is older than N days; session: one session.
-  /** @param {number | null | undefined} days @param {string | null} [session] @param {{ bodies?: boolean }} [opts] */
-  purge(days, session = null, { bodies: dropBodies = true } = {}) {
+  purge(days: number | null | undefined, session: string | null = null, { bodies: dropBodies = true } = {}) {
     const cutoff = days == null ? Infinity : Date.now() - days * 864e5;
     const lastByKey = new Map(); // kid -> { last, sessions }
-    const plainOld = new Set();
-    const plainKeep = new Set();
+    const plainOld = new Set<string>();
+    const plainKeep = new Set<string>();
     for (const r of readJsonl(P.ledger)) {
       const t = Date.parse(r.ts);
       if (r.key) {
@@ -510,9 +507,9 @@ class Daemon {
         continue;
       }
       const match = (session ? r.session_id === session : true) && t < cutoff;
-      for (const f of ['payload', 'request_blob', 'response_blob']) if (r[f]) (match ? plainOld : plainKeep).add(r[f]);
+      for (const f of ['payload', 'request_blob', 'response_blob']) if (r[f]) (match ? plainOld : plainKeep).add(r[f] as string);
     }
-    const keys = [];
+    const keys: string[] = [];
     for (const [kid, k] of lastByKey) {
       if (session ? !k.sessions.has(session) : k.last >= cutoff) continue;
       if (this.vault && !this.vault.hasKey(kid)) continue; // already erased
@@ -543,7 +540,7 @@ class Daemon {
   // Commit to every record since the last anchor with one Merkle root and
   // write that as an `anchor` record; the caller publishes the root plus the
   // chain head somewhere the agent cannot write.
-  anchorBatch() {
+  anchorBatch(): AnchorRecord | null {
     const recs = readJsonl(P.ledger);
     let from = 1;
     for (const r of recs) if (r.kind === 'anchor') from = r.to + 1;
@@ -551,21 +548,19 @@ class Daemon {
     if (to < from) return null;
     const batch = recs.filter((r) => r.seq >= from && r.seq <= to);
     const rec = this.append('anchor', { alg: MERKLE_ALG, from, to, count: batch.length, root: merkleRoot(batch.map((r) => r.hash)) });
-    return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root };
+    return { seq: rec.seq, hash: rec.hash, sig: rec.sig, key_id: this.ledger.keys.keyId, alg: rec.alg, from, to, count: rec.count, root: rec.root as string };
   }
 
   // Decrypted payload of one record, for the human reviewing the evidence.
-  /** @param {number} seq */
-  payload(seq) {
+  payload(seq: number) {
     const rec = this.findRecord(seq);
     if (!rec) return { status: 404, body: { error: 'unknown record' } };
-    /** @type {Record<string, any>} */
-    const out = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
+    const out: Record<string, any> = { seq, kind: rec.kind, event: rec.event, key: rec.key || null };
     for (const f of ['payload', 'request_blob', 'response_blob']) {
       if (!rec[f]) continue;
       if (rec.key && this.vault && !this.vault.hasKey(rec.key)) { out[f] = { erased: true, why: 'session key destroyed (crypto-erased)' }; continue; }
       try {
-        const text = this.ledger.getBlob(/** @type {string} */ (rec[f]), rec.key).toString('utf8');
+        const text = this.ledger.getBlob(rec[f] as string, rec.key).toString('utf8');
         try { out[f] = JSON.parse(text); } catch { out[f] = text; }
       } catch (e) {
         out[f] = { erased: true, why: e.code === 'ERASED' ? 'session key destroyed (crypto-erased)' : e.code === 'ENOENT' ? 'blob deleted' : 'unreadable' };
@@ -575,8 +570,7 @@ class Daemon {
   }
 
   // One record by sequence number, read straight from its place in the file.
-  /** @param {number} seq @returns {import('./types').LedgerRecord | null} */
-  findRecord(seq) {
+  findRecord(seq: number): LedgerRecord | null {
     if (this.lineOff[seq] === undefined) return null;
     const fd = fs.openSync(P.ledger, 'r');
     try { return this.readAt(fd, seq); } finally { fs.closeSync(fd); }
@@ -598,14 +592,13 @@ class Daemon {
   }
 
   // ---- OTLP/HTTP JSON logs from Claude Code's native telemetry ----
-  /** @param {any} body an OTLP/HTTP JSON logs request */
-  handleOtlp(body) {
+  handleOtlp(body: OtlpLogs) {
     let n = 0;
     for (const rl of body.resourceLogs || []) {
-      const res = Object.fromEntries(((rl.resource && rl.resource.attributes) || []).map((/** @type {any} */ a) => [a.key, otlpValue(a.value)]));
+      const res = otlpAttrs(rl.resource && rl.resource.attributes);
       for (const sl of rl.scopeLogs || []) {
         for (const lr of sl.logRecords || []) {
-          const raw = Object.fromEntries((lr.attributes || []).map((/** @type {any} */ a) => [a.key, otlpValue(a.value)]));
+          const raw = otlpAttrs(lr.attributes);
           const attrs = this.policy.scrub(raw, raw['session.id']);
           const blob = this.ledger.putBlob({ resource: res, body: this.policy.scrub(otlpValue(lr.body), raw['session.id']), attributes: attrs, timeUnixNano: lr.timeUnixNano }, scopeOf(attrs['session.id']));
           const name = attrs['event.name'] || otlpValue(lr.body) || 'log';
@@ -648,8 +641,7 @@ class Daemon {
             if (!line) continue;
             let e;
             try { e = JSON.parse(line); } catch { continue; }
-            /** @param {string | undefined} f */
-            const fileOf = (f) => (f ? (path.isAbsolute(f) ? f : path.join(P.bodies, f)) : null);
+            const fileOf = (f: string | undefined) => (f ? (path.isAbsolute(f) ? f : path.join(P.bodies, f)) : null);
             const reqF = fileOf(e.request_file);
             const resF = fileOf(e.response_file);
             const req = reqF && fs.existsSync(reqF) ? this.adoptScrubbed(reqF, e.session_id) : null;
@@ -693,11 +685,10 @@ class Daemon {
   }
 
   // ---- HTTP ----
-  listen(port = P.port, host = '127.0.0.1') {
+  listen(port: number = P.port, host = '127.0.0.1'): Promise<http.Server> {
     const okHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
     const server = http.createServer((req, res) => {
-      /** @param {number} code @param {any} obj @param {string} [type] */
-      const send = (code, obj, type = 'application/json') => {
+      const send = (code: number, obj: any, type: string = 'application/json') => {
         res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
         res.end(type === 'application/json' ? JSON.stringify(obj) : obj);
       };
@@ -717,8 +708,7 @@ class Daemon {
       // admin token. With the recorder as a dedicated user, the agent can write
       // evidence but not read or erase it.
       const tok = String(req.headers['x-blackbox-token'] || '');
-      /** @param {string} a */
-      const same = (a) => !!a && tok.length === a.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(a));
+      const same = (a: string) => !!a && tok.length === a.length && crypto.timingSafeEqual(Buffer.from(tok), Buffer.from(a));
       const admin = same(this.adminToken);
       if (!admin && !same(this.token)) return send(401, { error: 'token' });
       // the public tier of the agent API (what blackbox is, rules, a health line) is for the agent itself
@@ -738,7 +728,7 @@ class Daemon {
           return send(200, { head: { seq: this.ledger.seq, hash: this.ledger.head }, sessions: list });
         }
         if (url.pathname === '/api/events') {
-          const s = this.sessions.get(url.searchParams.get('session'));
+          const s = this.sessions.get(url.searchParams.get('session') || '');
           return send(s ? 200 : 404, s ? this.readRecords(s.seqs).map((r) => this.liteRecord(r)) : { error: 'unknown session' });
         }
         if (url.pathname === '/api/docs') return send(200, this.policy.listDocs());
@@ -757,8 +747,7 @@ class Daemon {
       }
 
       if (req.method !== 'POST') return send(405, { error: 'method' });
-      /** @type {Buffer[]} */
-      const chunks = [];
+      const chunks: Buffer[] = [];
       let size = 0;
       req.on('data', (c) => { size += c.length; if (size > MAX_BODY) req.destroy(); else chunks.push(c); });
       req.on('end', () => {
@@ -798,10 +787,10 @@ class Daemon {
   }
 }
 
-async function runDaemon() {
+export async function runDaemon() {
   ensureDirs();
   const d = new Daemon();
-  let server;
+  let server: http.Server;
   try {
     server = await d.listen();
   } catch (e) {
@@ -822,5 +811,3 @@ async function runDaemon() {
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }
-
-module.exports = { Daemon, runDaemon, summarize };
