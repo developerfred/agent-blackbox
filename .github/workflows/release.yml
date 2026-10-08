@@ -1,0 +1,45 @@
+name: release
+# Push a tag vX.Y.Z to publish. The tag must match package.json, and the same
+# checks as CI must pass first. Needs the NPM_TOKEN repository secret; without
+# it the publish step fails and nothing is released.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: The tag matches package.json and the plugin manifest
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          plugin="$(node -p "require('./.claude-plugin/plugin.json').version")"
+          test "$tag" = "$pkg" && test "$tag" = "$plugin" || { echo "tag $tag, package.json $pkg, plugin.json $plugin must all match"; exit 1; }
+      - run: npm run build:check
+      - run: npm test
+      - run: npm run typecheck
+      - run: node dist/bin/blackbox.js eval
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Tarball hash for the Homebrew formula
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha="$(curl -sL "$url" | sha256sum | cut -d' ' -f1)"
+          echo "### Homebrew formula" >> "$GITHUB_STEP_SUMMARY"
+          echo "url \"$url\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "sha256 \"$sha\"" >> "$GITHUB_STEP_SUMMARY"
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

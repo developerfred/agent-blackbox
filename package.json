@@ -5,13 +5,17 @@
   "license": "Apache-2.0",
   "author": "Frederick Silva (codingsh)",
   "bin": {
-    "blackbox": "dist/bin/blackbox.js"
+    "blackbox": "dist/bin/blackbox.js",
+    "bb-verify": "verifier/bb-verify.js"
   },
   "files": [
     "dist",
+    "verifier/bb-verify.js",
+    "verifier/README.md",
     ".claude-plugin",
     "hooks",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
