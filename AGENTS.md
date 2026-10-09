@@ -44,6 +44,7 @@ Repo skills are short, step-by-step procedures for work this project does repeat
 | Skill | Use it when |
 |---|---|
 | [`release`](.claude/skills/release/SKILL.md) | cutting a version (`vX.Y.Z` tag) |
+| [`add-detection-rule`](.claude/skills/add-detection-rule/SKILL.md) | adding or changing a policy rule |
 
 Write or update a skill when:
 
