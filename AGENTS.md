@@ -26,6 +26,7 @@ A tamper-evident flight recorder and prompt-injection firewall for AI coding age
 5. **A change ships with its test**, in the same PR. A policy rule also ships with attack and benign cases in `eval/corpus.ts`; the eval must keep 0 false alarms on the benign set.
 6. **Small PRs, one concern each**, on a new branch. Merge only when CI is green on Node 18, 20 and 22.
 7. **Docs, comments, commit messages and PR bodies are in English.**
+8. **Document everything you work on, and capture repeat procedures as skills.** A feature, fix, decision or workflow change updates the docs that describe it (this file, `docs/`, `README.md`, `CHANGELOG.md`) in the same PR, or in a companion micro-PR. A procedure done more than once becomes a skill under `.claude/skills/<name>/SKILL.md`. Context lives in the repository, never only in a conversation. See [Skills](#skills).
 
 ## Invariants not to break
 
@@ -35,6 +36,21 @@ A tamper-evident flight recorder and prompt-injection firewall for AI coding age
 - The ledger is append-only and hash-chained. Do not add a code path that rewrites a record. Erasing is done by destroying a session key (`purge`), which leaves the chain verifiable.
 - A detection rule needs a reason a human can read in the prompt that asks them; a rule that cannot explain itself does not ship.
 - Nothing is sent over the network by default. Anything that publishes (anchoring, share, export) is opt-in.
+
+## Skills
+
+Repo skills are short, step-by-step procedures for work this project does repeatedly, so a new session does not have to rediscover them. They live in `.claude/skills/<name>/SKILL.md`, with a frontmatter `name` and a `description` that says when to use the skill.
+
+| Skill | Use it when |
+|---|---|
+
+Write or update a skill when:
+
+- you did a procedure a second time, or expect someone to;
+- a PR changes the steps of an existing skill (update the skill in that PR);
+- you hit a trap that cost time (put it in the skill's "Traps" list).
+
+A skill states the commands, the files it touches and what "done" looks like, grounded in the real code. Add it to the table above in the same PR.
 
 ## Where things are
 
