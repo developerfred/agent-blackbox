@@ -19,7 +19,7 @@ Releases are tag-driven. Pushing `vX.Y.Z` runs `.github/workflows/release.yml`, 
    git checkout main && git pull
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
-7. Watch the `release` run. Its job summary prints the tarball `url` and `sha256` for the Homebrew formula: update the formula under `packaging/` in a follow-up PR.
+7. Watch the `release` run. Its job summary prints the tarball `url` and `sha256` for the Homebrew formula: update the formula under `packaging/homebrew/` in a follow-up PR.
 
 ## What the workflow checks
 
