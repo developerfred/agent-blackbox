@@ -10,6 +10,7 @@ export interface Config {
   opaqueCode: 'ask' | 'alert';
   web3: 'ask' | 'alert' | 'off';
   memoryWrites: 'ask' | 'alert' | 'off';
+  sensitiveReads: 'ask' | 'alert' | 'off';
   trustedDocs: string[];
   failMode: 'open' | 'closed';
   /** for agents that cannot ask the human: what an "ask" becomes */

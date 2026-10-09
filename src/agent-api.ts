@@ -27,6 +27,7 @@ export const RULES = [
   { id: 'sensitive-egress', decision: 'deny', summary: 'One command reads a sensitive file and sends data out.' },
   { id: 'lethal-trifecta', decision: 'ask', summary: 'The session touched private data and untrusted content, and now reaches an unnamed host.' },
   { id: 'secret-to-code', decision: 'ask', summary: 'A secret read earlier is passed to code the policy cannot inspect.' },
+  { id: 'sensitive-read', decision: 'ask', summary: 'The agent reads a .env, key or credential file.' },
   { id: 'web3-transaction', decision: 'ask', summary: 'Signing or broadcasting a transaction, or key material on a command line.' },
   { id: 'memory-write', decision: 'ask', summary: 'A session that read untrusted content writes a file later sessions trust as instructions.' },
   { id: 'post-denial', decision: 'ask', summary: 'Something was already denied in this session and a call goes out.' },
