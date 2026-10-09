@@ -62,6 +62,7 @@ For Claude Code only, the plugin works too: `/plugin marketplace add developerfr
 | `secret-egress`: a secret read earlier appears in an outbound call | deny |
 | `sensitive-egress`: one command reads a sensitive file and sends data out | deny |
 | `lethal-trifecta`: private data, untrusted content, then an outbound call or opaque code | ask |
+| `sensitive-read`: reading a `.env`, key or credential file | ask |
 | `web3-transaction`: signing or broadcasting a transaction | ask |
 | `post-denial`: something was denied, then another call goes out | ask |
 | `self-protection`: touching `~/.blackbox` | deny |

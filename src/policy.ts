@@ -343,6 +343,14 @@ export class Policy {
     return this.cfg.mode === 'monitor' || setting === 'alert' ? 'alert' : 'ask';
   }
 
+  /** A call that reads a .env, key or credential file. Templates such as .env.example do not count. */
+  readsSensitiveFile(tool: string, input: Record<string, any>, text: string): boolean {
+    const isRead = tool === 'Read' || tool === 'Grep' || ((tool === 'Bash' || tool === 'PowerShell') && FILE_READER_CMD.test(input.command || ''));
+    if (!isRead) return false;
+    const t = text.replace(/\.env\.(?:example|sample|template|dist)\b/gi, '');
+    return SENSITIVE_PATH.some((re) => re.test(t));
+  }
+
   /** Documents marked as written by a tainted session, oldest first. */
   listDocs(): { path: string; session: string; at: string; why: string }[] {
     return Object.entries(this.state.docs || {}).map(([path, d]) => ({ path, ...d })).sort((a, b) => a.at.localeCompare(b.at));
@@ -685,6 +693,10 @@ export class Policy {
     }
     if (out.yes && readsSensitive) {
       return deny('sensitive-egress', `This command reads a sensitive file and sends data out (${out.why}).`);
+    }
+    // 3b. Reading a sensitive file is itself the step that puts the secret in the model's context.
+    if (this.cfg.sensitiveReads !== 'off' && this.readsSensitiveFile(tool, input, text)) {
+      return { decision: this.softDecision(this.cfg.sensitiveReads), rule: 'sensitive-read', reason: `The agent wants to read a sensitive file (${text.replace(/\s+/g, ' ').slice(0, 80)}). Once read, its contents are in the model's context.` };
     }
     if (out.yes && out.intended) {
       return { decision: 'note', rule: 'egress-intended', reason: `${out.why} (destination named by the user)` };

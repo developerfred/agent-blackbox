@@ -9,6 +9,7 @@ Each rule returns `deny` (blocked, the human sees why) or `ask` (the human decid
 | `lethal-trifecta` | ask | the session touched private data and untrusted content, and now reaches an unnamed host | the three together are what a prompt injection needs |
 | `secret-to-code` | ask | a secret is passed to code the policy cannot inspect | opaque code can send it anywhere |
 | `web3-transaction` | ask | signing or broadcasting a transaction, or key material on a command line | irreversible, and a key on a command line is a leak |
+| `sensitive-read` | ask | the agent reads a `.env`, key, credential or wallet file (`Read`, `Grep`, `cat` and similar) before the call runs; `.env.example` and similar templates are exempt | the read puts the secret in the model's context, where an injection can use it (`sensitiveReads`: `ask`, `alert`, `off`) |
 | `memory-write` | ask | a session that read untrusted content writes a file later sessions trust as instructions (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CONVENTIONS.md`, `.claude/` commands, rules, memory and skills, `.cursorrules` and similar) | persistent injection: the payload outlives the session |
 | `post-denial` | ask | something was already denied and a call goes out | an agent refused once will try another route |
 | `self-protection` | deny | a tool call touches the recorder's own data folder | the evidence must not be editable by the agent it records |

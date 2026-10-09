@@ -50,6 +50,9 @@ exports.DEFAULT_CONFIG = {
     // a session that read untrusted content changing AGENTS.md, CLAUDE.md, editor rules,
     // agent commands or skills (files later sessions trust): 'ask' (default), 'alert' or 'off'
     memoryWrites: 'ask',
+    // the agent reading a .env, key or credential file (Read, Grep, cat and similar), before
+    // the call runs: 'ask' (default), 'alert' or 'off'
+    sensitiveReads: 'ask',
     // instruction/memory documents you reviewed and trust (a path or its tail, e.g. 'docs/AGENTS.md'):
     // they stop marking sessions that load them as untrusted
     trustedDocs: [],
