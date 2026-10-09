@@ -43,6 +43,7 @@ Repo skills are short, step-by-step procedures for work this project does repeat
 
 | Skill | Use it when |
 |---|---|
+| [`release`](.claude/skills/release/SKILL.md) | cutting a version (`vX.Y.Z` tag) |
 
 Write or update a skill when:
 
